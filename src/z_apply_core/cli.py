@@ -7,6 +7,7 @@ from typing import cast
 
 from z_apply_core import __version__
 from z_apply_core.graph import run_job
+from z_apply_core.rich_stream import RichStreamRenderer
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,8 +25,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_command(args: argparse.Namespace) -> int:
-    snapshot = asyncio.run(run_job(args.job_url, live_view=not args.no_vnc))
-    print(snapshot)
+    renderer = RichStreamRenderer()
+    snapshot, result = asyncio.run(
+        run_job(args.job_url, live_view=not args.no_vnc, sink=renderer)
+    )
+    renderer.print_result(result, snapshot)
     return 0
 
 

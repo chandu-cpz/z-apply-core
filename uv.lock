@@ -3352,6 +3352,7 @@ dependencies = [
     { name = "langchain-nim-router" },
     { name = "langgraph" },
     { name = "playwright-python-mcp", extra = ["camoufox"] },
+    { name = "rich" },
 ]
 
 [package.dev-dependencies]
@@ -3368,6 +3369,7 @@ requires-dist = [
     { name = "langchain-nim-router", directory = "../langchain-nim-router" },
     { name = "langgraph", specifier = ">=1.2.7" },
     { name = "playwright-python-mcp", extras = ["camoufox"], directory = "../playwright-python-mcp" },
+    { name = "rich", specifier = ">=15.0.0" },
 ]
 
 [package.metadata.requires-dev]
