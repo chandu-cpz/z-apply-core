@@ -3348,6 +3348,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "deepagents" },
+    { name = "langchain-core" },
     { name = "langchain-nim-router" },
     { name = "langgraph" },
     { name = "playwright-python-mcp", extra = ["camoufox"] },
@@ -3363,6 +3364,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "deepagents", specifier = ">=0.6.12" },
+    { name = "langchain-core", specifier = ">=1.4.8" },
     { name = "langchain-nim-router", directory = "../langchain-nim-router" },
     { name = "langgraph", specifier = ">=1.2.7" },
     { name = "playwright-python-mcp", extras = ["camoufox"], directory = "../playwright-python-mcp" },
