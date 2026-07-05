@@ -1,0 +1,45 @@
+[project]
+name = "z-apply-core"
+version = "0.1.0"
+description = "Local core runtime for Z-Apply."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.6.12",
+    "langchain-nim-router",
+    "langgraph>=1.2.7",
+    "playwright-python-mcp[camoufox]",
+]
+
+[project.scripts]
+z-apply = "z_apply_core.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.10.12,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["src"]
+
+[tool.ty.src]
+include = ["src"]
+
+[tool.uv.sources]
+langchain-nim-router = { path = "../langchain-nim-router" }
+playwright-python-mcp = { path = "../playwright-python-mcp" }
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "ruff>=0.15.20",
+    "ty>=0.0.56",
+]
