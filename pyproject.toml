@@ -10,6 +10,8 @@ dependencies = [
     "langchain-nim-router",
     "langgraph>=1.2.7",
     "playwright-python-mcp[camoufox]",
+    "pydantic-settings>=2.14.2",
+    "python-telegram-bot>=22.8",
     "rich>=15.0.0",
 ]
 

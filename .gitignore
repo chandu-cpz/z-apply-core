@@ -1,4 +1,7 @@
 .venv/
+.env
+.env.*
+!.env.example
 .z-apply/
 __pycache__/
 .mypy_cache/
