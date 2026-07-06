@@ -31,6 +31,7 @@ async def run_job(
     try:
         stream = graph.astream_events(
             initial_state(job_url, task=task, live_view=live_view),
+            config={"configurable": {"sink": sink}},
             version="v3",
         )
         result = await consume_v3_events(stream, sink=sink)

@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import ModelRetryMiddleware
+from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
+from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.log_labels import node_info
-from z_apply_core.stream_events import consume_v3_events
+from z_apply_core.stream_events import FrameworkEventSink
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +27,8 @@ async def run_orchestrator(
     task: str,
     snapshot: str,
     browser_tools: Sequence[BaseTool],
+    config: RunnableConfig,
+    sink: FrameworkEventSink | None = None,
 ) -> OrchestratorRun:
     try:
         selection = await NimRouter().select(tools=True, structured=True, priority="balanced")
@@ -41,6 +45,14 @@ async def run_orchestrator(
         middleware=[ModelRetryMiddleware(max_retries=3, on_failure="error")],
         subagents=build_specialists(browser_tools),
     )
+
+    run_config = cast(RunnableConfig, config.copy() if config else {})
+    callbacks = run_config.get("callbacks")
+    if isinstance(callbacks, list):
+        run_config["callbacks"] = callbacks + [selection.callback]
+    else:
+        run_config["callbacks"] = [selection.callback]
+
     stream = agent.astream_events(
         {
             "messages": [
@@ -50,10 +62,10 @@ async def run_orchestrator(
                 }
             ]
         },
-        config={"callbacks": [selection.callback]},
+        config=run_config,
         version="v3",
     )
-    stream_result = await consume_v3_events(stream)
+    stream_result = await consume_deepagent_stream(stream, sink=sink)
     return OrchestratorRun(summary=_summary_from_output(stream_result.output), model_id=model_id)
 
 

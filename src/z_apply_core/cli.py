@@ -36,10 +36,13 @@ def build_parser() -> argparse.ArgumentParser:
 def run_command(args: argparse.Namespace) -> int:
     renderer = RichStreamRenderer()
     configure_logging(renderer.console)
-    state, result = asyncio.run(
-        run_job(args.job_url, task=args.task, live_view=not args.no_vnc, sink=renderer)
-    )
-    renderer.print_result(result, state)
+    try:
+        state, result = asyncio.run(
+            run_job(args.job_url, task=args.task, live_view=not args.no_vnc, sink=renderer)
+        )
+        renderer.print_result(result, state)
+    finally:
+        renderer.close()
     return 0
 
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
 import os
 import shutil
+import signal
 import socket
 import subprocess
 import time
@@ -12,17 +14,35 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+_DESKTOP_ENV = {
+    key: os.environ.get(key, "")
+    for key in (
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_SESSION_TYPE",
+        "XDG_CURRENT_DESKTOP",
+        "HOME",
+        "PATH",
+        "XAUTHORITY",
+    )
+}
+
 
 @dataclass(slots=True)
 class LiveView:
     port: int | None = None
     x11vnc: subprocess.Popen[bytes] | None = None
     remmina: subprocess.Popen[bytes] | None = None
+    state_path: Path = Path("/tmp/z-apply-live-view.json")
 
     def start(self, display: str | None, *, enabled: bool) -> None:
         if not enabled:
             logger.info("Live view disabled")
             return
+        self._cleanup_prior_state()
+        self.stop()
         if not display or not display.startswith(":"):
             logger.warning("Live view skipped: no virtual X display is available")
             return
@@ -65,6 +85,7 @@ class LiveView:
             return
 
         self.port = port
+        self._write_state(display)
         logger.info("Live view ready: vnc://localhost:%s", port)
         if shutil.which("remmina") is None:
             logger.warning("Remmina is not installed; open vnc://localhost:%s manually", port)
@@ -72,13 +93,21 @@ class LiveView:
 
         remmina_log = Path("/tmp") / "z-apply-remmina.log"
         logger.info("Opening Remmina for vnc://localhost:%s", port)
+        remmina_env = os.environ.copy()
+        for key, value in _DESKTOP_ENV.items():
+            if value:
+                remmina_env[key] = value
+        remmina_env.pop("GDK_BACKEND", None)
+        remmina_env.pop("MOZ_ENABLE_WAYLAND", None)
+
         with remmina_log.open("wb") as stderr:
             self.remmina = subprocess.Popen(
                 ["remmina", "--enable-fullscreen", "-c", f"vnc://localhost:{port}"],
                 stdout=subprocess.DEVNULL,
                 stderr=stderr,
-                env=os.environ.copy(),
+                env=remmina_env,
             )
+        self._write_state(display)
         logger.info("Remmina launched with pid %s; log: %s", self.remmina.pid, remmina_log)
 
     def stop(self) -> None:
@@ -87,6 +116,30 @@ class LiveView:
         self.remmina = None
         self.x11vnc = None
         self.port = None
+        with contextlib.suppress(Exception):
+            self.state_path.unlink(missing_ok=True)
+
+    def _write_state(self, display: str) -> None:
+        data = {
+            "display": display,
+            "port": self.port,
+            "x11vnc_pid": self.x11vnc.pid if self.x11vnc else None,
+            "remmina_pid": self.remmina.pid if self.remmina else None,
+        }
+        with contextlib.suppress(Exception):
+            self.state_path.write_text(json.dumps(data), encoding="utf-8")
+
+    def _cleanup_prior_state(self) -> None:
+        try:
+            data = json.loads(self.state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+        _terminate_pid(_int_or_zero(data.get("remmina_pid")), "remmina", "remmina")
+        _terminate_pid(_int_or_zero(data.get("x11vnc_pid")), "x11vnc", "x11vnc")
+        with contextlib.suppress(Exception):
+            self.state_path.unlink(missing_ok=True)
 
 
 def _reserve_local_port() -> int:
@@ -123,3 +176,40 @@ def _terminate(proc: subprocess.Popen[bytes] | None, timeout_s: float = 3.0) -> 
     if proc.poll() is None:
         with contextlib.suppress(Exception):
             proc.kill()
+
+
+def _terminate_pid(pid: int, token: str, name: str, timeout_s: float = 3.0) -> None:
+    if pid <= 0 or not _pid_matches(pid, token):
+        return
+    logger.info("Stopping stale %s process pid=%s", name, pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception as exc:
+        logger.warning("Failed to terminate stale %s pid=%s: %s", name, pid, exc)
+        return
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if not _pid_matches(pid, token):
+            return
+        time.sleep(0.1)
+
+    with contextlib.suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+
+
+def _pid_matches(pid: int, token: str) -> bool:
+    try:
+        cmdline = Path(f"/proc/{pid}/cmdline").read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return False
+    return token in cmdline
+
+
+def _int_or_zero(value: object) -> int:
+    try:
+        return int(str(value or 0))
+    except ValueError:
+        return 0
