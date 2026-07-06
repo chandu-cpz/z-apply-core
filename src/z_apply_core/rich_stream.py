@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from rich.console import Console
@@ -9,10 +10,15 @@ from rich.text import Text
 from z_apply_core.state import RunState
 from z_apply_core.stream_events import FrameworkTraceEvent, V3RunResult
 
+logger = logging.getLogger(__name__)
+
 
 class RichStreamRenderer:
     def __init__(self, console: Console | None = None) -> None:
         self._console = console or Console()
+        self._logged_run_start = False
+        self._logged_snapshot = False
+        self._logged_agent_context = False
 
     @property
     def console(self) -> Console:
@@ -55,26 +61,48 @@ class RichStreamRenderer:
                 border_style="cyan" if status == "success" else "yellow",
             )
         )
-        self._console.print(
-            f"[dim]streamed {result.event_count} events in {result.duration_ms}ms[/dim]"
-        )
+        logger.info("Streamed %s events in %sms", result.event_count, result.duration_ms)
 
     def _render_update(self, event: FrameworkTraceEvent) -> None:
         data = event.data.get("data", event.data)
         if isinstance(data, dict) and data.get("snapshot"):
-            self._console.print("[green]setup_browser[/green] opened page and captured snapshot")
+            if not self._logged_snapshot:
+                logger.info("setup_browser opened page and captured snapshot")
+                self._logged_snapshot = True
             return
         if isinstance(data, dict) and data.get("status"):
             model_suffix = f" [{data['model_id']}]" if data.get("model_id") else ""
-            message = Text("orchestrator ", style="cyan")
-            message.append(f"{data.get('status')}{model_suffix}: {data.get('reason')}")
-            self._console.print(message)
+            logger.info(
+                "orchestrator %s%s: %s",
+                data.get("status"),
+                model_suffix,
+                data.get("reason"),
+            )
             return
         if isinstance(data, dict) and data.get("job_url"):
-            self._console.print(f"[cyan]run[/cyan] starting {data['job_url']}")
+            if not self._logged_run_start:
+                logger.info("run starting %s", data["job_url"])
+                self._logged_run_start = True
             return
-        names = ", ".join(str(name) for name in data) if isinstance(data, dict) else event.name
-        self._console.print(f"[green]graph update[/green] {names}")
+        if isinstance(data, dict):
+            self._render_state_update(data)
+            return
+        logger.debug("graph update %s", event.name)
+
+    def _render_state_update(self, data: dict[str, object]) -> None:
+        keys = set(data)
+        if "structured_response" in keys:
+            logger.info("orchestrator produced a structured response")
+            return
+        if {"messages", "files"}.issubset(keys):
+            if not self._logged_agent_context:
+                logger.info("orchestrator updated DeepAgents working context")
+                self._logged_agent_context = True
+            return
+        if "messages" in keys:
+            logger.info("orchestrator received model message updates")
+            return
+        logger.debug("graph state updated: %s", ", ".join(sorted(keys)))
 
     def _render_lifecycle(self, event: FrameworkTraceEvent, color: str) -> None:
         label = event.event.removeprefix("on_").replace("_", " ")
