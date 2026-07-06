@@ -11,8 +11,9 @@ from z_apply_core.logging_config import configure_logging
 from z_apply_core.rich_stream import RichStreamRenderer
 
 DEFAULT_RUN_TASK = (
-    "Inspect the starting page state. Do not fill forms, click submit, upload files, "
-    "or perform irreversible application actions."
+    "Navigate from the job details page to the actual application form. You may click "
+    "a safe Apply or Start Application entry point. Do not fill fields, upload files, "
+    "click final submit, or perform irreversible application actions."
 )
 DEFAULT_JOB_URL = "https://amberstudent.keka.com/careers/jobdetails/133388"
 

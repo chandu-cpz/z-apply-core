@@ -13,6 +13,7 @@ INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_find",
     "browser_navigate",
     "browser_navigate_back",
+    "browser_click",
     "browser_tabs",
     "browser_wait_for",
     "browser_handle_dialog",

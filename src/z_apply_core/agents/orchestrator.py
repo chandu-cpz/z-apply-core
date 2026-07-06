@@ -6,13 +6,12 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import ModelRetryMiddleware
-from langchain.agents.structured_output import ToolStrategy
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.prompts import load_prompt
-from z_apply_core.agents.result import OrchestratorResult, OrchestratorRun
+from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import consume_v3_events
@@ -30,8 +29,7 @@ async def run_orchestrator(
     try:
         selection = await NimRouter().select(tools=True, structured=True, priority="balanced")
     except (NimRouterError, ImportError, ValueError) as exc:
-        result = OrchestratorResult(status="failed", reason=f"Model selection failed: {exc}")
-        return OrchestratorRun(result=result, model_id="")
+        return OrchestratorRun(summary=f"Model selection failed: {exc}", model_id="")
 
     model_id = selection.info.id
     node_info(logger, "orchestrator", "selected model: %s", model_id)
@@ -42,7 +40,6 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[ModelRetryMiddleware(max_retries=3, on_failure="error")],
         subagents=build_specialists(browser_tools),
-        response_format=ToolStrategy(schema=OrchestratorResult),
     )
     stream = agent.astream_events(
         {
@@ -57,15 +54,7 @@ async def run_orchestrator(
         version="v3",
     )
     stream_result = await consume_v3_events(stream)
-    structured = stream_result.output.get("structured_response")
-    if isinstance(structured, OrchestratorResult):
-        return OrchestratorRun(result=structured, model_id=model_id)
-    if isinstance(structured, dict):
-        return OrchestratorRun(
-            result=OrchestratorResult.model_validate(structured),
-            model_id=model_id,
-        )
-    return OrchestratorRun(result=_fallback_result(stream_result.output), model_id=model_id)
+    return OrchestratorRun(summary=_summary_from_output(stream_result.output), model_id=model_id)
 
 
 def _task_prompt(*, job_url: str, task: str, snapshot: str) -> str:
@@ -81,27 +70,18 @@ Current browser snapshot:
 {snapshot}
 
 Delegate to BrowserSpecialist if browser evidence is needed.
-Return the final answer using the structured response tool only.
+When finished, briefly summarize what was done and what page/state the browser is on.
 """
 
 
-def _fallback_result(output: dict[str, Any]) -> OrchestratorResult:
+def _summary_from_output(output: dict[str, Any]) -> str:
     messages = output.get("messages")
     if isinstance(messages, list) and messages:
         last = messages[-1]
         content = _message_text(getattr(last, "content", ""))
         if content:
-            return OrchestratorResult(
-                status="failed",
-                reason=(
-                    "No structured orchestrator result returned. "
-                    f"Last model response: {content[:300]}"
-                ),
-            )
-    return OrchestratorResult(
-        status="failed",
-        reason="No structured orchestrator result.",
-    )
+            return content[:1000]
+    return "Orchestrator completed without a final message."
 
 
 def _message_text(content: object) -> str:

@@ -20,8 +20,13 @@ resolve the modal first and then retry the original inspection step.
 
 ## Current Slice
 
-Do not fill forms. Do not click submit or apply buttons. Do not upload files.
-Do not perform irreversible actions.
+You may click a safe application-entry control when the orchestrator asks for
+navigation to the application form. Safe entry controls include Apply, Apply for
+this job, Start Application, Continue, or equivalent controls that only open the
+application flow.
 
-Report only what the current browser evidence shows and whether additional
-evidence is needed.
+Do not fill fields. Do not upload files. Do not click final submit. Do not
+perform irreversible actions.
+
+After any navigation click, capture fresh browser evidence and report what page
+or form state is now visible.

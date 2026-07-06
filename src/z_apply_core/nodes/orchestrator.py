@@ -11,9 +11,7 @@ async def orchestrator(state: RunState) -> dict[str, str]:
         snapshot=str(state.get("snapshot", "")),
         browser_tools=state.get("browser_tools", ()),
     )
-    result = run.result
     return {
-        "status": result.status,
-        "reason": result.reason,
+        "orchestrator_summary": run.summary,
         "model_id": run.model_id,
     }

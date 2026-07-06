@@ -14,13 +14,11 @@ class RunState(TypedDict, total=False):
     task: str
     live_view: bool
     snapshot: str
-    status: str
-    reason: str
+    orchestrator_summary: str
     model_id: str
     runtime: RunRuntime | None
     browser_tools: Sequence[BaseTool]
     messages: list[Any]
-    structured_response: Any
 
 
 def initial_state(job_url: str, *, task: str, live_view: bool) -> RunState:
@@ -29,8 +27,7 @@ def initial_state(job_url: str, *, task: str, live_view: bool) -> RunState:
         "task": task,
         "live_view": live_view,
         "snapshot": "",
-        "status": "",
-        "reason": "",
+        "orchestrator_summary": "",
         "model_id": "",
         "runtime": None,
         "browser_tools": (),

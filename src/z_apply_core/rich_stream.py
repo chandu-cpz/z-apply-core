@@ -47,19 +47,19 @@ class RichStreamRenderer:
                 border_style="green",
             )
         )
-        status = str(state.get("status", ""))
         model_id = str(state.get("model_id", ""))
-        title = f"Orchestrator: {status or 'unknown'}"
+        title = "Orchestrator"
         if model_id:
             title = f"{title} [{model_id}]"
         self._console.print(
             Panel(
                 Text(
-                    str(state.get("reason", "")) or "No orchestrator reason returned.",
+                    str(state.get("orchestrator_summary", ""))
+                    or "No orchestrator summary returned.",
                     overflow="fold",
                 ),
                 title=Text(title),
-                border_style="cyan" if status == "success" else "yellow",
+                border_style="cyan",
             )
         )
         run_info(logger, "streamed %s events in %sms", result.event_count, result.duration_ms)
@@ -71,15 +71,14 @@ class RichStreamRenderer:
                 node_info(logger, "setup_browser", "opened page and captured snapshot")
                 self._logged_snapshot = True
             return
-        if isinstance(data, dict) and data.get("status"):
+        if isinstance(data, dict) and data.get("orchestrator_summary"):
             model_suffix = f" [{data['model_id']}]" if data.get("model_id") else ""
             node_info(
                 logger,
                 "orchestrator",
-                "%s%s: %s",
-                data.get("status"),
+                "completed%s: %s",
                 model_suffix,
-                data.get("reason"),
+                data.get("orchestrator_summary"),
             )
             return
         if isinstance(data, dict) and data.get("job_url"):
@@ -94,9 +93,6 @@ class RichStreamRenderer:
 
     def _render_state_update(self, data: dict[str, object]) -> None:
         keys = set(data)
-        if "structured_response" in keys:
-            node_info(logger, "orchestrator", "produced a structured response")
-            return
         if {"messages", "files"}.issubset(keys):
             if not self._logged_agent_context:
                 node_info(logger, "orchestrator", "updated DeepAgents working context")
