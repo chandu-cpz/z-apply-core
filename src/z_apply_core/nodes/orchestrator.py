@@ -3,6 +3,7 @@ from __future__ import annotations
 from langchain_core.runnables.config import RunnableConfig
 
 from z_apply_core.agents.orchestrator import run_orchestrator
+from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -17,9 +18,11 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         config=config,
         sink=sink,
     )
+    snapshot = await _fresh_snapshot(state)
     return {
         "orchestrator_summary": run.summary,
         "model_id": run.model_id,
+        "snapshot": snapshot,
     }
 
 
@@ -31,3 +34,11 @@ def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
     if hasattr(sink, "accept"):
         return sink
     return None
+
+
+async def _fresh_snapshot(state: RunState) -> str:
+    runtime = state.get("runtime")
+    if not isinstance(runtime, RunRuntime):
+        return str(state.get("snapshot", ""))
+    snapshot = await runtime.browser.tools.call("browser_snapshot")
+    return snapshot or str(state.get("snapshot", ""))

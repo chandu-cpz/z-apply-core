@@ -41,6 +41,16 @@ perform irreversible actions.
 If navigation is blocked by login, captcha, unavailable page, or missing human
 context, stop and report the blocker.
 
-When finished, summarize what happened and what state the browser is in. Do not
-pretend to verify final application success; a later `check_success` graph node
-will own that decision.
+After `BrowserSpecialist` reports navigation, delegate to `Verifier` before you
+claim success. The verifier must independently inspect current page evidence and
+decide whether the application form is visible, blocked, or not verified.
+
+If `Verifier` reports `verified`, summarize the verified current browser state.
+If `Verifier` reports `blocked`, report the blocker. If `Verifier` reports
+`not_verified`, delegate back to `BrowserSpecialist` with the verifier feedback
+instead of claiming success.
+
+When finished, summarize only a verified result or a concrete blocker. The
+orchestrator owns the run outcome for the task it was given: if the task is to
+navigate, verify navigation; if the task is to fill, verify the filled fields;
+if the task is to submit, verify the submission result before claiming success.

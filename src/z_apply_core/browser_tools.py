@@ -20,6 +20,12 @@ INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_take_screenshot",
 )
 
+VERIFIER_BROWSER_TOOLS = (
+    "browser_snapshot",
+    "browser_find",
+    "browser_tabs",
+)
+
 
 class BrowserToolParameter(Protocol):
     name: str
