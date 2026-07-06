@@ -11,8 +11,6 @@ ToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_snapshot",
     "browser_find",
-    "browser_navigate",
-    "browser_navigate_back",
     "browser_click",
     "browser_tabs",
     "browser_wait_for",

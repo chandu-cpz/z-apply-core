@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any, cast
 
-from deepagents import create_deep_agent
+from deepagents import FilesystemPermission, create_deep_agent
+from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
@@ -19,6 +21,18 @@ from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
 logger = logging.getLogger(__name__)
+
+CORE_ROOT = Path(__file__).resolve().parents[3]
+ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/browser-artifacts"
+DEEPAGENT_FILESYSTEM_PERMISSIONS = [
+    FilesystemPermission(
+        operations=["read"],
+        paths=[ARTIFACTS_VIRTUAL_ROOT, f"{ARTIFACTS_VIRTUAL_ROOT}/**"],
+        mode="allow",
+    ),
+    FilesystemPermission(operations=["read"], paths=["/**"], mode="deny"),
+    FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
+]
 
 
 async def run_orchestrator(
@@ -44,6 +58,8 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[ModelRetryMiddleware(max_retries=3, on_failure="error")],
         subagents=build_specialists(browser_tools),
+        backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
+        permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
     )
 
     run_config = cast(RunnableConfig, config.copy() if config else {})
@@ -74,6 +90,10 @@ def _task_prompt(*, job_url: str, task: str, snapshot: str) -> str:
 
 Job URL:
 {job_url}
+
+The runtime has already opened the browser to the job URL before this task.
+Use the current browser state. Do not ask specialists to reload or navigate to
+the job URL again.
 
 Requested task:
 {task}

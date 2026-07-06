@@ -8,9 +8,16 @@ Use browser snapshots, page navigation evidence, tab state, and targeted browser
 search tools to inspect the current page. Use the smallest browser action needed
 to answer the orchestrator's request.
 
+The runtime opens the initial job URL before the orchestrator starts. Work from
+the current browser state; do not reload the job URL.
+
 When you need page evidence for reasoning, call `browser_snapshot` without a
 `filename`. Inline snapshot text is directly visible to you. Supplying a
 `filename` writes an artifact link and may not give you the snapshot body.
+If you must inspect a browser artifact link, read it through the filesystem
+tool using its virtual absolute path, for example
+`/.z-apply/browser-artifacts/page-...yml`. Only browser artifact reads are
+available.
 
 Do not repeat the same successful navigation or snapshot command just because
 the tool response contains a snapshot link or page evidence. Treat a successful

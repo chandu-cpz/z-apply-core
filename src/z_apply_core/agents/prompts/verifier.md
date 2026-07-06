@@ -12,6 +12,10 @@ any browser action that changes page state.
 When you need current page evidence, call `browser_snapshot` without a
 `filename`. Inline snapshot text is directly visible to you. Supplying a
 `filename` writes an artifact link and may not give you the snapshot body.
+If you must inspect a browser artifact link, read it through the filesystem
+tool using its virtual absolute path, for example
+`/.z-apply/browser-artifacts/page-...yml`. Only browser artifact reads are
+available.
 
 For this slice, verify whether BrowserSpecialist actually navigated from the
 job details page to the application form. Look for evidence such as the current
