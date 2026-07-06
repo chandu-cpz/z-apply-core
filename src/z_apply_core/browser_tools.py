@@ -8,6 +8,17 @@ from langchain_core.tools import BaseTool, StructuredTool
 
 ToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 
+INITIAL_AGENT_BROWSER_TOOLS = (
+    "browser_snapshot",
+    "browser_find",
+    "browser_navigate",
+    "browser_navigate_back",
+    "browser_tabs",
+    "browser_wait_for",
+    "browser_handle_dialog",
+    "browser_take_screenshot",
+)
+
 
 class BrowserToolParameter(Protocol):
     name: str

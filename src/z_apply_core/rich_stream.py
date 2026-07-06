@@ -6,6 +6,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from z_apply_core.state import RunState
 from z_apply_core.stream_events import FrameworkTraceEvent, V3RunResult
 
 
@@ -24,12 +25,26 @@ class RichStreamRenderer:
         elif event.event.startswith("on_chat_model_"):
             self._render_lifecycle(event, "cyan")
 
-    def print_result(self, result: V3RunResult, snapshot: str) -> None:
+    def print_result(self, result: V3RunResult, state: RunState) -> None:
         self._console.print(
             Panel(
-                Text(snapshot or "No snapshot returned.", overflow="fold"),
+                Text(
+                    _clip_text(str(state.get("snapshot", "")) or "No snapshot returned."),
+                    overflow="fold",
+                ),
                 title="Browser Snapshot",
                 border_style="green",
+            )
+        )
+        status = str(state.get("status", ""))
+        self._console.print(
+            Panel(
+                Text(
+                    str(state.get("reason", "")) or "No orchestrator reason returned.",
+                    overflow="fold",
+                ),
+                title=f"Orchestrator: {status or 'unknown'}",
+                border_style="cyan" if status == "success" else "yellow",
             )
         )
         self._console.print(
@@ -38,11 +53,16 @@ class RichStreamRenderer:
 
     def _render_update(self, event: FrameworkTraceEvent) -> None:
         data = event.data.get("data", event.data)
-        if getattr(data, "snapshot", ""):
+        if isinstance(data, dict) and data.get("snapshot"):
             self._console.print("[green]setup_browser[/green] opened page and captured snapshot")
             return
-        if getattr(data, "job_url", ""):
-            self._console.print(f"[cyan]run[/cyan] starting {data.job_url}")
+        if isinstance(data, dict) and data.get("status"):
+            self._console.print(
+                f"[cyan]orchestrator[/cyan] {data.get('status')}: {data.get('reason')}"
+            )
+            return
+        if isinstance(data, dict) and data.get("job_url"):
+            self._console.print(f"[cyan]run[/cyan] starting {data['job_url']}")
             return
         names = ", ".join(str(name) for name in data) if isinstance(data, dict) else event.name
         self._console.print(f"[green]graph update[/green] {names}")
@@ -64,3 +84,14 @@ def _preview(value: Any, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _clip_text(text: str, *, max_lines: int = 80, max_chars: int = 6000) -> str:
+    lines = text.splitlines()
+    clipped = "\n".join(lines[:max_lines])
+    omitted_lines = max(0, len(lines) - max_lines)
+    if len(clipped) > max_chars:
+        clipped = clipped[: max_chars - 3] + "..."
+    if omitted_lines:
+        clipped = f"{clipped}\n[... {omitted_lines} more lines omitted from display]"
+    return clipped

@@ -10,6 +10,7 @@ dependencies = [
     "langchain-nim-router",
     "langgraph>=1.2.7",
     "playwright-python-mcp[camoufox]",
+    "pydantic>=2.13.4",
     "rich>=15.0.0",
 ]
 
@@ -31,6 +32,10 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.12"
 strict = true
 files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["nim_router", "nim_router.*"]
+ignore_missing_imports = true
 
 [tool.ty.src]
 include = ["src"]
