@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import os
 import shutil
 import socket
@@ -8,6 +9,8 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -17,14 +20,19 @@ class LiveView:
     remmina: subprocess.Popen[bytes] | None = None
 
     def start(self, display: str | None, *, enabled: bool) -> None:
-        if not enabled or not display or not display.startswith(":"):
+        if not enabled:
+            logger.info("Live view disabled")
+            return
+        if not display or not display.startswith(":"):
+            logger.warning("Live view skipped: no virtual X display is available")
             return
         if shutil.which("x11vnc") is None:
-            print("live view skipped: x11vnc is not installed")
+            logger.warning("Live view skipped: x11vnc is not installed")
             return
 
         port = _reserve_local_port()
         log_path = Path("/tmp") / f"z-apply-x11vnc-{display.lstrip(':')}.log"
+        logger.info("Starting x11vnc for %s on localhost:%s", display, port)
         env = {
             "DISPLAY": display,
             "PATH": os.environ.get("PATH", ""),
@@ -53,20 +61,25 @@ class LiveView:
 
         if not _wait_for_port("127.0.0.1", port, self.x11vnc):
             self.stop()
-            print(f"live view skipped: x11vnc did not open port {port}")
+            logger.warning("Live view skipped: x11vnc did not open port %s", port)
             return
 
         self.port = port
-        print(f"live view: vnc://localhost:{port}")
-        if shutil.which("remmina") is not None:
-            remmina_log = Path("/tmp") / "z-apply-remmina.log"
-            with remmina_log.open("wb") as stderr:
-                self.remmina = subprocess.Popen(
-                    ["remmina", "--enable-fullscreen", "-c", f"vnc://localhost:{port}"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=stderr,
-                    env=os.environ.copy(),
-                )
+        logger.info("Live view ready: vnc://localhost:%s", port)
+        if shutil.which("remmina") is None:
+            logger.warning("Remmina is not installed; open vnc://localhost:%s manually", port)
+            return
+
+        remmina_log = Path("/tmp") / "z-apply-remmina.log"
+        logger.info("Opening Remmina for vnc://localhost:%s", port)
+        with remmina_log.open("wb") as stderr:
+            self.remmina = subprocess.Popen(
+                ["remmina", "--enable-fullscreen", "-c", f"vnc://localhost:{port}"],
+                stdout=subprocess.DEVNULL,
+                stderr=stderr,
+                env=os.environ.copy(),
+            )
+        logger.info("Remmina launched with pid %s; log: %s", self.remmina.pid, remmina_log)
 
     def stop(self) -> None:
         _terminate(self.remmina)

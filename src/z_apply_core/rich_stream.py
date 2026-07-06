@@ -14,6 +14,10 @@ class RichStreamRenderer:
     def __init__(self, console: Console | None = None) -> None:
         self._console = console or Console()
 
+    @property
+    def console(self) -> Console:
+        return self._console
+
     async def accept(self, event: FrameworkTraceEvent) -> None:
         if event.event in {"updates", "values"}:
             self._render_update(event)
@@ -37,13 +41,17 @@ class RichStreamRenderer:
             )
         )
         status = str(state.get("status", ""))
+        model_id = str(state.get("model_id", ""))
+        title = f"Orchestrator: {status or 'unknown'}"
+        if model_id:
+            title = f"{title} [{model_id}]"
         self._console.print(
             Panel(
                 Text(
                     str(state.get("reason", "")) or "No orchestrator reason returned.",
                     overflow="fold",
                 ),
-                title=f"Orchestrator: {status or 'unknown'}",
+                title=Text(title),
                 border_style="cyan" if status == "success" else "yellow",
             )
         )
@@ -57,9 +65,10 @@ class RichStreamRenderer:
             self._console.print("[green]setup_browser[/green] opened page and captured snapshot")
             return
         if isinstance(data, dict) and data.get("status"):
-            self._console.print(
-                f"[cyan]orchestrator[/cyan] {data.get('status')}: {data.get('reason')}"
-            )
+            model_suffix = f" [{data['model_id']}]" if data.get("model_id") else ""
+            message = Text("orchestrator ", style="cyan")
+            message.append(f"{data.get('status')}{model_suffix}: {data.get('reason')}")
+            self._console.print(message)
             return
         if isinstance(data, dict) and data.get("job_url"):
             self._console.print(f"[cyan]run[/cyan] starting {data['job_url']}")

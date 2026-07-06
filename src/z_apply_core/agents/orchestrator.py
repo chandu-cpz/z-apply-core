@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -11,21 +12,28 @@ from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.prompts import load_prompt
-from z_apply_core.agents.result import OrchestratorResult
+from z_apply_core.agents.result import OrchestratorResult, OrchestratorRun
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.stream_events import consume_v3_events
+
+logger = logging.getLogger(__name__)
 
 
 async def run_orchestrator(
     *,
     job_url: str,
+    task: str,
     snapshot: str,
     browser_tools: Sequence[BaseTool],
-) -> OrchestratorResult:
+) -> OrchestratorRun:
     try:
         selection = await NimRouter().select(tools=True, structured=True, priority="balanced")
     except (NimRouterError, ImportError, ValueError) as exc:
-        return OrchestratorResult(status="failed", reason=f"Model selection failed: {exc}")
+        result = OrchestratorResult(status="failed", reason=f"Model selection failed: {exc}")
+        return OrchestratorRun(result=result, model_id="")
+
+    model_id = selection.info.id
+    logger.info("Selected orchestrator model: %s", model_id)
 
     agent = create_deep_agent(
         model=selection.llm,
@@ -40,33 +48,38 @@ async def run_orchestrator(
             "messages": [
                 {
                     "role": "user",
-                    "content": _task_prompt(job_url=job_url, snapshot=snapshot),
+                    "content": _task_prompt(job_url=job_url, task=task, snapshot=snapshot),
                 }
             ]
         },
         config={"callbacks": [selection.callback]},
         version="v3",
     )
-    result = await consume_v3_events(stream)
-    structured = result.output.get("structured_response")
+    stream_result = await consume_v3_events(stream)
+    structured = stream_result.output.get("structured_response")
     if isinstance(structured, OrchestratorResult):
-        return structured
+        return OrchestratorRun(result=structured, model_id=model_id)
     if isinstance(structured, dict):
-        return OrchestratorResult.model_validate(structured)
-    return _fallback_result(result.output)
+        return OrchestratorRun(
+            result=OrchestratorResult.model_validate(structured),
+            model_id=model_id,
+        )
+    return OrchestratorRun(result=_fallback_result(stream_result.output), model_id=model_id)
 
 
-def _task_prompt(*, job_url: str, snapshot: str) -> str:
-    return f"""Inspect the starting state for this job application URL.
+def _task_prompt(*, job_url: str, task: str, snapshot: str) -> str:
+    return f"""Run the requested orchestration task for this job application URL.
 
 Job URL:
 {job_url}
+
+Requested task:
+{task}
 
 Current browser snapshot:
 {snapshot}
 
 Delegate to BrowserSpecialist if browser evidence is needed.
-Do not perform application actions yet.
 Return the final answer using the structured response tool only.
 """
 

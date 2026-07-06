@@ -22,6 +22,7 @@ def build_graph() -> Any:
 async def run_job(
     job_url: str,
     *,
+    task: str,
     live_view: bool = True,
     sink: FrameworkEventSink | None = None,
 ) -> tuple[RunState, V3RunResult]:
@@ -29,7 +30,7 @@ async def run_job(
     runtime = None
     try:
         stream = graph.astream_events(
-            initial_state(job_url, live_view=live_view),
+            initial_state(job_url, task=task, live_view=live_view),
             version="v3",
         )
         result = await consume_v3_events(stream, sink=sink)
