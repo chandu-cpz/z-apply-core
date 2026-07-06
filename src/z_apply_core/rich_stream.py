@@ -44,10 +44,12 @@ class RichStreamRenderer:
             self._render_messages(event)
             return
 
+        if event.event == "agent_model_tool_call":
+            return
+
         if event.event in {
             "agent_message",
             "agent_message_delta",
-            "agent_model_tool_call",
             "agent_tool_start",
             "agent_tool_delta",
             "agent_tool_end",
@@ -146,7 +148,10 @@ class RichStreamRenderer:
             if not self._live:
                 self._start_stream(event.name)
             kind = str(event.data.get("kind", "text"))
-            delta = str(event.data.get("delta", ""))
+            delta = _dedupe_delta(
+                self._reasoning_text if kind == "reasoning" else self._content_text,
+                str(event.data.get("delta", "")),
+            )
             if kind == "reasoning":
                 self._reasoning_text += delta
             else:
@@ -178,17 +183,6 @@ class RichStreamRenderer:
                         border_style="cyan",
                     )
                 )
-            return
-
-        if event.event == "agent_model_tool_call":
-            self._end_stream_if_active()
-            self._console.print(
-                Panel(
-                    Text(_preview(event.data.get("chunk", ""), limit=500), overflow="fold"),
-                    title=Text(f"{event.name} model tool call"),
-                    border_style="blue",
-                )
-            )
             return
 
         if event.event == "agent_tool_start":
@@ -269,9 +263,17 @@ class RichStreamRenderer:
             delta = chunk.get("delta")
             if isinstance(delta, dict):
                 if delta.get("type") == "reasoning-delta":
-                    self._reasoning_text += delta.get("reasoning", "")
+                    text_delta = _dedupe_delta(
+                        self._reasoning_text,
+                        str(delta.get("reasoning", "")),
+                    )
+                    self._reasoning_text += text_delta
                 elif delta.get("type") == "text-delta":
-                    self._content_text += delta.get("text", "")
+                    text_delta = _dedupe_delta(
+                        self._content_text,
+                        str(delta.get("text", "")),
+                    )
+                    self._content_text += text_delta
             self._refresh_live_message()
 
         elif chunk_event == "tool-started":
@@ -308,35 +310,27 @@ class RichStreamRenderer:
         if not self._live:
             self._start_stream(model_name)
 
-        for tool_call_chunk in _list_attr(chunk, "tool_call_chunks"):
-            self._end_stream_if_active()
-            name = tool_call_chunk.get("name") or tool_call_chunk.get("id") or "tool_call"
-            args = tool_call_chunk.get("args", "")
-            self._console.print(
-                Panel(
-                    Text(str(args), overflow="fold"),
-                    title=Text(f"Tool Call: {name}"),
-                    border_style="magenta",
-                )
-            )
-
         text = getattr(chunk, "text", "")
         if isinstance(text, str) and text:
-            self._content_text += text
+            self._content_text += _dedupe_delta(self._content_text, text)
 
         content = getattr(chunk, "content", None)
         if isinstance(content, str) and content and content != text:
-            self._content_text += content
+            self._content_text += _dedupe_delta(self._content_text, content)
 
         for block in _list_attr(chunk, "content_blocks"):
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
             if block_type in {"text", "text_delta"}:
-                self._content_text += str(block.get("text") or "")
+                self._content_text += _dedupe_delta(
+                    self._content_text,
+                    str(block.get("text") or ""),
+                )
             elif block_type in {"reasoning", "reasoning_delta"}:
-                self._reasoning_text += str(
-                    block.get("reasoning") or block.get("text") or block.get("content") or ""
+                self._reasoning_text += _dedupe_delta(
+                    self._reasoning_text,
+                    str(block.get("reasoning") or block.get("text") or block.get("content") or ""),
                 )
 
         self._refresh_live_message()
@@ -415,6 +409,14 @@ def _preview(value: Any, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _dedupe_delta(existing: str, delta: str) -> str:
+    if not delta:
+        return ""
+    if existing.endswith(delta) and (len(delta) > 1 or not delta.isalnum()):
+        return ""
+    return delta
 
 
 def _list_attr(value: object, attr: str) -> list[Any]:
