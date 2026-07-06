@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
+from z_apply_core.log_labels import node_info, run_info
 from z_apply_core.state import RunState
 from z_apply_core.stream_events import FrameworkTraceEvent, V3RunResult
 
@@ -61,19 +62,21 @@ class RichStreamRenderer:
                 border_style="cyan" if status == "success" else "yellow",
             )
         )
-        logger.info("Streamed %s events in %sms", result.event_count, result.duration_ms)
+        run_info(logger, "streamed %s events in %sms", result.event_count, result.duration_ms)
 
     def _render_update(self, event: FrameworkTraceEvent) -> None:
         data = event.data.get("data", event.data)
         if isinstance(data, dict) and data.get("snapshot"):
             if not self._logged_snapshot:
-                logger.info("setup_browser opened page and captured snapshot")
+                node_info(logger, "setup_browser", "opened page and captured snapshot")
                 self._logged_snapshot = True
             return
         if isinstance(data, dict) and data.get("status"):
             model_suffix = f" [{data['model_id']}]" if data.get("model_id") else ""
-            logger.info(
-                "orchestrator %s%s: %s",
+            node_info(
+                logger,
+                "orchestrator",
+                "%s%s: %s",
                 data.get("status"),
                 model_suffix,
                 data.get("reason"),
@@ -81,7 +84,7 @@ class RichStreamRenderer:
             return
         if isinstance(data, dict) and data.get("job_url"):
             if not self._logged_run_start:
-                logger.info("run starting %s", data["job_url"])
+                run_info(logger, "starting %s", data["job_url"])
                 self._logged_run_start = True
             return
         if isinstance(data, dict):
@@ -92,15 +95,15 @@ class RichStreamRenderer:
     def _render_state_update(self, data: dict[str, object]) -> None:
         keys = set(data)
         if "structured_response" in keys:
-            logger.info("orchestrator produced a structured response")
+            node_info(logger, "orchestrator", "produced a structured response")
             return
         if {"messages", "files"}.issubset(keys):
             if not self._logged_agent_context:
-                logger.info("orchestrator updated DeepAgents working context")
+                node_info(logger, "orchestrator", "updated DeepAgents working context")
                 self._logged_agent_context = True
             return
         if "messages" in keys:
-            logger.info("orchestrator received model message updates")
+            node_info(logger, "orchestrator", "received model message updates")
             return
         logger.debug("graph state updated: %s", ", ".join(sorted(keys)))
 

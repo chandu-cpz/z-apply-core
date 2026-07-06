@@ -14,6 +14,7 @@ from nim_router.errors import NimRouterError
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorResult, OrchestratorRun
 from z_apply_core.agents.specialists import build_specialists
+from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import consume_v3_events
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ async def run_orchestrator(
         return OrchestratorRun(result=result, model_id="")
 
     model_id = selection.info.id
-    logger.info("Selected orchestrator model: %s", model_id)
+    node_info(logger, "orchestrator", "selected model: %s", model_id)
 
     agent = create_deep_agent(
         model=selection.llm,
