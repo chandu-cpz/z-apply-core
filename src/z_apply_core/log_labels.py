@@ -6,7 +6,7 @@ from typing import Any
 
 def node_info(logger: logging.Logger, node: str, message: str, *args: Any) -> None:
     logger.info(
-        "[black on cyan] NODE [/][cyan] %s[/] " + message,
+        "[black on cyan] NODE [/][black on bright_blue] %s [/] " + message,
         node,
         *args,
         extra={"markup": True},
