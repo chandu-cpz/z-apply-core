@@ -44,11 +44,19 @@ context, stop and report the blocker.
 After `BrowserSpecialist` reports navigation, delegate to `Verifier` before you
 claim success. The verifier must independently inspect current page evidence and
 decide whether the application form is visible, blocked, or not verified.
+This verification must be an actual DeepAgents `task` tool call with
+`subagent_type: "Verifier"`. Never print JSON or prose describing a verifier
+call as a substitute for calling the tool.
 
 If `Verifier` reports `verified`, summarize the verified current browser state.
 If `Verifier` reports `blocked`, report the blocker. If `Verifier` reports
 `not_verified`, delegate back to `BrowserSpecialist` with the verifier feedback
 instead of claiming success.
+
+For multi-step work, repeat this pattern after every BrowserSpecialist browser
+action: BrowserSpecialist performs one bounded browser action, then Verifier
+checks the resulting browser state before the next browser action or final
+summary.
 
 When finished, summarize only a verified result or a concrete blocker. The
 orchestrator owns the run outcome for the task it was given: if the task is to
