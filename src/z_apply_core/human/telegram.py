@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import html
 import logging
 import re
@@ -56,6 +57,8 @@ class TelegramHumanChannel:
         options: list[str] | None = None,
         risk: str = "medium",
     ) -> str:
+        if self._app is None:
+            await self.start()
         topic_id = await self._get_or_create_topic(url=url, company=company, role=role)
         request_id = uuid.uuid4().hex[:10]
         option_list = [option.strip() for option in (options or []) if option and option.strip()]
@@ -119,10 +122,21 @@ class TelegramHumanChannel:
         app.add_handler(CallbackQueryHandler(self._handle_callback, pattern=r"^hitl:"))
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_reply))
 
-        await app.initialize()
-        await app.start()
-        if app.updater is not None:
-            await app.updater.start_polling(drop_pending_updates=True)
+        try:
+            await app.initialize()
+            await app.start()
+            if app.updater is not None:
+                await app.updater.start_polling(drop_pending_updates=True)
+        except Exception:
+            with contextlib.suppress(Exception):
+                if app.updater is not None and app.updater.running:
+                    await app.updater.stop()
+            with contextlib.suppress(Exception):
+                if app.running:
+                    await app.stop()
+            with contextlib.suppress(Exception):
+                await app.shutdown()
+            raise
         self._app = app
         logger.info("Telegram human channel listener started")
 

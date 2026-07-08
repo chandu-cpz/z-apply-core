@@ -122,6 +122,7 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
     async def test_ask_waits_for_pending_future_resolution(self) -> None:
         channel = TelegramHumanChannel(token="token", chat_id="-100")
         channel.bot = FakeBot()  # type: ignore[assignment]
+        channel._app = SimpleNamespace()
 
         task = asyncio.create_task(
             channel.ask(

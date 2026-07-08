@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 from z_apply_core.browser_session import BrowserSession
@@ -9,6 +10,8 @@ from z_apply_core.live_view import LiveView
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
 from z_apply_core.virtual_display import VirtualDisplaySession
+
+logger = logging.getLogger(__name__)
 
 
 async def setup_browser(state: RunState) -> dict[str, object]:
@@ -26,7 +29,14 @@ async def setup_browser(state: RunState) -> dict[str, object]:
         if human_channel is not None:
             start = cast(Any, getattr(human_channel, "start", None))
             if callable(start):
-                await start()
+                try:
+                    await start()
+                except Exception as exc:
+                    logger.warning(
+                        "Telegram human channel listener did not start; "
+                        "will retry on first ask_human: %s",
+                        exc,
+                    )
         runtime = RunRuntime(
             display=display,
             live_view=live_view,
