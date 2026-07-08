@@ -4,7 +4,7 @@ from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 
-from z_apply_core.nodes import orchestrator, setup_browser
+from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
 
@@ -12,9 +12,11 @@ from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_
 def build_graph() -> Any:
     graph = StateGraph(cast(Any, RunState))
     graph.add_node("setup_browser", setup_browser)
+    graph.add_node("authenticate_default_account", authenticate_default_account)
     graph.add_node("orchestrator", orchestrator)
     graph.add_edge(START, "setup_browser")
-    graph.add_edge("setup_browser", "orchestrator")
+    graph.add_edge("setup_browser", "authenticate_default_account")
+    graph.add_edge("authenticate_default_account", "orchestrator")
     graph.add_edge("orchestrator", END)
     return graph.compile()
 

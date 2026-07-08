@@ -14,6 +14,8 @@ class RunState(TypedDict, total=False):
     task: str
     live_view: bool
     snapshot: str
+    auth_status: str
+    auth_summary: str
     orchestrator_summary: str
     model_id: str
     runtime: RunRuntime | None
@@ -27,6 +29,8 @@ def initial_state(job_url: str, *, task: str, live_view: bool) -> RunState:
         "task": task,
         "live_view": live_view,
         "snapshot": "",
+        "auth_status": "",
+        "auth_summary": "",
         "orchestrator_summary": "",
         "model_id": "",
         "runtime": None,

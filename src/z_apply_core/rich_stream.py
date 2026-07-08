@@ -36,7 +36,7 @@ class RichStreamRenderer:
         self._end_stream_if_active()
 
     async def accept(self, event: FrameworkTraceEvent) -> None:
-        if event.event in {"updates", "values"}:
+        if event.event in {"updates", "values", "auth"}:
             self._render_update(event)
             return
 
@@ -117,6 +117,24 @@ class RichStreamRenderer:
                 "completed%s: %s",
                 model_suffix,
                 data.get("orchestrator_summary"),
+            )
+            return
+        if isinstance(data, dict) and data.get("auth_summary"):
+            node_info(
+                logger,
+                "authenticate_default_account",
+                "%s: %s",
+                data.get("auth_status") or "unknown",
+                data.get("auth_summary"),
+            )
+            return
+        if event.event == "auth":
+            node_info(
+                logger,
+                "authenticate_default_account",
+                "%s: %s",
+                event.data.get("status") or "unknown",
+                event.data.get("summary") or "",
             )
             return
         if isinstance(data, dict) and data.get("job_url"):
