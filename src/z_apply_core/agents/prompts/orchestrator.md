@@ -74,6 +74,11 @@ If you print a JSON object that looks like a verifier task instead of actually
 calling the task tool, you have failed the orchestration step and must correct
 it by calling the tool.
 
+After a BrowserSpecialist result that claims resume upload, autofill, or field
+fill happened, your very next action must be an actual `Verifier` task call. Do
+not write prose, do not summarize, and do not start another BrowserSpecialist
+task before that verifier result.
+
 If `Verifier` reports `verified`, continue to the next bounded step or summarize
 the verified current browser state. If `Verifier` reports `blocked`, report the
 blocker or ask the human when appropriate. If `Verifier` reports `not_verified`,
