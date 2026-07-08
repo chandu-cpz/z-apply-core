@@ -26,6 +26,19 @@ def _option_signature(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", text)
 
 
+async def _shutdown_application(
+    app: Application[Any, Any, Any, Any, Any, Any],
+) -> None:
+    with contextlib.suppress(Exception):
+        if app.updater is not None and app.updater.running:
+            await app.updater.stop()
+    with contextlib.suppress(Exception):
+        if app.running:
+            await app.stop()
+    with contextlib.suppress(Exception):
+        await app.shutdown()
+
+
 @dataclass(slots=True)
 class PendingHumanRequest:
     request_id: str
@@ -45,6 +58,7 @@ class TelegramHumanChannel:
         self._pending_by_message: dict[int, str] = {}
         self._active_topics: dict[str, int | None] = {}
         self._app: Application[Any, Any, Any, Any, Any, Any] | None = None
+        self._start_lock = asyncio.Lock()
 
     async def ask(
         self,
@@ -115,41 +129,33 @@ class TelegramHumanChannel:
         return _option_signature(answer) == "approve"
 
     async def start(self) -> None:
-        if self._app is not None:
-            return
+        async with self._start_lock:
+            if self._app is not None:
+                return
 
-        app = Application.builder().token(self.token).build()
-        app.add_handler(CallbackQueryHandler(self._handle_callback, pattern=r"^hitl:"))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_reply))
+            app = Application.builder().token(self.token).build()
+            app.add_handler(CallbackQueryHandler(self._handle_callback, pattern=r"^hitl:"))
+            app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_reply))
 
-        try:
-            await app.initialize()
-            await app.start()
-            if app.updater is not None:
-                await app.updater.start_polling(drop_pending_updates=True)
-        except Exception:
-            with contextlib.suppress(Exception):
-                if app.updater is not None and app.updater.running:
-                    await app.updater.stop()
-            with contextlib.suppress(Exception):
-                if app.running:
-                    await app.stop()
-            with contextlib.suppress(Exception):
-                await app.shutdown()
-            raise
-        self._app = app
-        logger.info("Telegram human channel listener started")
+            try:
+                await app.initialize()
+                await app.start()
+                if app.updater is not None:
+                    await app.updater.start_polling(drop_pending_updates=True)
+            except Exception:
+                await _shutdown_application(app)
+                raise
+            self._app = app
+            logger.info("Telegram human channel listener started")
 
     async def stop(self) -> None:
-        app = self._app
-        if app is None:
-            return
-        self._app = None
-        if app.updater is not None and app.updater.running:
-            await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
-        logger.info("Telegram human channel listener stopped")
+        async with self._start_lock:
+            app = self._app
+            if app is None:
+                return
+            self._app = None
+            await _shutdown_application(app)
+            logger.info("Telegram human channel listener stopped")
 
     async def resolve(self, request_id: str, answer: str) -> None:
         pending = self._pending.pop(request_id, None)
