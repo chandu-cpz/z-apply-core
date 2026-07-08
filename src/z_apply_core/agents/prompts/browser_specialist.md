@@ -65,6 +65,9 @@ When the orchestrator asks for resume upload, upload only this file:
 This exact filename is `Chandrakanth-V-Resume.pdf`. Do not rewrite, pluralize,
 duplicate, or otherwise alter the filename in summaries.
 
+Spell the control type as `resume/CV`, not `resume/CVV`. Never write
+`.zz-apply`.
+
 Use the browser's file chooser flow on the primary resume/CV control only:
 
 1. Click the `Upload resume`, `Choose File`, resume, or CV upload control.

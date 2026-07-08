@@ -39,12 +39,20 @@ class FillSliceConfigTests(unittest.TestCase):
         answer_writer = load_prompt("answer_writer.md")
 
         self.assertIn(".z-apply/input/Chandrakanth-V-Resume.pdf", orchestrator)
+        self.assertIn("Never write\n`.zz-apply`", orchestrator)
+        self.assertIn("not `resume/CVV`", orchestrator)
+        self.assertIn("Use `write_todos` for this slice", orchestrator)
+        self.assertIn("At most one browser-flow todo should be\n`in_progress`", orchestrator)
+        self.assertIn("only one field or question per `AnswerWriter` task call", orchestrator)
         self.assertIn("very next action must be an actual `Verifier` task call", orchestrator)
         self.assertIn("Do not click final\nsubmit", browser)
         self.assertIn("This exact filename is `Chandrakanth-V-Resume.pdf`", browser)
+        self.assertIn("not `resume/CVV`", browser)
+        self.assertIn("Never write\n`.zz-apply`", browser)
         self.assertIn("Do not use `Additional Documents`", browser)
         self.assertIn("do\nnot upload another copy", browser)
         self.assertIn("/chandrakanth_v_resume.md", answer_writer)
+        self.assertIn("exactly one application field or question per invocation", answer_writer)
 
     def test_default_task_requests_upload_first_without_submit(self) -> None:
         self.assertIn("upload the resume first", DEFAULT_RUN_TASK)
