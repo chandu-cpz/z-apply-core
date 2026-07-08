@@ -11,9 +11,10 @@ from z_apply_core.logging_config import configure_logging
 from z_apply_core.rich_stream import RichStreamRenderer
 
 DEFAULT_RUN_TASK = (
-    "Navigate from the job details page to the actual application form. You may click "
-    "a safe Apply or Start Application entry point. Do not fill fields, upload files, "
-    "click final submit, or perform irreversible application actions."
+    "Navigate to the application form if needed, upload the resume first when a "
+    "resume/CV upload control is present, wait for autofill, fill remaining fields "
+    "in verified bounded batches, ask the human when blocked or data is ambiguous, "
+    "and do not submit the application."
 )
 DEFAULT_JOB_URL = "https://amberstudent.keka.com/careers/jobdetails/133388"
 

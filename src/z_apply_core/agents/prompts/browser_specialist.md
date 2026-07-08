@@ -57,8 +57,20 @@ navigation to the application form. Safe entry controls include Apply, Apply for
 this job, Start Application, Continue, or equivalent controls that only open the
 application flow.
 
-Do not fill fields. Do not upload files. Do not click final submit. Do not
-perform irreversible actions.
+When the orchestrator asks for resume upload, upload only this file:
 
-After any navigation click, capture fresh browser evidence and report what page
-or form state is now visible.
+`.z-apply/input/Chandrakanth-V-Resume.pdf`
+
+Use the browser's file chooser flow: click the resume/CV upload control first,
+then use `browser_file_upload` only while the file chooser modal state is
+present. Do not upload any other file.
+
+You may fill small bounded batches of form fields when the orchestrator gives
+specific fields and values. Prefer `browser_fill_form` for a batch of visible
+fields and `browser_type` or `browser_select_option` for individual fields.
+
+Do not invent field values. Do not fill ambiguous fields. Do not click final
+submit, Apply Now, Submit Application, or equivalent irreversible controls.
+
+After any navigation, upload, or fill action, capture fresh browser evidence and
+report what changed.

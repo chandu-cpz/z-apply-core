@@ -1,0 +1,50 @@
+from __future__ import annotations
+
+import unittest
+
+from z_apply_core.agents.orchestrator import (
+    CANDIDATE_CONTEXT_VIRTUAL_PATH,
+    DEEPAGENT_FILESYSTEM_PERMISSIONS,
+)
+from z_apply_core.agents.prompts import load_prompt
+from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS
+from z_apply_core.cli import DEFAULT_RUN_TASK
+
+
+class FillSliceConfigTests(unittest.TestCase):
+    def test_main_browser_specialist_has_bounded_fill_and_upload_tools(self) -> None:
+        self.assertIn("browser_type", INITIAL_AGENT_BROWSER_TOOLS)
+        self.assertIn("browser_fill_form", INITIAL_AGENT_BROWSER_TOOLS)
+        self.assertIn("browser_select_option", INITIAL_AGENT_BROWSER_TOOLS)
+        self.assertIn("browser_file_upload", INITIAL_AGENT_BROWSER_TOOLS)
+        self.assertNotIn("browser_navigate", INITIAL_AGENT_BROWSER_TOOLS)
+
+    def test_candidate_markdown_is_the_only_non_artifact_read_permission(self) -> None:
+        allowed_paths = [
+            path
+            for permission in DEEPAGENT_FILESYSTEM_PERMISSIONS
+            if permission.mode == "allow"
+            for path in permission.paths
+        ]
+
+        self.assertIn("/.z-apply/browser-artifacts", allowed_paths)
+        self.assertIn("/.z-apply/browser-artifacts/**", allowed_paths)
+        self.assertIn(CANDIDATE_CONTEXT_VIRTUAL_PATH, allowed_paths)
+        self.assertEqual(CANDIDATE_CONTEXT_VIRTUAL_PATH, "/chandrakanth_v_resume.md")
+
+    def test_prompts_encode_resume_first_fill_flow(self) -> None:
+        orchestrator = load_prompt("orchestrator.md")
+        browser = load_prompt("browser_specialist.md")
+        answer_writer = load_prompt("answer_writer.md")
+
+        self.assertIn(".z-apply/input/Chandrakanth-V-Resume.pdf", orchestrator)
+        self.assertIn("Do not click final\nsubmit", browser)
+        self.assertIn("/chandrakanth_v_resume.md", answer_writer)
+
+    def test_default_task_requests_upload_first_without_submit(self) -> None:
+        self.assertIn("upload the resume first", DEFAULT_RUN_TASK)
+        self.assertIn("do not submit", DEFAULT_RUN_TASK)
+
+
+if __name__ == "__main__":
+    unittest.main()

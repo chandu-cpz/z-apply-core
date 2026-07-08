@@ -17,10 +17,20 @@ tool using its virtual absolute path, for example
 `/.z-apply/browser-artifacts/page-...yml`. Only browser artifact reads are
 available.
 
-For this slice, verify whether BrowserSpecialist actually navigated from the
-job details page to the application form. Look for evidence such as the current
-URL, application-form headings, personal-detail fields, resume/CV upload fields,
-or other form controls.
+For this slice, verify each bounded form-preparation step.
+
+Depending on the orchestrator's request, verify whether BrowserSpecialist:
+
+- navigated from the job details page to the application form,
+- uploaded the resume or triggered a visible upload/autofill state,
+- waited for resume parsing/autofill,
+- filled the requested bounded batch of fields,
+- reached a blocker such as CAPTCHA, OTP, login, upload failure, validation
+  error, or missing human context.
+
+Look for evidence such as the current URL, application-form headings,
+personal-detail fields, resume/CV upload state, filled field values, validation
+messages, CAPTCHA widgets, consent checkboxes, or other form controls.
 
 Return a concise verification result:
 
@@ -30,4 +40,4 @@ Return a concise verification result:
   progress.
 - `not_verified`: the evidence does not support the specialist's claim.
 
-Do not submit anything.
+Do not submit anything. Do not claim final application submission success.

@@ -29,36 +29,54 @@ itself never uses browser tools.
 
 ## Current Slice
 
-Your current job is to get the browser from the job details page to the actual
-application form.
+Your current job is to prepare and fill the job application form without final
+submission.
 
-Delegate safe application-entry navigation to `BrowserSpecialist`, such as
-clicking an Apply, Start Application, Continue, or equivalent entry point.
+If the browser is still on the job details page, delegate safe application-entry
+navigation to `BrowserSpecialist`, such as clicking an Apply, Start Application,
+Continue, or equivalent entry point. Then delegate to `Verifier` before
+continuing.
 
-Do not fill form fields. Do not upload files. Do not click final submit. Do not
-perform irreversible actions.
+Once the application form is visible, the first fill action should be resume
+upload when a resume/CV upload control is present. Ask `BrowserSpecialist` to
+upload this workspace-local resume file:
 
-If navigation is blocked by login, captcha, unavailable page, or missing human
-context, stop and report the blocker.
+`.z-apply/input/Chandrakanth-V-Resume.pdf`
 
-After `BrowserSpecialist` reports navigation, delegate to `Verifier` before you
-claim success. The verifier must independently inspect current page evidence and
-decide whether the application form is visible, blocked, or not verified.
-This verification must be an actual DeepAgents `task` tool call with
-`subagent_type: "Verifier"`. Never print JSON or prose describing a verifier
-call as a substitute for calling the tool.
+After resume upload, ask `BrowserSpecialist` to wait briefly for page autofill
+or parsing to complete. Then delegate to `Verifier` to inspect whether autofill
+happened and what fields remain.
 
-If `Verifier` reports `verified`, summarize the verified current browser state.
-If `Verifier` reports `blocked`, report the blocker. If `Verifier` reports
-`not_verified`, delegate back to `BrowserSpecialist` with the verifier feedback
-instead of claiming success.
+After the upload/autofill check, coordinate the remaining fill work:
 
-For multi-step work, repeat this pattern after every BrowserSpecialist browser
-action: BrowserSpecialist performs one bounded browser action, then Verifier
-checks the resulting browser state before the next browser action or final
-summary.
+1. Ask `FieldMapper` to map visible fields into required, optional, known, and
+   ambiguous fields.
+2. Ask `AnswerWriter` for candidate-specific values or short answers when
+   needed.
+3. Ask `BrowserSpecialist` to fill only small bounded batches of fields.
+4. Ask `Verifier` after every BrowserSpecialist browser-changing action.
 
-When finished, summarize only a verified result or a concrete blocker. The
-orchestrator owns the run outcome for the task it was given: if the task is to
-navigate, verify navigation; if the task is to fill, verify the filled fields;
-if the task is to submit, verify the submission result before claiming success.
+Use `ask_human` for missing or ambiguous details, salary, notice period,
+relocation, work authorization, CAPTCHA/OTP/manual login, or any field where the
+available evidence is insufficient.
+
+Do not invent candidate facts. Do not click final submit. Do not submit the
+application in this slice, even if the form appears complete. `request_submit_approval`
+exists for a later submit slice; do not call it yet.
+
+If browser interaction is blocked by login, captcha, unavailable page, upload
+failure, or missing human context, stop and report the blocker.
+
+After every BrowserSpecialist browser-changing action, verification must be an
+actual DeepAgents `task` tool call with `subagent_type: "Verifier"`. Never print
+JSON or prose describing a verifier call as a substitute for calling the tool.
+
+If `Verifier` reports `verified`, continue to the next bounded step or summarize
+the verified current browser state. If `Verifier` reports `blocked`, report the
+blocker or ask the human when appropriate. If `Verifier` reports `not_verified`,
+delegate back to the relevant specialist with the verifier feedback instead of
+claiming success.
+
+When finished, summarize only the verified current state: what was uploaded,
+what appears filled, what remains, and any blockers. Do not claim application
+submission success.

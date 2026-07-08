@@ -24,10 +24,16 @@ logger = logging.getLogger(__name__)
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/browser-artifacts"
+CANDIDATE_CONTEXT_VIRTUAL_PATH = "/chandrakanth_v_resume.md"
 DEEPAGENT_FILESYSTEM_PERMISSIONS = [
     FilesystemPermission(
         operations=["read"],
         paths=[ARTIFACTS_VIRTUAL_ROOT, f"{ARTIFACTS_VIRTUAL_ROOT}/**"],
+        mode="allow",
+    ),
+    FilesystemPermission(
+        operations=["read"],
+        paths=[CANDIDATE_CONTEXT_VIRTUAL_PATH],
         mode="allow",
     ),
     FilesystemPermission(operations=["read"], paths=["/**"], mode="deny"),
@@ -42,6 +48,7 @@ async def run_orchestrator(
     snapshot: str,
     browser_tools: Sequence[BaseTool],
     config: RunnableConfig,
+    human_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
 ) -> OrchestratorRun:
     try:
@@ -54,7 +61,7 @@ async def run_orchestrator(
 
     agent = create_deep_agent(
         model=selection.llm,
-        tools=[],
+        tools=list(human_tools),
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[ModelRetryMiddleware(max_retries=3, on_failure="error")],
         subagents=build_specialists(browser_tools),
