@@ -5,6 +5,7 @@ import unittest
 from z_apply_core.agents.orchestrator import (
     CANDIDATE_CONTEXT_VIRTUAL_PATH,
     DEEPAGENT_FILESYSTEM_PERMISSIONS,
+    _task_prompt,
 )
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS
@@ -44,6 +45,16 @@ class FillSliceConfigTests(unittest.TestCase):
     def test_default_task_requests_upload_first_without_submit(self) -> None:
         self.assertIn("upload the resume first", DEFAULT_RUN_TASK)
         self.assertIn("do not submit", DEFAULT_RUN_TASK)
+
+    def test_task_prompt_does_not_allow_stopping_after_navigation(self) -> None:
+        prompt = _task_prompt(
+            job_url="https://example.test/job",
+            task=DEFAULT_RUN_TASK,
+            snapshot="- snapshot",
+        )
+
+        self.assertIn("Do not finish after only navigating to the form.", prompt)
+        self.assertIn("attempt the resume upload", prompt)
 
 
 if __name__ == "__main__":

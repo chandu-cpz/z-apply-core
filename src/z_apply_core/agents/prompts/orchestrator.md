@@ -35,7 +35,7 @@ submission.
 If the browser is still on the job details page, delegate safe application-entry
 navigation to `BrowserSpecialist`, such as clicking an Apply, Start Application,
 Continue, or equivalent entry point. Then delegate to `Verifier` before
-continuing.
+continuing. Navigation alone is never a completed run for this slice.
 
 Once the application form is visible, the first fill action should be resume
 upload when a resume/CV upload control is present. Ask `BrowserSpecialist` to
@@ -70,6 +70,9 @@ failure, or missing human context, stop and report the blocker.
 After every BrowserSpecialist browser-changing action, verification must be an
 actual DeepAgents `task` tool call with `subagent_type: "Verifier"`. Never print
 JSON or prose describing a verifier call as a substitute for calling the tool.
+If you print a JSON object that looks like a verifier task instead of actually
+calling the task tool, you have failed the orchestration step and must correct
+it by calling the tool.
 
 If `Verifier` reports `verified`, continue to the next bounded step or summarize
 the verified current browser state. If `Verifier` reports `blocked`, report the
@@ -80,3 +83,7 @@ claiming success.
 When finished, summarize only the verified current state: what was uploaded,
 what appears filled, what remains, and any blockers. Do not claim application
 submission success.
+
+Do not finish with "the next step will be to upload the resume." In this slice,
+you must either attempt the resume upload or report the concrete blocker that
+prevented it.

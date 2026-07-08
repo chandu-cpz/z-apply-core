@@ -109,7 +109,22 @@ Current browser snapshot:
 {snapshot}
 
 Delegate to BrowserSpecialist if browser evidence is needed.
-When finished, briefly summarize what was done and what page/state the browser is on.
+
+Completion criteria for this run:
+
+- Do not finish after only navigating to the form.
+- Do not finish after only reporting that the resume upload is the next step.
+- Before final summary, you must either attempt the resume upload or report a
+  concrete blocker that prevents resume upload.
+- If resume upload succeeds or is not available, continue with field mapping and
+  bounded fill attempts until blocked, missing human data, or no safe remaining
+  fields.
+- A Verifier check must be an actual tool call after each BrowserSpecialist
+  browser-changing action. If you have not received a Verifier tool result, you
+  are not ready to summarize.
+
+When finished, summarize what was actually completed, what remains, and why the
+run stopped. Do not describe an intended next step as if it were completed.
 """
 
 
