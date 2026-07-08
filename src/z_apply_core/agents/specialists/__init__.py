@@ -24,3 +24,19 @@ def build_specialists(browser_tools: Sequence[BaseTool]) -> list[SubAgent]:
         build_answer_writer(),
         build_verifier(read_only_browser_tools),
     ]
+
+
+def build_auth_specialists(browser_tools: Sequence[BaseTool]) -> list[SubAgent]:
+    read_only_browser_tools = [
+        tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
+    ]
+    return [
+        build_browser_specialist(
+            browser_tools,
+            prompt_name="auth_browser_specialist.md",
+        ),
+        build_verifier(
+            read_only_browser_tools,
+            prompt_name="auth_verifier.md",
+        ),
+    ]

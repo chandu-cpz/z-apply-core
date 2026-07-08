@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import patch
 
+from z_apply_core.agents.result import OrchestratorRun
+from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
 from z_apply_core.nodes.authenticate_default_account import (
     SIMPLIFY_DASHBOARD_URL,
     authenticate_default_account,
-    classify_auth_snapshot,
 )
 from z_apply_core.runtime import RunRuntime
 
@@ -16,6 +18,7 @@ class FakeTools:
     def __init__(self, responses: dict[str, list[str]]) -> None:
         self.responses = responses
         self.calls: list[tuple[str, dict[str, object]]] = []
+        self.langchain_tool_requests: list[tuple[str, ...]] = []
 
     async def call(self, name: str, arguments: dict[str, object] | None = None) -> str:
         self.calls.append((name, arguments or {}))
@@ -24,13 +27,13 @@ class FakeTools:
             return values.pop(0)
         return ""
 
+    def langchain_tools(self, names: tuple[str, ...]) -> list[Any]:
+        self.langchain_tool_requests.append(names)
+        return [SimpleNamespace(name=name) for name in names]
+
 
 class FakeHumanChannel:
-    def __init__(self) -> None:
-        self.questions: list[dict[str, object]] = []
-
-    async def ask(self, **kwargs: object) -> str:
-        self.questions.append(kwargs)
+    async def ask(self, **_kwargs: object) -> str:
         return "Done"
 
     async def confirm(self, **_kwargs: object) -> bool:
@@ -46,61 +49,44 @@ def make_runtime(tools: FakeTools, human_channel: object | None = None) -> RunRu
     )
 
 
-class AuthClassificationTests(unittest.TestCase):
-    def test_login_form_is_detected(self) -> None:
-        result = classify_auth_snapshot(
-            '- textbox "Email" [ref=e1]\n- textbox "Password" [ref=e2]\n- button "Login"'
-        )
-
-        self.assertEqual(result.status, "login_required")
-
-    def test_authenticated_state_is_detected(self) -> None:
-        result = classify_auth_snapshot(
-            "- Page URL: https://simplify.jobs/dashboard\n- text: Applications"
-        )
-
-        self.assertEqual(result.status, "authenticated")
-
-    def test_blocker_state_is_detected(self) -> None:
-        result = classify_auth_snapshot("- text: Enter verification code sent to your email")
-
-        self.assertEqual(result.status, "blocked")
-
-
 class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
-    async def test_default_credentials_are_filled_and_job_page_is_restored(self) -> None:
-        login_snapshot = (
-            '- textbox "Email" [ref=e11]\n'
-            '- textbox "Password" [ref=e12]\n'
-            '- button "Login" [ref=e13]'
-        )
+    async def test_auth_node_delegates_to_auth_orchestrator_and_restores_job_page(self) -> None:
         tools = FakeTools(
             {
                 "browser_navigate": [
-                    login_snapshot,
+                    "- Page URL: https://simplify.jobs/dashboard\n- text: Login",
                     "- heading Job details",
                 ],
-                "browser_type": [
-                    "- textbox email filled",
-                    "- submitted",
-                ],
-                "browser_wait_for": ["- waited"],
                 "browser_snapshot": [
-                    "- Page URL: https://simplify.jobs/dashboard\n- text: Applications",
+                    "- Page URL: https://simplify.jobs/dashboard\n- text: Login",
                     "- heading Job details",
                 ],
             }
         )
-        runtime = make_runtime(tools)
+        runtime = make_runtime(tools, FakeHumanChannel())
         settings = SimpleNamespace(
             has_default_credentials=True,
             default_username="user@example.test",
             default_password="secret",
         )
+        captured: dict[str, Any] = {}
 
-        with patch(
-            "z_apply_core.nodes.authenticate_default_account.load_settings",
-            return_value=settings,
+        async def fake_run_auth_orchestrator(**kwargs: Any) -> OrchestratorRun:
+            captured.update(kwargs)
+            return OrchestratorRun(
+                summary="authenticated: Simplify verified by Verifier.",
+                model_id="test/model",
+            )
+
+        with (
+            patch(
+                "z_apply_core.nodes.authenticate_default_account.load_settings",
+                return_value=settings,
+            ),
+            patch(
+                "z_apply_core.nodes.authenticate_default_account.run_auth_orchestrator",
+                side_effect=fake_run_auth_orchestrator,
+            ),
         ):
             result = await authenticate_default_account(
                 {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
@@ -108,53 +94,30 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(result["auth_status"], "authenticated")
+        self.assertEqual(result["auth_model_id"], "test/model")
         self.assertEqual(
             tools.calls,
             [
                 ("browser_navigate", {"url": SIMPLIFY_DASHBOARD_URL}),
-                (
-                    "browser_type",
-                    {
-                        "target": "e11",
-                        "element": "default account email field",
-                        "text": "user@example.test",
-                    },
-                ),
-                (
-                    "browser_type",
-                    {
-                        "target": "e12",
-                        "element": "default account password field",
-                        "text": "secret",
-                        "submit": True,
-                    },
-                ),
-                ("browser_wait_for", {"time": 2}),
                 ("browser_snapshot", {}),
                 ("browser_navigate", {"url": "https://jobs.example/job/1"}),
                 ("browser_snapshot", {}),
             ],
         )
-
-    async def test_blocker_uses_human_channel_then_rechecks(self) -> None:
-        human = FakeHumanChannel()
-        tools = FakeTools(
-            {
-                "browser_navigate": [
-                    "- text: Enter OTP",
-                    "- heading Job details",
-                ],
-                "browser_snapshot": [
-                    "- Page URL: https://simplify.jobs/dashboard\n- text: Applications",
-                    "- heading Job details",
-                ],
-            }
+        self.assertEqual(tools.langchain_tool_requests, [AUTH_AGENT_BROWSER_TOOLS])
+        self.assertEqual(
+            [tool.name for tool in captured["browser_tools"]],
+            list(AUTH_AGENT_BROWSER_TOOLS),
         )
-        runtime = make_runtime(tools, human)
+        self.assertEqual(len(captured["human_tools"]), 2)
+
+    async def test_auth_node_skips_when_default_credentials_are_missing(self) -> None:
+        tools = FakeTools({})
+        runtime = make_runtime(tools)
         settings = SimpleNamespace(
-            has_default_credentials=True,
-            default_username="user@example.test",
-            default_password="secret",
+            has_default_credentials=False,
+            default_username="",
+            default_password="",
         )
 
         with patch(
@@ -166,8 +129,8 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
                 {},
             )
 
-        self.assertEqual(result["auth_status"], "authenticated")
-        self.assertEqual(human.questions[0]["options"], ["Done"])
+        self.assertEqual(result["auth_status"], "skipped")
+        self.assertEqual(tools.calls, [])
 
 
 if __name__ == "__main__":
