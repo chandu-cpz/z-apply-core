@@ -17,14 +17,21 @@ async def consume_deepagent_stream(
 ) -> V3RunResult:
     started = time.monotonic()
     resolved = await _resolve_stream(stream)
+    tool_trace: list[dict[str, Any]] = []
 
     async with _managed_stream(resolved) as active_stream:
         await asyncio.gather(
             _consume_messages("orchestrator", _projection(active_stream, "messages"), sink),
-            _consume_tool_calls("orchestrator", _projection(active_stream, "tool_calls"), sink),
-            _consume_subagents(_projection(active_stream, "subagents"), sink),
+            _consume_tool_calls(
+                "orchestrator",
+                _projection(active_stream, "tool_calls"),
+                sink,
+                tool_trace,
+            ),
+            _consume_subagents(_projection(active_stream, "subagents"), sink, tool_trace),
         )
         output = await _read_output(active_stream)
+        output["_z_apply_tool_trace"] = tool_trace
 
     return V3RunResult(
         output=output,
@@ -37,6 +44,7 @@ async def consume_deepagent_stream(
 async def _consume_subagents(
     subagents: AsyncIterable[Any],
     sink: FrameworkEventSink | None,
+    tool_trace: list[dict[str, Any]],
 ) -> None:
     async for subagent in subagents:
         name = str(getattr(subagent, "name", "subagent"))
@@ -52,8 +60,13 @@ async def _consume_subagents(
         try:
             await asyncio.gather(
                 _consume_messages(name, _projection(subagent, "messages"), sink),
-                _consume_tool_calls(name, _projection(subagent, "tool_calls"), sink),
-                _consume_subagents(_projection(subagent, "subagents"), sink),
+                _consume_tool_calls(
+                    name,
+                    _projection(subagent, "tool_calls"),
+                    sink,
+                    tool_trace,
+                ),
+                _consume_subagents(_projection(subagent, "subagents"), sink, tool_trace),
             )
             await _read_output(subagent)
             await _emit(sink, "agent_lifecycle", name, {"status": "completed"})
@@ -137,6 +150,7 @@ async def _consume_tool_calls(
     source: str,
     tool_calls: AsyncIterable[Any],
     sink: FrameworkEventSink | None,
+    tool_trace: list[dict[str, Any]],
 ) -> None:
     async for call in tool_calls:
         tool_name = str(call.tool_name)
@@ -170,6 +184,16 @@ async def _consume_tool_calls(
                 "error": str(call.error) if call.error is not None else "",
                 "completed": call.completed,
             },
+        )
+        tool_trace.append(
+            {
+                "source": source,
+                "tool_name": tool_name,
+                "input": call.input,
+                "output": call.output,
+                "error": str(call.error) if call.error is not None else "",
+                "completed": bool(call.completed),
+            }
         )
 
 
