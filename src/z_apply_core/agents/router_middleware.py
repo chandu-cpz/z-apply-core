@@ -82,12 +82,28 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             self._policy.get("priority", "balanced"),
         )
 
+        logger.debug(
+            "NimRouterMiddleware.awrap_model_call "
+            "role=%s tools=%s structured=%s vision=%s reasoning=%s priority=%s",
+            self._role,
+            tools,
+            structured,
+            vision,
+            reasoning,
+            priority,
+        )
+
         selection: ModelSelection = await self._router.lease(
             tools=tools,
             structured=structured,
             vision=vision,
             reasoning=reasoning,
             priority=priority,
+        )
+
+        logger.debug(
+            "NimRouterMiddleware leased model=%s for role=%s",
+            selection.info.id, self._role,
         )
 
         start = time.monotonic()
@@ -97,6 +113,11 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 request.override(model=leased_model)
             )
         except BaseException as exc:  # noqa: BLE001 - re-raised after recording
+            logger.debug(
+                "NimRouterMiddleware recording failure for model=%s role=%s",
+                selection.info.id,
+                self._role,
+            )
             self._router.record_failure(
                 selection.info.id,
                 error=exc,
@@ -106,9 +127,16 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             )
             raise
         else:
+            latency = time.monotonic() - start
+            logger.debug(
+                "NimRouterMiddleware recording success for model=%s role=%s latency=%.2f",
+                selection.info.id,
+                self._role,
+                latency,
+            )
             self._router.record_success(
                 selection.info.id,
-                latency=time.monotonic() - start,
+                latency=latency,
                 tools=tools,
                 structured=structured,
                 vision=vision,
