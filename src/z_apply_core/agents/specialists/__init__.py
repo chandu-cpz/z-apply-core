@@ -74,7 +74,7 @@ async def build_specialists(
             model=model,
         ),
         _with_routing(
-            build_field_mapper(),
+            build_field_mapper(read_only_browser_tools),
             router=router,
             role="FieldMapper",
             model=model,

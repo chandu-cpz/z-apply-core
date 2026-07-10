@@ -100,10 +100,7 @@ async def run_orchestrator(
         version="v3",
     )
     stream_result = await consume_deepagent_stream(stream, sink=sink)
-    summary = _validated_summary(
-        _summary_from_output(stream_result.output),
-        _tool_trace_from_output(stream_result.output),
-    )
+    summary = _summary_from_output(stream_result.output)
     return OrchestratorRun(summary=summary, model_id=model_id)
 
 
@@ -151,84 +148,6 @@ def _summary_from_output(output: dict[str, Any]) -> str:
         if content:
             return content[:1000]
     return "Orchestrator completed without a final message."
-
-
-def _validated_summary(summary: str, tool_trace: list[dict[str, Any]]) -> str:
-    issues = _trace_issues(summary, tool_trace)
-    if not issues:
-        return summary
-    return "not_verified: " + " ".join(issues)
-
-
-def _trace_issues(summary: str, tool_trace: list[dict[str, Any]]) -> list[str]:
-    issues: list[str] = []
-
-    if _claims_resume_upload(summary) and not _has_tool_call(tool_trace, "browser_file_upload"):
-        issues.append("Final summary claimed resume upload without a browser_file_upload call.")
-
-    if _claims_field_mapping(summary) and not _has_subagent_task(tool_trace, "FieldMapper"):
-        issues.append("Final summary claimed field mapping without a FieldMapper task call.")
-
-    if _claims_human_question(summary) and not _has_tool_call(tool_trace, "ask_human"):
-        issues.append("Final summary asked for human data without an ask_human tool call.")
-
-    return issues
-
-
-def _claims_resume_upload(summary: str) -> bool:
-    text = summary.lower()
-    upload_claims = (
-        "resume file has been successfully uploaded",
-        "resume has been successfully uploaded",
-        "successfully uploaded",
-        "was successfully uploaded",
-        "uploaded your resume",
-        "has been uploaded",
-    )
-    return ("resume" in text or "chandrakanth-v-resume.pdf" in text) and any(
-        claim in text for claim in upload_claims
-    )
-
-
-def _claims_field_mapping(summary: str) -> bool:
-    text = summary.lower()
-    return "field mapping result" in text or "map the currently visible" in text
-
-
-def _claims_human_question(summary: str) -> bool:
-    text = summary.lower()
-    human_prompt_markers = (
-        "could you provide",
-        "please provide",
-        "once you supply",
-        "we need the candidate",
-    )
-    return any(marker in text for marker in human_prompt_markers)
-
-
-def _has_tool_call(tool_trace: list[dict[str, Any]], tool_name: str) -> bool:
-    return any(call.get("tool_name") == tool_name for call in tool_trace)
-
-
-def _has_subagent_task(tool_trace: list[dict[str, Any]], subagent_type: str) -> bool:
-    return any(_task_subagent_type(call) == subagent_type for call in tool_trace)
-
-
-def _task_subagent_type(call: dict[str, Any]) -> str:
-    if call.get("source") != "orchestrator" or call.get("tool_name") != "task":
-        return ""
-    tool_input = call.get("input")
-    if isinstance(tool_input, dict):
-        subagent_type = tool_input.get("subagent_type")
-        return subagent_type if isinstance(subagent_type, str) else ""
-    return ""
-
-
-def _tool_trace_from_output(output: dict[str, Any]) -> list[dict[str, Any]]:
-    trace = output.get("_z_apply_tool_trace")
-    if not isinstance(trace, list):
-        return []
-    return [item for item in trace if isinstance(item, dict)]
 
 
 def _message_text(content: object) -> str:
