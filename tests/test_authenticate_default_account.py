@@ -111,6 +111,7 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
             [tool.name for tool in captured["browser_tools"]],
             list(AUTH_AGENT_BROWSER_TOOLS),
         )
+        self.assertIn("browser_take_screenshot", AUTH_AGENT_BROWSER_TOOLS)
         self.assertEqual(len(captured["human_tools"]), 2)
 
     async def test_auth_node_skips_when_default_credentials_are_missing(self) -> None:

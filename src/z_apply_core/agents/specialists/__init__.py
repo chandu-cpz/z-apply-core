@@ -20,12 +20,6 @@ from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
 
 
-async def _default_model(router: NimRouter) -> BaseChatModel:
-    selection = await router.select(tools=True, priority="balanced")
-    model: BaseChatModel = selection.llm
-    return model
-
-
 def _with_routing(
     spec: SubAgent,
     *,
@@ -47,13 +41,14 @@ def _with_routing(
 async def build_specialists(
     router: NimRouter,
     browser_tools: Sequence[BaseTool],
+    *,
+    fallback_model: BaseChatModel,
 ) -> list[SubAgent]:
     read_only_browser_tools = [
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
-    model = await _default_model(router)
     browser_verification = BrowserActionVerificationMiddleware(
-        fallback_model=model,
+        fallback_model=fallback_model,
         router=router,
         read_only_browser_tools=read_only_browser_tools,
         prompt_name="verifier.md",
@@ -64,32 +59,32 @@ async def build_specialists(
             build_browser_specialist(browser_tools),
             router=router,
             role="BrowserSpecialist",
-            model=model,
+            model=fallback_model,
             extra_middleware=[browser_verification],
         ),
         _with_routing(
             build_vision_specialist(browser_tools),
             router=router,
             role="VisionSpecialist",
-            model=model,
+            model=fallback_model,
         ),
         _with_routing(
             build_field_mapper(read_only_browser_tools),
             router=router,
             role="FieldMapper",
-            model=model,
+            model=fallback_model,
         ),
         _with_routing(
             build_answer_writer(),
             router=router,
             role="AnswerWriter",
-            model=model,
+            model=fallback_model,
         ),
         _with_routing(
             build_verifier(read_only_browser_tools),
             router=router,
             role="Verifier",
-            model=model,
+            model=fallback_model,
         ),
     ]
 
@@ -97,13 +92,14 @@ async def build_specialists(
 async def build_auth_specialists(
     router: NimRouter,
     browser_tools: Sequence[BaseTool],
+    *,
+    fallback_model: BaseChatModel,
 ) -> list[SubAgent]:
     read_only_browser_tools = [
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
-    model = await _default_model(router)
     browser_verification = BrowserActionVerificationMiddleware(
-        fallback_model=model,
+        fallback_model=fallback_model,
         router=router,
         read_only_browser_tools=read_only_browser_tools,
         prompt_name="auth_verifier.md",
@@ -117,7 +113,7 @@ async def build_auth_specialists(
             ),
             router=router,
             role="BrowserSpecialist",
-            model=model,
+            model=fallback_model,
             extra_middleware=[browser_verification],
         ),
         _with_routing(
@@ -127,6 +123,6 @@ async def build_auth_specialists(
             ),
             router=router,
             role="auth_verifier",
-            model=model,
+            model=fallback_model,
         ),
     ]

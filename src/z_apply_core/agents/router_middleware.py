@@ -58,11 +58,18 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
     runnable config, so no callback is injected).
     """
 
-    def __init__(self, router: NimRouter, role: str) -> None:
+    def __init__(
+        self,
+        router: NimRouter,
+        role: str,
+        *,
+        initial_selection: ModelSelection | None = None,
+    ) -> None:
         super().__init__()
         self._router = router
         self._role = role
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": False})
+        self._initial_selection = initial_selection
 
     @property
     def role(self) -> str:
@@ -93,13 +100,16 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             priority,
         )
 
-        selection: ModelSelection = await self._router.lease(
-            tools=tools,
-            structured=structured,
-            vision=vision,
-            reasoning=reasoning,
-            priority=priority,
-        )
+        selection = self._initial_selection
+        self._initial_selection = None
+        if selection is None:
+            selection = await self._router.lease(
+                tools=tools,
+                structured=structured,
+                vision=vision,
+                reasoning=reasoning,
+                priority=priority,
+            )
 
         logger.debug(
             "NimRouterMiddleware leased model=%s for role=%s",

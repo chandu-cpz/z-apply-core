@@ -9,6 +9,22 @@ filename and pass bare refs such as `e112` or `f1e9` as browser-tool targets. If
 a ref is stale, capture one fresh inline snapshot and retry. Call tools
 directly; never output JSON that only resembles a tool call.
 
+For an inspection task, always obtain fresh browser evidence. If the ARIA
+snapshot contains only generic containers, empty roles, images, or an empty
+`alert`, call `browser_take_screenshot` without a filename and inspect the
+returned image before reporting state. Report which of these is visibly
+supported:
+
+- authenticated account/dashboard evidence;
+- a login form;
+- a concrete named human challenge; or
+- insufficient evidence.
+
+An ARIA role is not meaningful evidence without its accessible text or visible
+content. An empty `alert`, `dialog`, `banner`, `generic`, image, or focused ref
+is not a CAPTCHA, OTP request, login error, or human blocker. Never invent a
+blocker from an empty role.
+
 For login:
 
 1. Confirm the visible controls are the Simplify login form.
@@ -23,8 +39,9 @@ store, or report raw values. Never type placeholder markup such as
 
 Stop the operation and report current evidence when CAPTCHA, OTP, email
 verification, a browser challenge, or another manual identity action is
-required. Do not work on a job application, upload files, change account
-settings, or navigate away from Simplify.
+visibly and concretely required. Name the exact visible challenge and how it
+blocks authentication. Do not work on a job application, upload files, change
+account settings, or navigate away from Simplify.
 
 Report the tools that actually ran and the resulting visible authentication
 evidence. A submitted form or URL change alone is not proof of authentication.

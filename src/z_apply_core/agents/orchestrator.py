@@ -61,7 +61,7 @@ async def run_orchestrator(
         )
 
     try:
-        selection = await router.select(tools=True, structured=True, priority="balanced")
+        selection = await router.lease(tools=True, priority="balanced")
     except (NimRouterError, ImportError, ValueError) as exc:
         return OrchestratorRun(summary=f"Model selection failed: {exc}", model_id="")
 
@@ -69,7 +69,7 @@ async def run_orchestrator(
     node_info(
         logger,
         "orchestrator",
-        "fallback model: %s (runtime routing overrides each call)",
+        "initial model: %s (runtime routing selects each later call)",
         model_id,
     )
 
@@ -82,9 +82,17 @@ async def run_orchestrator(
                 ["BrowserSpecialist", "FieldMapper", "AnswerWriter", "Verifier", "VisionSpecialist"]
             ),
             ModelRetryMiddleware(max_retries=3, on_failure="error"),
-            NimRouterMiddleware(router, role="orchestrator"),
+            NimRouterMiddleware(
+                router,
+                role="orchestrator",
+                initial_selection=selection,
+            ),
         ],
-        subagents=await build_specialists(router, browser_tools),
+        subagents=await build_specialists(
+            router,
+            browser_tools,
+            fallback_model=selection.llm,
+        ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
     )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from z_apply_core.agents.auth_orchestrator import _task_prompt as auth_task_prompt
 from z_apply_core.agents.orchestrator import (
     CANDIDATE_CONTEXT_VIRTUAL_PATH,
     DEEPAGENT_FILESYSTEM_PERMISSIONS,
@@ -62,6 +63,19 @@ class FillSliceConfigTests(unittest.TestCase):
         self.assertIn("CAPTCHA used only for final submission is submit-time work", prompt)
         self.assertIn("request submission approval", prompt)
         self.assertIn("Never claim the application was submitted", single_line_prompt)
+
+    def test_auth_requires_inspection_before_human_escalation(self) -> None:
+        prompt = auth_task_prompt(
+            snapshot="- alert [ref=e8]",
+        )
+        system_prompt = load_prompt("auth_orchestrator.md")
+        single_line_system_prompt = " ".join(system_prompt.split())
+
+        self.assertIn("first action must be a BrowserSpecialist task", prompt)
+        self.assertIn("not evidence of a blocker", prompt)
+        self.assertIn("Do not call `ask_human` before", prompt)
+        self.assertIn("Your first action must be a `task` call", system_prompt)
+        self.assertIn("an empty `alert`", single_line_system_prompt)
 
 
 if __name__ == "__main__":

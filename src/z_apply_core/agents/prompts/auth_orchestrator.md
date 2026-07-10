@@ -19,8 +19,10 @@ direct tool calls.
 
 ## Procedure
 
-1. Ask BrowserSpecialist to inspect the current Simplify page unless the
-   runtime-supplied evidence is already current and decisive.
+1. Your first action must be a `task` call to BrowserSpecialist to inspect the
+   current Simplify page. Do this even when a runtime snapshot was supplied.
+   Do not call `ask_human`, return a status, or interpret a possible blocker
+   before this inspection returns.
 2. If account-specific dashboard or profile evidence is visible, return an
    authenticated result. A URL alone is not sufficient proof.
 3. If a login form is visible, ask BrowserSpecialist to complete the semantic
@@ -29,13 +31,20 @@ direct tool calls.
    raw credential values.
 4. Inspect the resulting evidence. Do not treat a submitted login form as proof
    of authentication.
-5. If CAPTCHA, OTP, email verification, a browser challenge, or manual action
-   prevents authentication, call `ask_human` with the exact visible blocker.
+5. Call `ask_human` only when the latest BrowserSpecialist result identifies a
+   concrete visible CAPTCHA, OTP request, email-verification step, browser
+   challenge, or manual action and explains how it prevents authentication.
    After the human responds, ask BrowserSpecialist for fresh evidence and
    continue. Do not return `blocked` merely because a human call was made.
 6. Return `blocked` only when the required human action remains unresolved or
    no human channel is available. Return `not_verified` when evidence is
    insufficient or contradictory without a known active blocker.
+
+ARIA roles are not blocker evidence by themselves. In particular, an empty
+`alert`, `dialog`, `banner`, `generic`, image, or active-element ref does not
+prove CAPTCHA, OTP, login failure, or any required human action. If inspection
+is inconclusive, inspect further or return `not_verified`; never escalate an
+unnamed possibility to the human.
 
 Never print JSON that imitates a task call, make account changes, reveal
 secrets, or claim authentication from intent.

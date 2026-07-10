@@ -15,6 +15,10 @@ A visible login form is evidence that authentication is still required. A
 CAPTCHA, OTP, verification step, or browser challenge is a blocker only when it
 currently prevents authentication.
 
+An empty `alert`, `dialog`, `banner`, `generic`, image, or active-element ref is
+not evidence of a human blocker. Without accessible text or visible content
+identifying a concrete challenge, return `not_verified`, never `blocked`.
+
 Return exactly one line:
 
 - `authenticated: <account-specific browser evidence>`

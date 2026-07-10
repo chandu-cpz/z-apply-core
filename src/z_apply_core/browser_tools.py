@@ -26,6 +26,7 @@ INITIAL_AGENT_BROWSER_TOOLS = (
 AUTH_AGENT_BROWSER_TOOLS = (
     "browser_snapshot",
     "browser_find",
+    "browser_take_screenshot",
     "browser_click",
     "browser_type",
     "browser_wait_for",
