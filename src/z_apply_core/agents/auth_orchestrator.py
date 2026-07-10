@@ -12,13 +12,13 @@ from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
-from z_apply_core.agents.browser_operation import build_browser_operation_tool
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.orchestrator import CORE_ROOT, DEEPAGENT_FILESYSTEM_PERMISSIONS
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_auth_specialists
+from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -53,20 +53,16 @@ async def run_auth_orchestrator(
         model_id,
     )
 
-    subagents = [
-        specialist
-        for specialist in await build_auth_specialists(router, browser_tools)
-        if specialist["name"] != "BrowserSpecialist"
-    ]
     agent = create_deep_agent(
         model=selection.llm,
-        tools=[*human_tools, build_browser_operation_tool(browser_tools)],
+        tools=list(human_tools),
         system_prompt=load_prompt("auth_orchestrator.md"),
         middleware=[
+            SubagentDispatchMiddleware(["BrowserSpecialist", "Verifier"]),
             ModelRetryMiddleware(max_retries=3, on_failure="error"),
             NimRouterMiddleware(router, role="auth_orchestrator"),
         ],
-        subagents=subagents,
+        subagents=await build_auth_specialists(router, browser_tools),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
     )
