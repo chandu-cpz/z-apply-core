@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+import unittest
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from nim_router.config import RouterConfig
+
+from z_apply_core import graph
+from z_apply_core.model_policy import BANNED_MODEL_IDS_UNDER_30B
+
+
+class ModelPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_job_adds_core_bans_to_environment_exclusions(self) -> None:
+        configured = RouterConfig(
+            excluded_models=[
+                "user/excluded-model",
+                "meta/llama-3.2-3b-instruct",
+            ]
+        )
+        compiled_graph = MagicMock()
+        compiled_graph.astream_events.return_value = object()
+
+        with (
+            patch.object(graph, "build_graph", return_value=compiled_graph),
+            patch.object(graph.RouterConfig, "from_env", return_value=configured),
+            patch.object(graph, "NimRouter") as router_type,
+            patch.object(
+                graph,
+                "consume_v3_events",
+                AsyncMock(return_value=SimpleNamespace(output={})),
+            ),
+        ):
+            await graph.run_job("https://example.test/job", task="prepare")
+
+        router_type.assert_called_once_with(config=configured)
+        self.assertEqual(configured.excluded_models[0], "user/excluded-model")
+        self.assertEqual(
+            configured.excluded_models.count("meta/llama-3.2-3b-instruct"),
+            1,
+        )
+        self.assertTrue(set(BANNED_MODEL_IDS_UNDER_30B) <= set(configured.excluded_models))
+        self.assertNotIn("openai/gpt-oss-20b", configured.excluded_models)
+        self.assertNotIn("nvidia/nemotron-3-nano-30b-a3b", configured.excluded_models)
+
+
+if __name__ == "__main__":
+    unittest.main()

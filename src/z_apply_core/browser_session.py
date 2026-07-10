@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Self
 
 from playwright_python_mcp.mcp import create_connection
@@ -7,11 +8,14 @@ from playwright_python_mcp.mcp import create_connection
 from z_apply_core.browser_config import build_browser_config
 from z_apply_core.browser_tools import BrowserToolRegistry
 
+INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
+
 
 class BrowserSession:
     def __init__(self, server: Any) -> None:
         self._server = server
         self._backend = server.backend
+        self._capture_workspace = Path.cwd() / ".z-apply" / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(server.backend_pool.tools),
             self.call_tool,
@@ -23,7 +27,11 @@ class BrowserSession:
         return cls(await create_connection(build_browser_config()))
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
-        result = await self._backend.call_tool(name, arguments or {}, meta={"raw": True})
+        result = await self._backend.call_tool(
+            name,
+            arguments or {},
+            meta=self._call_meta(name),
+        )
         return _text_content(result)
 
     async def call_tool_content(
@@ -32,11 +40,21 @@ class BrowserSession:
         arguments: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
         """Return MCP text and image results as LangChain standard content blocks."""
-        result = await self._backend.call_tool(name, arguments or {}, meta={"raw": True})
+        result = await self._backend.call_tool(
+            name,
+            arguments or {},
+            meta=self._call_meta(name),
+        )
         return _content_blocks(result)
 
     async def close(self) -> None:
         await self._backend.close()
+
+    def _call_meta(self, name: str) -> dict[str, object]:
+        meta: dict[str, object] = {"raw": True}
+        if name in INLINE_CAPTURE_TOOLS:
+            meta["cwd"] = str(self._capture_workspace)
+        return meta
 
 
 def _text_content(result: Any) -> str:

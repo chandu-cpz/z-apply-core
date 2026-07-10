@@ -7,6 +7,7 @@ from langgraph.graph import END, START, StateGraph
 from nim_router import NimRouter
 from nim_router.config import RouterConfig
 
+from z_apply_core.model_policy import BANNED_MODEL_IDS_UNDER_30B
 from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
@@ -37,6 +38,11 @@ async def run_job(
     graph = build_graph()
     runtime = None
     router_config = RouterConfig.from_env()
+    router_config.excluded_models = list(
+        dict.fromkeys(
+            [*router_config.excluded_models, *BANNED_MODEL_IDS_UNDER_30B]
+        )
+    )
     router_config.stats_path = str(ROUTER_STATS_PATH)
     router_config.timeout_seconds = min(router_config.timeout_seconds, 20.0)
     router = NimRouter(config=router_config)
