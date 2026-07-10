@@ -7,7 +7,7 @@ from z_apply_core.agents.orchestrator import _validated_summary
 
 class OrchestratorTraceValidationTests(unittest.TestCase):
     def test_rejects_resume_upload_claim_without_upload_tool(self) -> None:
-        summary = "The resume file has been successfully uploaded."
+        summary = "The resume file has been uploaded."
 
         result = _validated_summary(summary, [])
 

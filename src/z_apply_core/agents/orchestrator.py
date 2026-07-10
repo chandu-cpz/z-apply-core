@@ -183,6 +183,7 @@ def _claims_resume_upload(summary: str) -> bool:
         "successfully uploaded",
         "was successfully uploaded",
         "uploaded your resume",
+        "has been uploaded",
     )
     return ("resume" in text or "chandrakanth-v-resume.pdf" in text) and any(
         claim in text for claim in upload_claims

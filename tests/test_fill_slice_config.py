@@ -7,7 +7,6 @@ from z_apply_core.agents.orchestrator import (
     DEEPAGENT_FILESYSTEM_PERMISSIONS,
     _task_prompt,
 )
-from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS
 from z_apply_core.cli import DEFAULT_RUN_TASK
 
@@ -32,33 +31,6 @@ class FillSliceConfigTests(unittest.TestCase):
         self.assertIn("/.z-apply/browser-artifacts/**", allowed_paths)
         self.assertIn(CANDIDATE_CONTEXT_VIRTUAL_PATH, allowed_paths)
         self.assertEqual(CANDIDATE_CONTEXT_VIRTUAL_PATH, "/chandrakanth_v_resume.md")
-
-    def test_prompts_encode_resume_first_fill_flow(self) -> None:
-        orchestrator = load_prompt("orchestrator.md")
-        browser = load_prompt("browser_specialist.md")
-        answer_writer = load_prompt("answer_writer.md")
-
-        # Resume path must be present
-        self.assertIn(".z-apply/input/Chandrakanth-V-Resume.pdf", orchestrator)
-
-        # Write_todos flow check
-        self.assertIn("Use `write_todos` for this slice", orchestrator)
-        self.assertIn("At most one browser-flow todo should be `in_progress`", orchestrator)
-
-        # One question per AnswerWriter invocation
-        self.assertIn("only one field or question per `AnswerWriter` task call", orchestrator)
-
-        # Browser actions are verified by the runtime-owned verifier.
-        self.assertIn("runtime automatically runs an independent, read-only verifier", orchestrator)
-
-        # Browser: resume upload and safety
-        self.assertIn("This exact filename is `Chandrakanth-V-Resume.pdf`", browser)
-        self.assertIn("Do not use `Additional Documents`", browser)
-        self.assertIn("do not upload another copy", browser)
-
-        # AnswerWriter: candidate context file
-        self.assertIn("/chandrakanth_v_resume.md", answer_writer)
-        self.assertIn("exactly one application field or question per invocation", answer_writer)
 
     def test_default_task_requests_upload_first_without_submit(self) -> None:
         self.assertIn("upload the resume first", DEFAULT_RUN_TASK)

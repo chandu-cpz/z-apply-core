@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from deepagents import SubAgent
-from langchain.agents.middleware import ModelRetryMiddleware, ToolCallLimitMiddleware
+from langchain.agents.middleware import ModelRetryMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -65,14 +65,7 @@ async def build_specialists(
             router=router,
             role="BrowserSpecialist",
             model=model,
-            extra_middleware=[
-                browser_verification,
-                ToolCallLimitMiddleware(
-                    tool_name="browser_click",
-                    run_limit=1,
-                    exit_behavior="continue",
-                ),
-            ],
+            extra_middleware=[browser_verification],
         ),
         _with_routing(
             build_vision_specialist(),
@@ -125,14 +118,7 @@ async def build_auth_specialists(
             router=router,
             role="BrowserSpecialist",
             model=model,
-            extra_middleware=[
-                browser_verification,
-                ToolCallLimitMiddleware(
-                    tool_name="browser_click",
-                    run_limit=1,
-                    exit_behavior="continue",
-                ),
-            ],
+            extra_middleware=[browser_verification],
         ),
         _with_routing(
             build_verifier(
