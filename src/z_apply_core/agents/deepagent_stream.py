@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
 import time
 from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent, V3RunResult
+
+logger = logging.getLogger(__name__)
 
 
 async def consume_deepagent_stream(
@@ -71,6 +74,7 @@ async def _consume_subagents(
             await _read_output(subagent)
             await _emit(sink, "agent_lifecycle", name, {"status": "completed"})
         except Exception as exc:
+            logger.exception("DeepAgents subagent %s failed", name)
             await _emit(sink, "agent_lifecycle", name, {"status": "failed", "error": str(exc)})
 
 

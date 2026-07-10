@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from deepagents import SubAgent
-from langchain.agents.middleware import ToolCallLimitMiddleware
+from langchain.agents.middleware import ModelRetryMiddleware, ToolCallLimitMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -36,7 +36,11 @@ def _with_routing(
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
-    enriched["middleware"] = [*extra_middleware, NimRouterMiddleware(router, role=role)]
+    enriched["middleware"] = [
+        *extra_middleware,
+        ModelRetryMiddleware(max_retries=2, on_failure="error"),
+        NimRouterMiddleware(router, role=role),
+    ]
     return cast("SubAgent", enriched)
 
 

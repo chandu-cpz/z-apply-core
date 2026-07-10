@@ -34,6 +34,9 @@ async def run_job(
     runtime = None
     router_config = RouterConfig.from_env()
     router_config.stats_path = None
+    # A live application is not a model benchmark. Probe unknown models outside
+    # this critical path; selection here starts from the router's best score.
+    router_config.initial_exploration_attempts = 0
     router = NimRouter(config=router_config)
     try:
         stream = graph.astream_events(
