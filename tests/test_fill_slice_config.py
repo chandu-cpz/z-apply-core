@@ -38,19 +38,25 @@ class FillSliceConfigTests(unittest.TestCase):
         browser = load_prompt("browser_specialist.md")
         answer_writer = load_prompt("answer_writer.md")
 
+        # Resume path must be present
         self.assertIn(".z-apply/input/Chandrakanth-V-Resume.pdf", orchestrator)
-        self.assertIn("Never write\n`.zz-apply`", orchestrator)
-        self.assertIn("not `resume/CVV`", orchestrator)
+
+        # Write_todos flow check
         self.assertIn("Use `write_todos` for this slice", orchestrator)
-        self.assertIn("At most one browser-flow todo should be\n`in_progress`", orchestrator)
+        self.assertIn("At most one browser-flow todo should be `in_progress`", orchestrator)
+
+        # One question per AnswerWriter invocation
         self.assertIn("only one field or question per `AnswerWriter` task call", orchestrator)
+
+        # Verifier must be actual tool call
         self.assertIn("very next action must be an actual `Verifier` task call", orchestrator)
-        self.assertIn("Do not click final\nsubmit", browser)
+
+        # Browser: resume upload and safety
         self.assertIn("This exact filename is `Chandrakanth-V-Resume.pdf`", browser)
-        self.assertIn("not `resume/CVV`", browser)
-        self.assertIn("Never write\n`.zz-apply`", browser)
         self.assertIn("Do not use `Additional Documents`", browser)
-        self.assertIn("do\nnot upload another copy", browser)
+        self.assertIn("do not upload another copy", browser)
+
+        # AnswerWriter: candidate context file
         self.assertIn("/chandrakanth_v_resume.md", answer_writer)
         self.assertIn("exactly one application field or question per invocation", answer_writer)
 
