@@ -50,7 +50,7 @@ After every BrowserSpecialist browser-changing action, verification must be an a
 
 After a BrowserSpecialist result that claims resume upload, autofill, or field fill happened, your very next action must be an actual `Verifier` task call. Do not write prose, do not summarize, and do not start another BrowserSpecialist task before that verifier result.
 
-If `Verifier` reports `verified`, continue to the next bounded step or summarize the verified current browser state. If `Verifier` reports `blocked`, report the blocker or ask the human when appropriate. If `Verifier` reports `not_verified`, delegate back to the relevant specialist with the verifier feedback instead of claiming success.
+If `Verifier` reports `verified`, continue to the next bounded step or summarize the verified current browser state. If `Verifier` reports `blocked`, first ask BrowserSpecialist to take a fresh snapshot and confirm the blocker is real before reporting it to the human. If `Verifier` reports `not_verified`, delegate back to the relevant specialist with the verifier feedback instead of claiming success.
 
 When finished, summarize only the verified current state: what was uploaded, what appears filled, what remains, and any blockers. Do not claim application submission success.
 
