@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
+from nim_router import NimRouter
 
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.human.tools import make_human_tools
@@ -12,6 +13,7 @@ from z_apply_core.stream_events import FrameworkEventSink
 
 async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str]:
     sink = _sink_from_config(config)
+    router = _router_from_config(config)
     run = await run_orchestrator(
         job_url=str(state["job_url"]),
         task=str(state["task"]),
@@ -20,6 +22,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         config=config,
         human_tools=_human_tools(state),
         sink=sink,
+        router=router,
     )
     snapshot = await _fresh_snapshot(state)
     return {
@@ -37,6 +40,20 @@ def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
     if hasattr(sink, "accept"):
         return sink
     return None
+
+
+def _router_from_config(config: RunnableConfig) -> NimRouter:
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        raise ValueError(
+            "Run config is missing 'configurable'; cannot locate the shared NimRouter."
+        )
+    router = configurable.get("nim_router")
+    if not isinstance(router, NimRouter):
+        raise ValueError(
+            "configurable['nim_router'] is missing or not a NimRouter instance."
+        )
+    return router
 
 
 async def _fresh_snapshot(state: RunState) -> str:

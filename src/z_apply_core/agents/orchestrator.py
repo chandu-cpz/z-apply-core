@@ -16,6 +16,7 @@ from nim_router.errors import NimRouterError
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
+from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
@@ -50,31 +51,36 @@ async def run_orchestrator(
     config: RunnableConfig,
     human_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
+    router: NimRouter | None = None,
 ) -> OrchestratorRun:
+    if not isinstance(router, NimRouter):
+        return OrchestratorRun(
+            summary="Model routing failed: shared NimRouter was not provided.",
+            model_id="",
+        )
+
     try:
-        selection = await NimRouter().select(tools=True, structured=True, priority="balanced")
+        selection = await router.select(tools=True, structured=True, priority="balanced")
     except (NimRouterError, ImportError, ValueError) as exc:
         return OrchestratorRun(summary=f"Model selection failed: {exc}", model_id="")
 
     model_id = selection.info.id
-    node_info(logger, "orchestrator", "selected model: %s", model_id)
+    node_info(logger, "orchestrator", "initial model: %s", model_id)
 
     agent = create_deep_agent(
         model=selection.llm,
         tools=list(human_tools),
         system_prompt=load_prompt("orchestrator.md"),
-        middleware=[ModelRetryMiddleware(max_retries=3, on_failure="error")],
-        subagents=build_specialists(browser_tools),
+        middleware=[
+            ModelRetryMiddleware(max_retries=3, on_failure="error"),
+            NimRouterMiddleware(router, role="orchestrator"),
+        ],
+        subagents=await build_specialists(router, browser_tools),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
     )
 
     run_config = cast(RunnableConfig, config.copy() if config else {})
-    callbacks = run_config.get("callbacks")
-    if isinstance(callbacks, list):
-        run_config["callbacks"] = callbacks + [selection.callback]
-    else:
-        run_config["callbacks"] = [selection.callback]
 
     stream = agent.astream_events(
         {

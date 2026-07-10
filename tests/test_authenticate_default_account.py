@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
+from nim_router import NimRouter
+
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
 from z_apply_core.nodes.authenticate_default_account import (
@@ -90,7 +92,7 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await authenticate_default_account(
                 {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
-                {},
+                {"configurable": {"nim_router": NimRouter()}},
             )
 
         self.assertEqual(result["auth_status"], "authenticated")

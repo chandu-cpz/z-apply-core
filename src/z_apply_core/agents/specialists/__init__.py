@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any, cast
 
 from deepagents import SubAgent
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
+from nim_router import NimRouter
 
+from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.browser import build_browser_specialist
 from z_apply_core.agents.specialists.field_mapper import build_field_mapper
@@ -13,30 +17,92 @@ from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
 
 
-def build_specialists(browser_tools: Sequence[BaseTool]) -> list[SubAgent]:
+async def _default_model(router: NimRouter) -> BaseChatModel:
+    selection = await router.select(tools=True, priority="balanced")
+    model: BaseChatModel = selection.llm
+    return model
+
+
+def _with_routing(
+    spec: SubAgent,
+    *,
+    router: NimRouter,
+    role: str,
+    model: BaseChatModel,
+) -> SubAgent:
+    enriched: dict[str, Any] = dict(spec)
+    enriched["model"] = model
+    enriched["middleware"] = [NimRouterMiddleware(router, role=role)]
+    return cast("SubAgent", enriched)
+
+
+async def build_specialists(
+    router: NimRouter,
+    browser_tools: Sequence[BaseTool],
+) -> list[SubAgent]:
     read_only_browser_tools = [
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
+    model = await _default_model(router)
     return [
-        build_browser_specialist(browser_tools),
-        build_vision_specialist(),
-        build_field_mapper(),
-        build_answer_writer(),
-        build_verifier(read_only_browser_tools),
-    ]
-
-
-def build_auth_specialists(browser_tools: Sequence[BaseTool]) -> list[SubAgent]:
-    read_only_browser_tools = [
-        tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
-    ]
-    return [
-        build_browser_specialist(
-            browser_tools,
-            prompt_name="auth_browser_specialist.md",
+        _with_routing(
+            build_browser_specialist(browser_tools),
+            router=router,
+            role="BrowserSpecialist",
+            model=model,
         ),
-        build_verifier(
-            read_only_browser_tools,
-            prompt_name="auth_verifier.md",
+        _with_routing(
+            build_vision_specialist(),
+            router=router,
+            role="VisionSpecialist",
+            model=model,
+        ),
+        _with_routing(
+            build_field_mapper(),
+            router=router,
+            role="FieldMapper",
+            model=model,
+        ),
+        _with_routing(
+            build_answer_writer(),
+            router=router,
+            role="AnswerWriter",
+            model=model,
+        ),
+        _with_routing(
+            build_verifier(read_only_browser_tools),
+            router=router,
+            role="Verifier",
+            model=model,
+        ),
+    ]
+
+
+async def build_auth_specialists(
+    router: NimRouter,
+    browser_tools: Sequence[BaseTool],
+) -> list[SubAgent]:
+    read_only_browser_tools = [
+        tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
+    ]
+    model = await _default_model(router)
+    return [
+        _with_routing(
+            build_browser_specialist(
+                browser_tools,
+                prompt_name="auth_browser_specialist.md",
+            ),
+            router=router,
+            role="BrowserSpecialist",
+            model=model,
+        ),
+        _with_routing(
+            build_verifier(
+                read_only_browser_tools,
+                prompt_name="auth_verifier.md",
+            ),
+            router=router,
+            role="auth_verifier",
+            model=model,
         ),
     ]

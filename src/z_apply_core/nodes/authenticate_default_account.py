@@ -4,6 +4,7 @@ import contextlib
 import logging
 
 from langchain_core.runnables.config import RunnableConfig
+from nim_router import NimRouter
 
 from z_apply_core.agents.auth_orchestrator import run_auth_orchestrator
 from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
@@ -48,12 +49,14 @@ async def authenticate_default_account(
             snapshot = await runtime.browser.tools.call("browser_snapshot")
 
         human_tools = make_human_tools(runtime.human_channel) if runtime.human_channel else []
+        router = _router_from_config(config)
         run = await run_auth_orchestrator(
             snapshot=snapshot,
             browser_tools=runtime.browser.tools.langchain_tools(AUTH_AGENT_BROWSER_TOOLS),
             human_tools=human_tools,
             config=config,
             sink=sink,
+            router=router,
         )
 
         restored_snapshot = await _restore_job_page(runtime, original_url)
@@ -110,6 +113,20 @@ def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
     if hasattr(sink, "accept"):
         return sink
     return None
+
+
+def _router_from_config(config: RunnableConfig) -> NimRouter:
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        raise ValueError(
+            "Run config is missing 'configurable'; cannot locate the shared NimRouter."
+        )
+    router = configurable.get("nim_router")
+    if not isinstance(router, NimRouter):
+        raise ValueError(
+            "configurable['nim_router'] is missing or not a NimRouter instance."
+        )
+    return router
 
 
 async def _emit(
