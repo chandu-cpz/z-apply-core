@@ -12,7 +12,11 @@ class BrowserSession:
     def __init__(self, server: Any) -> None:
         self._server = server
         self._backend = server.backend
-        self.tools = BrowserToolRegistry(tuple(server.backend_pool.tools), self.call_tool)
+        self.tools = BrowserToolRegistry(
+            tuple(server.backend_pool.tools),
+            self.call_tool,
+            langchain_callers={"browser_take_screenshot": self.call_tool_content},
+        )
 
     @classmethod
     async def start(cls) -> Self:
@@ -21,6 +25,15 @@ class BrowserSession:
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         result = await self._backend.call_tool(name, arguments or {}, meta={"raw": True})
         return _text_content(result)
+
+    async def call_tool_content(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> list[dict[str, str]]:
+        """Return MCP text and image results as LangChain standard content blocks."""
+        result = await self._backend.call_tool(name, arguments or {}, meta={"raw": True})
+        return _content_blocks(result)
 
     async def close(self) -> None:
         await self._backend.close()
@@ -34,3 +47,29 @@ def _text_content(result: Any) -> str:
         parts = [getattr(item, "text", None) for item in content]
         return "\n".join(part for part in parts if isinstance(part, str))
     return str(content)
+
+
+def _content_blocks(result: Any) -> list[dict[str, str]]:
+    content = getattr(result, "content", result)
+    if not isinstance(content, list):
+        return [{"type": "text", "text": _text_content(result)}]
+
+    blocks: list[dict[str, str]] = []
+    for item in content:
+        item_type = getattr(item, "type", None)
+        if item_type == "text":
+            text = getattr(item, "text", None)
+            if isinstance(text, str):
+                blocks.append({"type": "text", "text": text})
+        elif item_type == "image":
+            data = getattr(item, "data", None)
+            mime_type = getattr(item, "mimeType", None)
+            if isinstance(data, str) and isinstance(mime_type, str):
+                blocks.append(
+                    {
+                        "type": "image",
+                        "base64": data,
+                        "mime_type": mime_type,
+                    }
+                )
+    return blocks or [{"type": "text", "text": _text_content(result)}]

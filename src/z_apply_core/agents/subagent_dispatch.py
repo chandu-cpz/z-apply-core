@@ -48,8 +48,8 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
         description = args.get("description") if isinstance(args, dict) else None
         if not isinstance(description, str) or not description.strip():
             description = (
-                "Complete the bounded browser operation requested by the parent. "
-                "Inspect the current page first when a fresh ref is needed."
+                f"Complete the one bounded {subagent_type} task requested by the parent. "
+                "Return only evidence relevant to that task."
             )
         return {
             **call,

@@ -12,7 +12,10 @@ def build_answer_writer() -> SubAgent:
         SubAgent,
         {
             "name": "AnswerWriter",
-            "description": "Draft concise answers for application questions.",
+            "description": (
+                "Resolve exactly one application field from explicit candidate, saved-profile, "
+                "or prior-human evidence, or report the precise missing human fact."
+            ),
             "system_prompt": load_prompt("answer_writer.md"),
             "tools": [],
         },

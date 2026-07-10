@@ -68,7 +68,7 @@ async def build_specialists(
             extra_middleware=[browser_verification],
         ),
         _with_routing(
-            build_vision_specialist(),
+            build_vision_specialist(browser_tools),
             router=router,
             role="VisionSpecialist",
             model=model,

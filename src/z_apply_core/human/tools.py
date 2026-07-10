@@ -33,7 +33,7 @@ def make_human_tools(channel: HumanChannel) -> list[BaseTool]:
         company_name: str = "System",
         role_name: str = "Application",
     ) -> dict[str, str]:
-        """Ask the human to approve or reject final application submission."""
+        """Ask the human to approve or reject a review-ready application."""
         approved = await channel.confirm(
             question="Submit this application?",
             context=final_review,

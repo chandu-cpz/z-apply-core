@@ -18,7 +18,10 @@ def build_verifier(
         SubAgent,
         {
             "name": "Verifier",
-            "description": "Verify whether evidence supports continuing, blocking, or failing.",
+            "description": (
+                "Independently inspect read-only browser evidence for one named postcondition "
+                "and distinguish verified, operation-specific blocked, and not verified."
+            ),
             "system_prompt": load_prompt(prompt_name),
             "tools": list(browser_tools),
         },

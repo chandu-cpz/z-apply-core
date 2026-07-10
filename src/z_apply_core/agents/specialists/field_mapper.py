@@ -14,7 +14,11 @@ def build_field_mapper(browser_tools: Sequence[BaseTool]) -> SubAgent:
         SubAgent,
         {
             "name": "FieldMapper",
-            "description": "Map visible application fields to candidate information needs.",
+            "description": (
+                "Read the current application evidence, map every visible field and "
+                "challenge, and identify safe fill batches and missing information "
+                "without changing browser state."
+            ),
             "system_prompt": load_prompt("field_mapper.md"),
             "tools": list(browser_tools),
         },

@@ -18,7 +18,11 @@ def build_browser_specialist(
         SubAgent,
         {
             "name": "BrowserSpecialist",
-            "description": "Inspect and operate the browser through Playwright MCP tools.",
+            "description": (
+                "Execute one parent-defined semantic browser operation using as many "
+                "Playwright calls as needed, without choosing the application flow or "
+                "clicking final submit."
+            ),
             "system_prompt": load_prompt(prompt_name),
             "tools": list(browser_tools),
         },

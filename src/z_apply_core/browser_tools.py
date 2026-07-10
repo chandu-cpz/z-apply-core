@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
 from typing import Any, Literal, Protocol, Union, get_args, get_origin
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-ToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
+TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
+LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
 INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_snapshot",
@@ -35,7 +36,6 @@ AUTH_AGENT_BROWSER_TOOLS = (
 VERIFIER_BROWSER_TOOLS = (
     "browser_snapshot",
     "browser_find",
-    "browser_tabs",
 )
 
 BROWSER_CHANGING_TOOL_NAMES = frozenset(
@@ -66,9 +66,16 @@ class BrowserToolSpec(Protocol):
 
 
 class BrowserToolRegistry:
-    def __init__(self, specs: Sequence[BrowserToolSpec], caller: ToolCaller) -> None:
+    def __init__(
+        self,
+        specs: Sequence[BrowserToolSpec],
+        caller: TextToolCaller,
+        *,
+        langchain_callers: Mapping[str, LangChainToolCaller] | None = None,
+    ) -> None:
         self._specs = {spec.name: spec for spec in specs}
         self._caller = caller
+        self._langchain_callers = dict(langchain_callers or {})
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -89,8 +96,9 @@ class BrowserToolRegistry:
         ]
 
     def _to_langchain_tool(self, spec: BrowserToolSpec) -> BaseTool:
-        async def call_tool(**kwargs: Any) -> str:
-            return await self.call(spec.name, kwargs)
+        async def call_tool(**kwargs: Any) -> Any:
+            caller = self._langchain_callers.get(spec.name, self._caller)
+            return await caller(spec.name, kwargs)
 
         return StructuredTool.from_function(
             coroutine=call_tool,
