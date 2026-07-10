@@ -4,6 +4,7 @@ from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 from nim_router import NimRouter
+from nim_router.config import RouterConfig
 
 from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
 from z_apply_core.state import RunState, initial_state
@@ -31,7 +32,9 @@ async def run_job(
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
     runtime = None
-    router = NimRouter()
+    router_config = RouterConfig.from_env()
+    router_config.stats_path = None
+    router = NimRouter(config=router_config)
     try:
         stream = graph.astream_events(
             initial_state(job_url, task=task, live_view=live_view),
