@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -9,6 +10,9 @@ from nim_router.config import RouterConfig
 from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
+
+CORE_ROOT = Path(__file__).resolve().parents[2]
+ROUTER_STATS_PATH = CORE_ROOT / ".z-apply" / "nim-router-stats.json"
 
 
 def build_graph() -> Any:
@@ -33,7 +37,8 @@ async def run_job(
     graph = build_graph()
     runtime = None
     router_config = RouterConfig.from_env()
-    router_config.stats_path = None
+    router_config.stats_path = str(ROUTER_STATS_PATH)
+    router_config.timeout_seconds = min(router_config.timeout_seconds, 20.0)
     # A live application is not a model benchmark. Probe unknown models outside
     # this critical path; selection here starts from the router's best score.
     router_config.initial_exploration_attempts = 0
