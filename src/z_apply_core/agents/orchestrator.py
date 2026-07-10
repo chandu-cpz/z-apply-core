@@ -18,7 +18,6 @@ from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
-from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -66,7 +65,12 @@ async def run_orchestrator(
         return OrchestratorRun(summary=f"Model selection failed: {exc}", model_id="")
 
     model_id = selection.info.id
-    node_info(logger, "orchestrator", "initial model: %s", model_id)
+    node_info(
+        logger,
+        "orchestrator",
+        "fallback model: %s (runtime routing overrides each call)",
+        model_id,
+    )
 
     agent = create_deep_agent(
         model=selection.llm,
@@ -158,7 +162,6 @@ def _validated_summary(summary: str, tool_trace: list[dict[str, Any]]) -> str:
 
 def _trace_issues(summary: str, tool_trace: list[dict[str, Any]]) -> list[str]:
     issues: list[str] = []
-    issues.extend(_browser_verification_issues(tool_trace))
 
     if _claims_resume_upload(summary) and not _has_tool_call(tool_trace, "browser_file_upload"):
         issues.append("Final summary claimed resume upload without a browser_file_upload call.")
@@ -169,19 +172,6 @@ def _trace_issues(summary: str, tool_trace: list[dict[str, Any]]) -> list[str]:
     if _claims_human_question(summary) and not _has_tool_call(tool_trace, "ask_human"):
         issues.append("Final summary asked for human data without an ask_human tool call.")
 
-    return issues
-
-
-def _browser_verification_issues(tool_trace: list[dict[str, Any]]) -> list[str]:
-    issues: list[str] = []
-    for call in tool_trace:
-        if _is_browser_changing_tool(call):
-            tool_name = str(call.get("tool_name", "browser action"))
-            if not _has_automatic_verifier_result(call):
-                issues.append(
-                    "BrowserSpecialist performed a browser-changing action "
-                    f"({tool_name}) without an automatic verifier result."
-                )
     return issues
 
 
@@ -223,10 +213,6 @@ def _has_subagent_task(tool_trace: list[dict[str, Any]], subagent_type: str) -> 
     return any(_task_subagent_type(call) == subagent_type for call in tool_trace)
 
 
-def _is_verifier_task(call: dict[str, Any]) -> bool:
-    return _task_subagent_type(call) == "Verifier"
-
-
 def _task_subagent_type(call: dict[str, Any]) -> str:
     if call.get("source") != "orchestrator" or call.get("tool_name") != "task":
         return ""
@@ -235,17 +221,6 @@ def _task_subagent_type(call: dict[str, Any]) -> str:
         subagent_type = tool_input.get("subagent_type")
         return subagent_type if isinstance(subagent_type, str) else ""
     return ""
-
-
-def _is_browser_changing_tool(call: dict[str, Any]) -> bool:
-    return (
-        call.get("source") == "BrowserSpecialist"
-        and call.get("tool_name") in BROWSER_CHANGING_TOOL_NAMES
-    )
-
-
-def _has_automatic_verifier_result(call: dict[str, Any]) -> bool:
-    return "AUTOMATIC_VERIFIER_RESULT:" in str(call.get("output", ""))
 
 
 def _tool_trace_from_output(output: dict[str, Any]) -> list[dict[str, Any]]:

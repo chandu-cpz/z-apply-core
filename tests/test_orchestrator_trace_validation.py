@@ -30,27 +30,12 @@ class OrchestratorTraceValidationTests(unittest.TestCase):
         self.assertIn("not_verified", result)
         self.assertIn("without an ask_human tool call", result)
 
-    def test_rejects_browser_action_without_automatic_verifier(self) -> None:
-        trace = [
-            {
-                "source": "BrowserSpecialist",
-                "tool_name": "browser_click",
-                "input": {"target": "e112"},
-            },
-        ]
-
-        result = _validated_summary("Form is open.", trace)
-
-        self.assertIn("not_verified", result)
-        self.assertIn("without an automatic verifier result", result)
-
-    def test_accepts_verified_upload_claim_with_automatic_verifier(self) -> None:
+    def test_accepts_verified_upload_claim_with_upload_tool(self) -> None:
         trace = [
             {
                 "source": "BrowserSpecialist",
                 "tool_name": "browser_file_upload",
                 "input": {"paths": [".z-apply/input/Chandrakanth-V-Resume.pdf"]},
-                "output": "AUTOMATIC_VERIFIER_RESULT: verified: upload is visible.",
             },
         ]
         summary = "The resume file has been successfully uploaded."

@@ -42,8 +42,8 @@ ignore_missing_imports = true
 include = ["src"]
 
 [tool.uv.sources]
-langchain-nim-router = { path = "../langchain-nim-router" }
-playwright-python-mcp = { path = "../playwright-python-mcp" }
+langchain-nim-router = { path = "../langchain-nim-router", editable = true }
+playwright-python-mcp = { path = "../playwright-python-mcp", editable = true }
 
 [dependency-groups]
 dev = [

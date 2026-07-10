@@ -1278,7 +1278,7 @@ wheels = [
 [[package]]
 name = "langchain-nim-router"
 version = "0.1.0"
-source = { directory = "../langchain-nim-router" }
+source = { editable = "../langchain-nim-router" }
 dependencies = [
     { name = "aiohttp" },
     { name = "langchain-core" },
@@ -2119,7 +2119,7 @@ wheels = [
 [[package]]
 name = "playwright-python-mcp"
 version = "0.0.1"
-source = { directory = "../playwright-python-mcp" }
+source = { editable = "../playwright-python-mcp" }
 dependencies = [
     { name = "fastmcp" },
     { name = "pillow" },
@@ -3381,9 +3381,9 @@ dev = [
 requires-dist = [
     { name = "deepagents", specifier = ">=0.6.12" },
     { name = "langchain-core", specifier = ">=1.4.8" },
-    { name = "langchain-nim-router", directory = "../langchain-nim-router" },
+    { name = "langchain-nim-router", editable = "../langchain-nim-router" },
     { name = "langgraph", specifier = ">=1.2.7" },
-    { name = "playwright-python-mcp", extras = ["camoufox"], directory = "../playwright-python-mcp" },
+    { name = "playwright-python-mcp", extras = ["camoufox"], editable = "../playwright-python-mcp" },
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "python-telegram-bot", specifier = ">=22.8" },
     { name = "rich", specifier = ">=15.0.0" },

@@ -45,7 +45,12 @@ async def run_auth_orchestrator(
         return OrchestratorRun(summary=f"Model selection failed: {exc}", model_id="")
 
     model_id = selection.info.id
-    node_info(logger, "authenticate_default_account", "initial model: %s", model_id)
+    node_info(
+        logger,
+        "authenticate_default_account",
+        "fallback model: %s (runtime routing overrides each call)",
+        model_id,
+    )
 
     agent = create_deep_agent(
         model=selection.llm,

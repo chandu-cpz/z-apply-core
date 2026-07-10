@@ -43,6 +43,10 @@ class BrowserActionVerificationMiddleware(
         verifier_role: str,
     ) -> None:
         super().__init__()
+        self._snapshot_tool = next(
+            (tool for tool in read_only_browser_tools if tool.name == "browser_snapshot"),
+            None,
+        )
         self._verifier = create_deep_agent(
             model=fallback_model,
             tools=list(read_only_browser_tools),
@@ -66,6 +70,7 @@ class BrowserActionVerificationMiddleware(
             tool_name=tool_name,
             arguments=request.tool_call.get("args", {}),
             action_output=str(result.content),
+            snapshot=await self._fresh_snapshot(),
         )
         return result.model_copy(
             update={
@@ -82,6 +87,7 @@ class BrowserActionVerificationMiddleware(
         tool_name: str,
         arguments: object,
         action_output: str,
+        snapshot: str,
     ) -> str:
         try:
             stream = self._verifier.astream_events(
@@ -93,8 +99,8 @@ class BrowserActionVerificationMiddleware(
                                 "Independently verify the browser action that just completed. "
                                 f"Action: {tool_name}. Arguments: {arguments!r}. "
                                 f"Tool output: {action_output}. "
-                                "Use fresh read-only browser evidence and return the required "
-                                "verdict format."
+                                f"Fresh browser snapshot captured by the runtime:\n{snapshot}\n\n"
+                                "Return the required verdict format based on that evidence."
                             ),
                         }
                     ]
@@ -105,6 +111,14 @@ class BrowserActionVerificationMiddleware(
         except Exception as exc:  # noqa: BLE001 - verdict is returned to the browser agent
             return f"not_verified: automatic verifier failed: {exc}"
         return _last_message_text(run.output) or "not_verified: verifier returned no result."
+
+    async def _fresh_snapshot(self) -> str:
+        if self._snapshot_tool is None:
+            return "Snapshot unavailable: no browser_snapshot tool was configured."
+        try:
+            return str(await self._snapshot_tool.ainvoke({}))
+        except Exception as exc:  # noqa: BLE001 - passed to verifier as failed evidence
+            return f"Snapshot unavailable: {exc}"
 
 
 def _last_message_text(output: dict[str, Any]) -> str:

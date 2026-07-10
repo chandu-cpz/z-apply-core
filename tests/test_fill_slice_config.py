@@ -48,8 +48,8 @@ class FillSliceConfigTests(unittest.TestCase):
         # One question per AnswerWriter invocation
         self.assertIn("only one field or question per `AnswerWriter` task call", orchestrator)
 
-        # Verifier must be actual tool call
-        self.assertIn("very next action must be an actual `Verifier` task call", orchestrator)
+        # Browser actions are verified by the runtime-owned verifier.
+        self.assertIn("runtime automatically runs an independent, read-only verifier", orchestrator)
 
         # Browser: resume upload and safety
         self.assertIn("This exact filename is `Chandrakanth-V-Resume.pdf`", browser)
