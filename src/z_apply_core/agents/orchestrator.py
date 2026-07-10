@@ -13,6 +13,7 @@ from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
+from z_apply_core.agents.browser_operation import build_browser_operation_tool
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
@@ -72,15 +73,20 @@ async def run_orchestrator(
         model_id,
     )
 
+    subagents = [
+        specialist
+        for specialist in await build_specialists(router, browser_tools)
+        if specialist["name"] != "BrowserSpecialist"
+    ]
     agent = create_deep_agent(
         model=selection.llm,
-        tools=list(human_tools),
+        tools=[*human_tools, build_browser_operation_tool(browser_tools)],
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             ModelRetryMiddleware(max_retries=3, on_failure="error"),
             NimRouterMiddleware(router, role="orchestrator"),
         ],
-        subagents=await build_specialists(router, browser_tools),
+        subagents=subagents,
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
     )
@@ -120,7 +126,7 @@ Requested task:
 Current browser snapshot:
 {snapshot}
 
-Delegate to BrowserSpecialist if browser evidence is needed.
+Use `execute_browser_operation` for all browser evidence and browser changes.
 
 Completion criteria for this run:
 
@@ -131,9 +137,9 @@ Completion criteria for this run:
 - If resume upload succeeds or is not available, continue with field mapping and
   bounded fill attempts until blocked, missing human data, or no safe remaining
   fields.
-- A Verifier check must be an actual tool call after each BrowserSpecialist
-  browser-changing action. If you have not received a Verifier tool result, you
-  are not ready to summarize.
+- Treat an `execute_browser_operation` result as the record of what occurred.
+  Its `status`, `steps`, and fresh `snapshot` are authoritative; never replace
+  them with a claim inferred from prose.
 
 When finished, summarize what was actually completed, what remains, and why the
 run stopped. Do not describe an intended next step as if it were completed.
