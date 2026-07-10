@@ -76,12 +76,13 @@ class RichStreamRendererTests(unittest.IsolatedAsyncioTestCase):
                 "snapshot": "FULL DOM SNAPSHOT MUST NOT BE PRINTED",
                 "orchestrator_summary": "Application prepared for review.",
                 "model_id": "provider/model",
+                "run_status": "completed",
             },
         )
 
         rendered = output.getvalue()
         self.assertIn("Application prepared for review.", rendered)
-        self.assertIn("Run result [provider/model]", rendered)
+        self.assertIn("Run result: completed [provider/model]", rendered)
         self.assertNotIn("FULL DOM SNAPSHOT MUST NOT BE PRINTED", rendered)
 
 

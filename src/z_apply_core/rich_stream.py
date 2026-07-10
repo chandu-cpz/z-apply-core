@@ -77,9 +77,15 @@ class RichStreamRenderer:
     def print_result(self, result: V3RunResult, state: RunState) -> None:
         self._end_stream_if_active()
         model_id = str(state.get("model_id", ""))
-        title = "Run result"
+        status = str(state.get("run_status", "")) or "unknown"
+        title = f"Run result: {status}"
         if model_id:
             title = f"{title} [{model_id}]"
+        border_style = {
+            "completed": "green",
+            "incomplete": "yellow",
+            "failed": "red",
+        }.get(status, "red")
         self._console.print(
             Panel(
                 Markdown(
@@ -87,7 +93,7 @@ class RichStreamRenderer:
                     or "No orchestrator summary returned."
                 ),
                 title=Text(title),
-                border_style="green" if not result.errors else "red",
+                border_style="red" if result.errors else border_style,
             )
         )
         run_info(logger, "streamed %s events in %sms", result.event_count, result.duration_ms)

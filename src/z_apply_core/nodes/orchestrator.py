@@ -28,6 +28,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
     return {
         "orchestrator_summary": run.summary,
         "model_id": run.model_id,
+        "run_status": run.status,
         "snapshot": snapshot,
     }
 

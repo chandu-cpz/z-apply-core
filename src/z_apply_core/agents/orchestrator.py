@@ -7,7 +7,7 @@ from typing import Any, cast
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import FilesystemBackend
-from langchain.agents.middleware import ModelRetryMiddleware
+from langchain.agents.middleware import AgentMiddleware, ModelRetryMiddleware
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
@@ -19,6 +19,7 @@ from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+from z_apply_core.agents.todo_guard import IncompleteTodosError, pending_todo_guard
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -58,12 +59,17 @@ async def run_orchestrator(
         return OrchestratorRun(
             summary="Model routing failed: shared NimRouter was not provided.",
             model_id="",
+            status="failed",
         )
 
     try:
         selection = await router.lease(tools=True, priority="balanced")
     except (NimRouterError, ImportError, ValueError) as exc:
-        return OrchestratorRun(summary=f"Model selection failed: {exc}", model_id="")
+        return OrchestratorRun(
+            summary=f"Model selection failed: {exc}",
+            model_id="",
+            status="failed",
+        )
 
     model_id = selection.info.id
     node_info(
@@ -87,6 +93,7 @@ async def run_orchestrator(
                 role="orchestrator",
                 initial_selection=selection,
             ),
+            cast(AgentMiddleware[Any, Any, Any], pending_todo_guard),
         ],
         subagents=await build_specialists(
             router,
@@ -111,7 +118,14 @@ async def run_orchestrator(
         config=run_config,
         version="v3",
     )
-    stream_result = await consume_deepagent_stream(stream, sink=sink)
+    try:
+        stream_result = await consume_deepagent_stream(stream, sink=sink)
+    except IncompleteTodosError as exc:
+        return OrchestratorRun(
+            summary=str(exc),
+            model_id=model_id,
+            status="incomplete",
+        )
     summary = _summary_from_output(stream_result.output)
     return OrchestratorRun(summary=summary, model_id=model_id)
 

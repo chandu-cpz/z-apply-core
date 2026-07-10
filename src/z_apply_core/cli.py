@@ -46,7 +46,7 @@ def run_command(args: argparse.Namespace) -> int:
         renderer.print_result(result, state)
     finally:
         renderer.close()
-    return 0
+    return 0 if state.get("run_status") == "completed" else 2
 
 
 def main(argv: list[str] | None = None) -> int:
