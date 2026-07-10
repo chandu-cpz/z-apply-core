@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import logging
 
 from langchain_core.runnables.config import RunnableConfig
 from nim_router import NimRouter
@@ -10,12 +9,9 @@ from z_apply_core.agents.auth_orchestrator import run_auth_orchestrator
 from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
 from z_apply_core.config import load_settings
 from z_apply_core.human.tools import make_human_tools
-from z_apply_core.log_labels import node_info
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
-
-logger = logging.getLogger(__name__)
 
 SIMPLIFY_DASHBOARD_URL = "https://simplify.jobs/dashboard"
 
@@ -38,7 +34,6 @@ async def authenticate_default_account(
     original_url = str(state["job_url"])
     sink = _sink_from_config(config)
     await _emit(sink, "started", "Opening Simplify auth check.")
-    node_info(logger, "authenticate_default_account", "opening Simplify auth check")
 
     try:
         snapshot = await runtime.browser.tools.call(
@@ -62,7 +57,6 @@ async def authenticate_default_account(
         restored_snapshot = await _restore_job_page(runtime, original_url)
         status = _status_from_summary(run.summary)
         await _emit(sink, status, run.summary)
-        node_info(logger, "authenticate_default_account", "%s: %s", status, run.summary)
         return {
             "auth_status": status,
             "auth_summary": run.summary,
@@ -74,7 +68,6 @@ async def authenticate_default_account(
         with contextlib.suppress(Exception):
             await _restore_job_page(runtime, original_url)
         await _emit(sink, "failed", summary)
-        node_info(logger, "authenticate_default_account", "%s", summary)
         return {
             "auth_status": "failed",
             "auth_summary": summary,

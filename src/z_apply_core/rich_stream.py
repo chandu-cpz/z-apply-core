@@ -75,29 +75,19 @@ class RichStreamRenderer:
         self._end_stream_if_active()
 
     def print_result(self, result: V3RunResult, state: RunState) -> None:
-        self._console.print(
-            Panel(
-                Text(
-                    _clip_text(str(state.get("snapshot", "")) or "No snapshot returned."),
-                    overflow="fold",
-                ),
-                title="Browser Snapshot",
-                border_style="green",
-            )
-        )
+        self._end_stream_if_active()
         model_id = str(state.get("model_id", ""))
-        title = "Orchestrator"
+        title = "Run result"
         if model_id:
             title = f"{title} [{model_id}]"
         self._console.print(
             Panel(
-                Text(
+                Markdown(
                     str(state.get("orchestrator_summary", ""))
-                    or "No orchestrator summary returned.",
-                    overflow="fold",
+                    or "No orchestrator summary returned."
                 ),
                 title=Text(title),
-                border_style="cyan",
+                border_style="green" if not result.errors else "red",
             )
         )
         run_info(logger, "streamed %s events in %sms", result.event_count, result.duration_ms)
@@ -110,23 +100,12 @@ class RichStreamRenderer:
                 self._logged_snapshot = True
             return
         if isinstance(data, dict) and data.get("orchestrator_summary"):
-            model_suffix = f" [{data['model_id']}]" if data.get("model_id") else ""
-            node_info(
-                logger,
-                "orchestrator",
-                "completed%s: %s",
-                model_suffix,
-                data.get("orchestrator_summary"),
-            )
+            # ``print_result`` renders the authoritative final summary once the
+            # stream has closed. Rendering this update as well duplicates it.
             return
         if isinstance(data, dict) and data.get("auth_summary"):
-            node_info(
-                logger,
-                "authenticate_default_account",
-                "%s: %s",
-                data.get("auth_status") or "unknown",
-                data.get("auth_summary"),
-            )
+            # Authentication emits a dedicated typed event before this graph
+            # state update, so the update is intentionally silent.
             return
         if event.event == "auth":
             node_info(
@@ -157,12 +136,13 @@ class RichStreamRenderer:
             return
         if "messages" in keys:
             self._end_stream_if_active()
-            node_info(logger, "orchestrator", "received model message updates")
             return
         logger.debug("graph state updated: %s", ", ".join(sorted(keys)))
 
     def _render_agent_event(self, event: FrameworkTraceEvent) -> None:
         if event.event == "agent_message_delta":
+            if self._live and event.name != self._stream_source:
+                self._end_stream_if_active()
             if not self._live:
                 self._start_stream(event.name)
             kind = str(event.data.get("kind", "text"))
@@ -178,13 +158,12 @@ class RichStreamRenderer:
             return
 
         if event.event == "agent_message":
-            self._end_stream_if_active()
+            self._end_stream_if_active(persist_content=False)
             source = event.name
             reasoning = str(event.data.get("reasoning") or "")
             text = str(event.data.get("text") or "")
-            renderables: list[Any] = []
             if reasoning:
-                renderables.append(
+                self._console.print(
                     Panel(
                         Text(reasoning, style="dim gray50", overflow="fold"),
                         title=Text(f"{source} thinking"),
@@ -192,12 +171,10 @@ class RichStreamRenderer:
                     )
                 )
             if text:
-                renderables.append(Markdown(text))
-            if renderables:
                 self._console.print(
                     Panel(
-                        Group(*renderables),
-                        title=Text(f"Agent Message: {source}"),
+                        Markdown(text),
+                        title=Text(f"{source} response"),
                         border_style="cyan",
                     )
                 )
@@ -208,7 +185,7 @@ class RichStreamRenderer:
             tool_name = str(event.data.get("tool_name", "tool"))
             self._console.print(
                 Panel(
-                    Text(str(event.data.get("input", "")), overflow="fold"),
+                    Text(_preview(event.data.get("input", ""), limit=600), overflow="fold"),
                     title=Text(f"{event.name} tool start: {tool_name}"),
                     border_style="magenta",
                 )
@@ -216,13 +193,9 @@ class RichStreamRenderer:
             return
 
         if event.event == "agent_tool_delta":
-            self._console.print(
-                Panel(
-                    Text(str(event.data.get("delta", "")), overflow="fold"),
-                    title=Text(f"{event.name} tool delta: {event.data.get('tool_name', 'tool')}"),
-                    border_style="magenta",
-                )
-            )
+            # The completed tool event carries the authoritative output. Rendering
+            # every partial delta duplicates it and disrupts Live's chronological
+            # placement at the bottom of the terminal.
             return
 
         if event.event == "agent_tool_end":
@@ -243,20 +216,31 @@ class RichStreamRenderer:
             self._end_stream_if_active()
             status = str(event.data.get("status", ""))
             detail = str(event.data.get("error") or event.data.get("path") or "")
-            self._console.print(
-                Panel(
-                    Text(detail, overflow="fold"),
-                    title=Text(f"Subagent {status}: {event.name}"),
-                    border_style="red" if status == "failed" else "yellow",
-                )
+            style = {
+                "failed": "bold red",
+                "completed": "green",
+            }.get(status, "yellow")
+            line = Text.assemble(
+                ("Agent ", "dim"),
+                (event.name, "bold"),
+                (f" {status}", style),
             )
+            if detail:
+                line.append(f": {detail}")
+            self._console.print(line)
 
     def _start_stream(self, model_name: str) -> None:
         self._end_stream_if_active()
         self._reasoning_text = ""
         self._content_text = ""
         self._stream_source = model_name or "model"
-        self._live = Live(Group(), console=self._console, auto_refresh=False)
+        self._live = Live(
+            Group(),
+            console=self._console,
+            auto_refresh=False,
+            transient=True,
+            vertical_overflow="ellipsis",
+        )
         self._live.start()
 
     def _render_messages(self, event: FrameworkTraceEvent) -> None:
@@ -382,10 +366,14 @@ class RichStreamRenderer:
 
             action = data.get("event")
             graph_name = data.get("graph_name", "Subagent")
-            title = f"Agent {action}: {graph_name}"
-            color = "yellow"
-            body = f"Agent {graph_name} {action}."
-            self._console.print(Panel(body, title=title, border_style=color))
+            style = "green" if action == "completed" else "yellow"
+            self._console.print(
+                Text.assemble(
+                    ("Agent ", "dim"),
+                    (str(graph_name), "bold"),
+                    (f" {action}", style),
+                )
+            )
 
     def _render_tool_event(self, event: FrameworkTraceEvent) -> None:
         if event.event == "on_tool_start":
@@ -405,10 +393,35 @@ class RichStreamRenderer:
             body = _preview(result, limit=400)
             self._console.print(Panel(escape(body), title=title, border_style="green"))
 
-    def _end_stream_if_active(self) -> None:
-        if self._live:
-            self._live.stop()
-            self._live = None
+    def _end_stream_if_active(self, *, persist_content: bool = True) -> None:
+        if not self._live:
+            return
+
+        live = self._live
+        source = self._stream_source
+        reasoning = self._reasoning_text.strip()
+        content = self._content_text.strip()
+        self._live = None
+        self._reasoning_text = ""
+        self._content_text = ""
+        live.stop()
+
+        if reasoning:
+            self._console.print(
+                Panel(
+                    Text(reasoning, style="dim gray50", overflow="fold"),
+                    title=Text(f"{source} thinking"),
+                    border_style="dim gray50",
+                )
+            )
+        if persist_content and content:
+            self._console.print(
+                Panel(
+                    Markdown(content),
+                    title=Text(f"{source} response"),
+                    border_style="cyan",
+                )
+            )
 
     def _render_lifecycle(self, event: FrameworkTraceEvent, color: str) -> None:
         label = event.event.removeprefix("on_").replace("_", " ")
@@ -442,14 +455,3 @@ def _list_attr(value: object, attr: str) -> list[Any]:
     if isinstance(items, list):
         return items
     return []
-
-
-def _clip_text(text: str, *, max_lines: int = 80, max_chars: int = 6000) -> str:
-    lines = text.splitlines()
-    clipped = "\n".join(lines[:max_lines])
-    omitted_lines = max(0, len(lines) - max_lines)
-    if len(clipped) > max_chars:
-        clipped = clipped[: max_chars - 3] + "..."
-    if omitted_lines:
-        clipped = f"{clipped}\n[... {omitted_lines} more lines omitted from display]"
-    return clipped
