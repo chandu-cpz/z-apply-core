@@ -4,10 +4,13 @@ from collections.abc import Sequence
 from typing import Any, cast
 
 from deepagents import SubAgent
+from langchain.agents.middleware import ToolCallLimitMiddleware
+from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 
+from z_apply_core.agents.browser_action_verification import BrowserActionVerificationMiddleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.browser import build_browser_specialist
@@ -29,10 +32,11 @@ def _with_routing(
     router: NimRouter,
     role: str,
     model: BaseChatModel,
+    extra_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
-    enriched["middleware"] = [NimRouterMiddleware(router, role=role)]
+    enriched["middleware"] = [*extra_middleware, NimRouterMiddleware(router, role=role)]
     return cast("SubAgent", enriched)
 
 
@@ -44,12 +48,27 @@ async def build_specialists(
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
     model = await _default_model(router)
+    browser_verification = BrowserActionVerificationMiddleware(
+        fallback_model=model,
+        router=router,
+        read_only_browser_tools=read_only_browser_tools,
+        prompt_name="verifier.md",
+        verifier_role="Verifier",
+    )
     return [
         _with_routing(
             build_browser_specialist(browser_tools),
             router=router,
             role="BrowserSpecialist",
             model=model,
+            extra_middleware=[
+                browser_verification,
+                ToolCallLimitMiddleware(
+                    tool_name="browser_click",
+                    run_limit=1,
+                    exit_behavior="continue",
+                ),
+            ],
         ),
         _with_routing(
             build_vision_specialist(),
@@ -86,6 +105,13 @@ async def build_auth_specialists(
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
     model = await _default_model(router)
+    browser_verification = BrowserActionVerificationMiddleware(
+        fallback_model=model,
+        router=router,
+        read_only_browser_tools=read_only_browser_tools,
+        prompt_name="auth_verifier.md",
+        verifier_role="auth_verifier",
+    )
     return [
         _with_routing(
             build_browser_specialist(
@@ -95,6 +121,14 @@ async def build_auth_specialists(
             router=router,
             role="BrowserSpecialist",
             model=model,
+            extra_middleware=[
+                browser_verification,
+                ToolCallLimitMiddleware(
+                    tool_name="browser_click",
+                    run_limit=1,
+                    exit_behavior="continue",
+                ),
+            ],
         ),
         _with_routing(
             build_verifier(

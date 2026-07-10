@@ -22,6 +22,10 @@ Pass the bare ref as the browser-tool target: `e112`
 
 The `element` field is only a human-readable description.
 
+Invoke browser tools directly. Never print a JSON object that resembles tool
+arguments as prose: printed JSON performs no browser action. If you did not
+receive a browser-tool result, the action did not happen.
+
 If a ref is stale: capture one fresh snapshot, then retry using the new ref. Do not guess selectors before refreshing the snapshot.
 
 ## Safety Boundaries

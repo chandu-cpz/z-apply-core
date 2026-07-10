@@ -38,6 +38,17 @@ VERIFIER_BROWSER_TOOLS = (
     "browser_tabs",
 )
 
+BROWSER_CHANGING_TOOL_NAMES = frozenset(
+    {
+        "browser_click",
+        "browser_type",
+        "browser_fill_form",
+        "browser_select_option",
+        "browser_file_upload",
+        "browser_handle_dialog",
+    }
+)
+
 
 class BrowserToolParameter(Protocol):
     name: str

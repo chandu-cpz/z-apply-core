@@ -18,6 +18,7 @@ from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
+from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -173,25 +174,14 @@ def _trace_issues(summary: str, tool_trace: list[dict[str, Any]]) -> list[str]:
 
 def _browser_verification_issues(tool_trace: list[dict[str, Any]]) -> list[str]:
     issues: list[str] = []
-    pending_browser_action = ""
     for call in tool_trace:
-        if _is_verifier_task(call):
-            pending_browser_action = ""
-            continue
         if _is_browser_changing_tool(call):
             tool_name = str(call.get("tool_name", "browser action"))
-            if pending_browser_action:
+            if not _has_automatic_verifier_result(call):
                 issues.append(
-                    "BrowserSpecialist performed another browser-changing action "
-                    f"({tool_name}) before Verifier checked {pending_browser_action}."
+                    "BrowserSpecialist performed a browser-changing action "
+                    f"({tool_name}) without an automatic verifier result."
                 )
-            pending_browser_action = tool_name
-
-    if pending_browser_action:
-        issues.append(
-            "BrowserSpecialist performed a browser-changing action "
-            f"({pending_browser_action}) without a following Verifier task."
-        )
     return issues
 
 
@@ -248,14 +238,14 @@ def _task_subagent_type(call: dict[str, Any]) -> str:
 
 
 def _is_browser_changing_tool(call: dict[str, Any]) -> bool:
-    return call.get("source") == "BrowserSpecialist" and call.get("tool_name") in {
-        "browser_click",
-        "browser_type",
-        "browser_fill_form",
-        "browser_select_option",
-        "browser_file_upload",
-        "browser_handle_dialog",
-    }
+    return (
+        call.get("source") == "BrowserSpecialist"
+        and call.get("tool_name") in BROWSER_CHANGING_TOOL_NAMES
+    )
+
+
+def _has_automatic_verifier_result(call: dict[str, Any]) -> bool:
+    return "AUTOMATIC_VERIFIER_RESULT:" in str(call.get("output", ""))
 
 
 def _tool_trace_from_output(output: dict[str, Any]) -> list[dict[str, Any]]:

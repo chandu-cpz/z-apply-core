@@ -20,6 +20,7 @@ __pycache__/
 /page_initial.png
 /page_snapshot
 /page_snapshot.png
+/current_snapshot.png
 /page_snapshot.yml
 /print_events.py
 /print_tool_events.py
