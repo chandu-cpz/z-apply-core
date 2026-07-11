@@ -130,12 +130,48 @@ class NativeTaskPairingTests(unittest.TestCase):
 
         snapshot = self._run(middleware._fresh_snapshot())
 
-        self.assertEqual(snapshot, "<fresh form snapshot/>")
+        self.assertEqual(snapshot.content, "<fresh form snapshot/>")
+        self.assertTrue(snapshot.collected)
         self.assertEqual(
             [event.event for event in sink.events],
             ["agent_tool_start", "agent_tool_end"],
         )
         self.assertTrue(sink.events[-1].data["completed"])
+
+    def test_snapshot_failure_continues_same_browser_specialist_before_verifier(self) -> None:
+        snapshot_tool = AsyncMock()
+        snapshot_tool.ainvoke = AsyncMock(
+            side_effect=[RuntimeError("browser evidence unavailable"), "<uploaded resume/>"]
+        )
+        snapshot_tool.name = "browser_snapshot"
+        middleware = PostTaskVerificationMiddleware(
+            read_only_browser_tools=[snapshot_tool],
+        )
+        calls: list[dict[str, Any]] = []
+        browser_attempt = 0
+
+        async def handler(request: ToolCallRequest) -> Command[Any]:
+            nonlocal browser_attempt
+            arguments = request.tool_call["args"]
+            calls.append(arguments)
+            if arguments["subagent_type"] == "BrowserSpecialist":
+                browser_attempt += 1
+                return _task_result(f"browser attempt {browser_attempt}")
+            return _task_result("verified from uploaded resume evidence")
+
+        result = self._run(middleware.awrap_tool_call(_task_request(), handler))
+
+        self.assertEqual(
+            [call["subagent_type"] for call in calls],
+            ["BrowserSpecialist", "BrowserSpecialist", "Verifier"],
+        )
+        self.assertIn("CONTINUE THE SAME BROWSER OPERATION", calls[1]["description"])
+        self.assertIn("browser evidence unavailable", calls[1]["description"])
+        verifier_prompt = calls[2]["description"]
+        self.assertIn("browser attempt 2", verifier_prompt)
+        self.assertIn("<uploaded resume/>", verifier_prompt)
+        message = result.update["messages"][0]
+        self.assertIn("verified from uploaded resume evidence", str(message.content))
 
 
 if __name__ == "__main__":

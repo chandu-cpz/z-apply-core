@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass
 from typing import Any, cast
 
 from langchain.agents.middleware.types import (
@@ -20,6 +21,12 @@ from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 _log = logging.getLogger(__name__)
 
 VERIFIER_SOURCE = "PostTaskVerifier"
+
+
+@dataclass(frozen=True)
+class SnapshotEvidence:
+    content: str
+    collected: bool
 
 
 class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -73,6 +80,42 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
             return browser_result
 
         snapshot = await self._fresh_snapshot()
+        if not snapshot.collected:
+            recovery_description = (
+                f"{description}\n\n"
+                "CONTINUE THE SAME BROWSER OPERATION:\n"
+                "The previous BrowserSpecialist returned before independent evidence "
+                "could be collected. The read-only browser evidence tool produced this "
+                f"actual result:\n{snapshot.content}\n\n"
+                "Use that tool result and the current browser state to continue the "
+                "original semantic operation. Do not restart it, repeat a completed "
+                "mutation, or merely describe the next tool call. Call the browser tool "
+                "needed to finish the operation, then inspect evidence and return."
+            )
+            recovery_call = cast(
+                ToolCall,
+                {
+                    **request.tool_call,
+                    "args": {
+                        "description": recovery_description,
+                        "subagent_type": self._target_subagent,
+                    },
+                },
+            )
+            _log.info(
+                "PostTaskVerification: evidence unavailable; continuing native %s task",
+                self._target_subagent,
+            )
+            browser_result = await handler(request.override(tool_call=recovery_call))
+            browser_message = _command_tool_message(browser_result)
+            if browser_message is None:
+                _log.warning(
+                    "PostTaskVerification: continued browser task returned no ToolMessage; "
+                    "verifier skipped"
+                )
+                return browser_result
+            snapshot = await self._fresh_snapshot()
+
         verifier_description = (
             "Independently verify the completed BrowserSpecialist task using current "
             "read-only browser evidence. Do not change browser state. Return your "
@@ -80,7 +123,7 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
             "decision.\n\n"
             f"ORIGINAL BROWSER TASK:\n{description}\n\n"
             f"BROWSER SPECIALIST RESULT:\n{browser_message.content}\n\n"
-            f"FRESH POST-TASK SNAPSHOT:\n{snapshot}"
+            f"FRESH POST-TASK SNAPSHOT:\n{snapshot.content}"
         )
         verifier_call = cast(
             ToolCall,
@@ -121,9 +164,12 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
         _log.info("PostTaskVerification: paired native task results returned")
         return Command(update={**base, "messages": [combined]})
 
-    async def _fresh_snapshot(self) -> str:
+    async def _fresh_snapshot(self) -> SnapshotEvidence:
         if self._snapshot_tool is None:
-            return "Snapshot unavailable: no browser_snapshot tool was configured."
+            return SnapshotEvidence(
+                "Snapshot unavailable: no browser_snapshot tool was configured.",
+                collected=False,
+            )
         await self._emit_snapshot_event("agent_tool_start", {"input": {}})
         try:
             snapshot = str(await self._snapshot_tool.ainvoke({}))
@@ -133,12 +179,12 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                 "agent_tool_end",
                 {"output": "", "error": message, "completed": False},
             )
-            return message
+            return SnapshotEvidence(message, collected=False)
         await self._emit_snapshot_event(
             "agent_tool_end",
             {"output": snapshot, "error": "", "completed": True},
         )
-        return snapshot
+        return SnapshotEvidence(snapshot, collected=True)
 
     async def _emit_snapshot_event(self, event: str, data: dict[str, Any]) -> None:
         if self._sink is None:
