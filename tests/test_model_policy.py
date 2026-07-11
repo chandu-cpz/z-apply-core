@@ -18,6 +18,8 @@ class ModelPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("google/gemma-4-31b-it", excluded)
         self.assertIn("meta/llama-3.1-70b-instruct", excluded)
         self.assertIn("moonshotai/kimi-k2-instruct-0905", excluded)
+        self.assertIn("nvidia/llama-3.3-nemotron-super-49b-v1", excluded)
+        self.assertIn("nvidia/nemotron-3-super-120b-a12b", excluded)
         self.assertIn("qwen/qwen3.5-122b-a10b", excluded)
         self.assertIn("stepfun-ai/step-3.5-flash", excluded)
         self.assertIn("stepfun-ai/step-3.7-flash", excluded)
