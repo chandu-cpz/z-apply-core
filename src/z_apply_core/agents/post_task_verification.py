@@ -66,8 +66,13 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
         arguments = request.tool_call.get("args", {})
         if not isinstance(arguments, dict):
             return await handler(request)
-        if arguments.get("subagent_type") != self._target_subagent:
-            return await handler(request)
+        subagent_type = str(arguments.get("subagent_type", "specialist"))
+        if subagent_type != self._target_subagent:
+            try:
+                return await handler(request)
+            except Exception as exc:  # noqa: BLE001 - orchestrator owns recovery
+                _log.warning("Native %s task failed technically: %s", subagent_type, exc)
+                return _technical_failure_message(request, subagent_type, exc)
 
         description = str(arguments.get("description", ""))
         _log.info("PostTaskVerification: running native %s task", self._target_subagent)
@@ -79,7 +84,7 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                 self._target_subagent,
                 exc,
             )
-            return _technical_failure_message(request, exc)
+            return _technical_failure_message(request, self._target_subagent, exc)
         browser_message = _command_tool_message(browser_result)
         if browser_message is None:
             _log.warning(
@@ -122,7 +127,7 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                     self._target_subagent,
                     exc,
                 )
-                return _technical_failure_message(request, exc)
+                return _technical_failure_message(request, self._target_subagent, exc)
             browser_message = _command_tool_message(browser_result)
             if browser_message is None:
                 _log.warning(
@@ -228,11 +233,12 @@ def _command_tool_message(result: ToolMessage | Command[Any]) -> ToolMessage | N
 
 def _technical_failure_message(
     request: ToolCallRequest,
+    subagent_type: str,
     error: Exception,
 ) -> ToolMessage:
     return ToolMessage(
         content=(
-            "BrowserSpecialist task failed technically before its semantic operation could "
+            f"{subagent_type} task failed technically before its semantic operation could "
             f"be verified: {error}. Obtain current browser evidence and decide whether to "
             "retry the same operation or choose another safe recovery action."
         ),
