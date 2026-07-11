@@ -21,6 +21,7 @@ from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
+from z_apply_core.stream_events import FrameworkEventSink
 
 
 class BrowserActionVerificationMiddleware(
@@ -41,6 +42,7 @@ class BrowserActionVerificationMiddleware(
         read_only_browser_tools: Sequence[BaseTool],
         prompt_name: str,
         verifier_role: str,
+        sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
         self._snapshot_tool = next(
@@ -53,6 +55,7 @@ class BrowserActionVerificationMiddleware(
             system_prompt=load_prompt(prompt_name),
             middleware=[NimRouterMiddleware(router, role=verifier_role)],
         )
+        self._sink = sink
 
     async def awrap_tool_call(
         self,
@@ -133,7 +136,11 @@ class BrowserActionVerificationMiddleware(
                 },
                 version="v3",
             )
-            run = await consume_deepagent_stream(stream)
+            run = await consume_deepagent_stream(
+                stream,
+                sink=self._sink,
+                root_source="AuthActionVerifier",
+            )
         except Exception as exc:  # noqa: BLE001 - verdict is returned to the browser agent
             return f"not_verified: automatic verifier failed: {exc}"
         return _last_message_text(run.output) or "not_verified: verifier returned no result."

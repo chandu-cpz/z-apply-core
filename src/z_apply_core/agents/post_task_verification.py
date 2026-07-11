@@ -23,10 +23,13 @@ from nim_router import NimRouter
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 _log = logging.getLogger(__name__)
 
 _OPERATION_KIND_RE = re.compile(r"OPERATION KIND:\s*(\S+)", re.IGNORECASE)
+MAX_VERDICT_ATTEMPTS = 2
+VERIFIER_SOURCE = "PostTaskVerifier"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,9 +84,7 @@ def extract_operation_kind(task_description: str) -> str:
     return match.group(1).lower() if match else ""
 
 
-class PostTaskVerificationMiddleware(
-    AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
-):
+class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """Run an independent verifier after BrowserSpecialist completes.
 
     Unlike the old per-mutation verification (which ran after every browser
@@ -104,6 +105,7 @@ class PostTaskVerificationMiddleware(
         prompt_name: str = "verifier.md",
         verifier_role: str = "Verifier",
         target_subagent: str = "BrowserSpecialist",
+        sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
         self._target_subagent = target_subagent
@@ -116,6 +118,7 @@ class PostTaskVerificationMiddleware(
         self._router = router
         self._prompt_name = prompt_name
         self._verifier_role = verifier_role
+        self._sink = sink
         self.last_operation_kind: str = ""
         self.last_verdict_status: str = ""
 
@@ -136,20 +139,19 @@ class PostTaskVerificationMiddleware(
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         tool_name = str(request.tool_call.get("name", ""))
-        _log.info("PostTaskVerification: awrap_tool_call invoked, tool=%s", tool_name)
         if tool_name != "task":
             return await handler(request)
 
         arguments = request.tool_call.get("args", {})
         if not isinstance(arguments, dict):
-            _log.info("PostTaskVerification: args not dict, type=%s", type(arguments).__name__)
             return await handler(request)
 
         subagent_type = arguments.get("subagent_type")
         if subagent_type != self._target_subagent:
-            _log.info(
+            _log.debug(
                 "PostTaskVerification: subagent_type=%s != target=%s, skipping",
-                subagent_type, self._target_subagent,
+                subagent_type,
+                self._target_subagent,
             )
             return await handler(request)
 
@@ -200,44 +202,92 @@ class PostTaskVerificationMiddleware(
         task_description: str,
         snapshot: str,
     ) -> str:
-        state = VerdictState()
-        verdict_tools = _make_verifier_tools(state)
-        verifier = self._build_verifier(verdict_tools)
+        errors: list[str] = []
+        for attempt in range(1, MAX_VERDICT_ATTEMPTS + 1):
+            state = VerdictState()
+            verdict_tools = _make_verifier_tools(state)
+            verifier = self._build_verifier(verdict_tools)
 
-        try:
-            stream = verifier.astream_events(
-                {
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": (
-                                "Verify whether the BrowserSpecialist accomplished the "
-                                "orchestrator's requested operation. "
-                                f"Task description: {task_description}. "
-                                f"Fresh browser snapshot after BrowserSpecialist:\n"
-                                f"{snapshot}\n\n"
-                                "Evaluate only whether the named semantic operation and "
-                                "success condition are satisfied. "
-                                "Call exactly one verdict tool to record your finding."
-                            ),
-                        }
-                    ]
-                },
-                version="v3",
+            try:
+                stream = verifier.astream_events(
+                    {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Verify whether the BrowserSpecialist accomplished the "
+                                    "orchestrator's requested operation. "
+                                    f"Task description: {task_description}. "
+                                    f"Fresh browser snapshot after BrowserSpecialist:\n"
+                                    f"{snapshot}\n\n"
+                                    "Evaluate only whether the named semantic operation and "
+                                    "success condition are satisfied. "
+                                    "Call exactly one verdict tool to record your finding."
+                                ),
+                            }
+                        ]
+                    },
+                    version="v3",
+                )
+                await consume_deepagent_stream(
+                    stream,
+                    sink=self._sink,
+                    root_source=VERIFIER_SOURCE,
+                )
+            except Exception as exc:  # noqa: BLE001 - verifier failures are safe non-verdicts
+                errors.append(str(exc))
+                _log.warning(
+                    "PostTaskVerification: verifier attempt %s/%s failed: %s",
+                    attempt,
+                    MAX_VERDICT_ATTEMPTS,
+                    exc,
+                )
+            else:
+                if state.decision is not None:
+                    return f"{state.decision.status}: {state.decision.detail}"
+                _log.warning(
+                    "PostTaskVerification: verifier attempt %s/%s ended without a verdict",
+                    attempt,
+                    MAX_VERDICT_ATTEMPTS,
+                )
+
+        if errors:
+            return (
+                "not_verified: automatic verifier failed after "
+                f"{MAX_VERDICT_ATTEMPTS} attempts: {'; '.join(errors)}"
             )
-            await consume_deepagent_stream(stream)
-        except Exception as exc:  # noqa: BLE001 - verdict is returned to the orchestrator
-            return f"verifier_error: automatic verifier failed: {exc}"
-
-        if state.decision is None:
-            return "verifier_error: verifier ended without recording a verdict"
-        extract_operation_kind(task_description)
-        return f"{state.decision.status}: {state.decision.detail}"
+        return (
+            "not_verified: automatic verifier did not record a verdict after "
+            f"{MAX_VERDICT_ATTEMPTS} attempts."
+        )
 
     async def _fresh_snapshot(self) -> str:
         if self._snapshot_tool is None:
             return "Snapshot unavailable: no browser_snapshot tool was configured."
+        await self._emit_snapshot_event("agent_tool_start", {"input": {}})
         try:
-            return str(await self._snapshot_tool.ainvoke({}))
+            snapshot = str(await self._snapshot_tool.ainvoke({}))
         except Exception as exc:  # noqa: BLE001 - passed to verifier as failed evidence
-            return f"Snapshot unavailable: {exc}"
+            message = f"Snapshot unavailable: {exc}"
+            await self._emit_snapshot_event(
+                "agent_tool_end",
+                {"output": "", "error": message, "completed": False},
+            )
+            return message
+        await self._emit_snapshot_event(
+            "agent_tool_end",
+            {"output": snapshot, "error": "", "completed": True},
+        )
+        return snapshot
+
+    async def _emit_snapshot_event(self, event: str, data: dict[str, Any]) -> None:
+        if self._sink is None:
+            return
+        await self._sink.accept(
+            FrameworkTraceEvent(
+                event=event,
+                name=VERIFIER_SOURCE,
+                data={"tool_name": "browser_snapshot", **data},
+                raw={},
+            )
+        )

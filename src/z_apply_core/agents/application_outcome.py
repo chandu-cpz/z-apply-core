@@ -35,11 +35,12 @@ submit does not prevent preparation work and is not a blocker until submission i
 """
 
 MAX_OUTCOME_ITERATIONS = 8
+MAX_OUTCOME_VERDICT_ATTEMPTS = 2
 
 
 @dataclass(frozen=True, slots=True)
 class OutcomeDecision:
-    status: Literal["satisfied", "needs_revision", "blocked"]
+    status: Literal["satisfied", "needs_revision", "blocked", "failed"]
     explanation: str
     next_action: str = ""
 
@@ -85,7 +86,7 @@ async def evaluate_application_outcome(
     try:
         selection = await router.lease(tools=True, priority="quality", reasoning=True)
     except (NimRouterError, ImportError, ValueError) as exc:
-        return OutcomeDecision("blocked", f"Outcome evaluator model selection failed: {exc}")
+        return OutcomeDecision("failed", f"Outcome evaluator model selection failed: {exc}")
 
     evaluator = create_deep_agent(
         model=selection.llm,
@@ -100,38 +101,38 @@ async def evaluate_application_outcome(
             ),
         ],
     )
-    stream = evaluator.astream_events(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _evaluation_prompt(
-                        task=task,
-                        output=output,
-                        tool_journal=tool_journal,
-                        snapshot=snapshot,
-                    ),
-                }
-            ]
-        },
-        version="v3",
+    prompt = _evaluation_prompt(
+        task=task,
+        output=output,
+        tool_journal=tool_journal,
+        snapshot=snapshot,
     )
-    await consume_deepagent_stream(stream, sink=sink, root_source="GoalEvaluator")
-    if decision is None:
-        return OutcomeDecision(
-            "needs_revision",
-            "The independent evaluator ended without recording a completion verdict.",
-            "Inspect the current application state and continue the first unfinished operation.",
-        )
-    return decision
+    errors: list[str] = []
+    for _attempt in range(1, MAX_OUTCOME_VERDICT_ATTEMPTS + 1):
+        try:
+            stream = evaluator.astream_events(
+                {"messages": [{"role": "user", "content": prompt}]},
+                version="v3",
+            )
+            await consume_deepagent_stream(stream, sink=sink, root_source="GoalEvaluator")
+        except Exception as exc:  # noqa: BLE001 - report an explicit runtime failure
+            errors.append(str(exc))
+        if decision is not None:
+            return decision
+
+    detail = "; ".join(errors) if errors else "no outcome transition tool was called"
+    return OutcomeDecision(
+        "failed",
+        (
+            "Outcome evaluation failed to record a typed decision after "
+            f"{MAX_OUTCOME_VERDICT_ATTEMPTS} attempts ({detail}). "
+            "The runtime stopped safely without making another browser change."
+        ),
+    )
 
 
 def resume_input(output: dict[str, Any], decision: OutcomeDecision) -> dict[str, Any]:
-    state = {
-        key: value
-        for key, value in output.items()
-        if key in {"messages", "todos", "files"}
-    }
+    state = {key: value for key, value in output.items() if key in {"messages", "todos", "files"}}
     messages = list(cast(Sequence[Any], state.get("messages", ())))
     messages.append(
         HumanMessage(

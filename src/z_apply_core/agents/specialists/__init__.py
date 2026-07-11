@@ -19,6 +19,7 @@ from z_apply_core.agents.specialists.field_mapper import build_field_mapper
 from z_apply_core.agents.specialists.verifier import build_verifier
 from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
+from z_apply_core.stream_events import FrameworkEventSink
 
 
 def _with_routing(
@@ -88,6 +89,7 @@ async def build_auth_specialists(
     browser_tools: Sequence[BaseTool],
     *,
     fallback_model: BaseChatModel,
+    sink: FrameworkEventSink | None = None,
 ) -> list[SubAgent]:
     read_only_browser_tools = [
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
@@ -98,6 +100,7 @@ async def build_auth_specialists(
         read_only_browser_tools=read_only_browser_tools,
         prompt_name="auth_verifier.md",
         verifier_role="auth_verifier",
+        sink=sink,
     )
     return [
         _with_routing(

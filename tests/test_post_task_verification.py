@@ -6,10 +6,20 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from z_apply_core.agents.post_task_verification import (
+    MAX_VERDICT_ATTEMPTS,
     PostTaskVerificationMiddleware,
     VerdictState,
     _make_verifier_tools,
 )
+from z_apply_core.stream_events import FrameworkTraceEvent
+
+
+class CollectingSink:
+    def __init__(self) -> None:
+        self.events: list[FrameworkTraceEvent] = []
+
+    async def accept(self, event: FrameworkTraceEvent) -> None:
+        self.events.append(event)
 
 
 class VerifierToolTests(unittest.TestCase):
@@ -69,8 +79,11 @@ class VerifierToolTests(unittest.TestCase):
         )
 
 
-def _make_middleware() -> PostTaskVerificationMiddleware:
+def _make_middleware(
+    sink: CollectingSink | None = None,
+) -> PostTaskVerificationMiddleware:
     snapshot_tool = AsyncMock(return_value="<snapshot/>")
+    snapshot_tool.ainvoke = AsyncMock(return_value="<snapshot/>")
     snapshot_tool.name = "browser_snapshot"
     with patch(
         "z_apply_core.agents.post_task_verification.create_deep_agent",
@@ -80,6 +93,7 @@ def _make_middleware() -> PostTaskVerificationMiddleware:
             fallback_model=MagicMock(),
             router=MagicMock(),
             read_only_browser_tools=[snapshot_tool],
+            sink=sink,
         )
     return mw
 
@@ -97,10 +111,8 @@ class VerifyResultTests(unittest.TestCase):
         verifier_instance = MagicMock()
         verifier_instance.astream_events = MagicMock(side_effect=RuntimeError("model down"))
         with patch.object(mw, "_build_verifier", return_value=verifier_instance):
-            result = self._run(
-                mw._verify(task_description="click apply", snapshot="<page/>")
-            )
-        self.assertTrue(result.startswith("verifier_error:"))
+            result = self._run(mw._verify(task_description="click apply", snapshot="<page/>"))
+        self.assertTrue(result.startswith("not_verified:"))
         self.assertIn("model down", result)
 
     def test_verify_returns_verifier_error_when_no_verdict(self) -> None:
@@ -113,38 +125,60 @@ class VerifyResultTests(unittest.TestCase):
 
         verifier_instance = MagicMock()
         verifier_instance.astream_events = MagicMock(return_value="stream")
-        with patch.object(mw, "_build_verifier", return_value=verifier_instance), patch(
-            "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
-            side_effect=fake_consume,
+        with (
+            patch.object(mw, "_build_verifier", return_value=verifier_instance),
+            patch(
+                "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
+                side_effect=fake_consume,
+            ) as consume,
         ):
-            result = self._run(
-                mw._verify(task_description="click apply", snapshot="<page/>")
-            )
-        self.assertTrue(result.startswith("verifier_error:"))
-        self.assertIn("without recording a verdict", result)
+            result = self._run(mw._verify(task_description="click apply", snapshot="<page/>"))
+        self.assertTrue(result.startswith("not_verified:"))
+        self.assertIn("did not record a verdict", result)
+        self.assertEqual(consume.await_count, MAX_VERDICT_ATTEMPTS)
 
-    def test_verify_returns_verdict_from_tool(self) -> None:
-        mw = _make_middleware()
-        captured_state: VerdictState | None = None
+    def test_verify_returns_verdict_from_tool_and_forwards_sink(self) -> None:
+        sink = CollectingSink()
+        mw = _make_middleware(sink)
+        captured_tools: list[list[Any]] = []
 
         async def fake_consume(*args: Any, **kwargs: Any) -> Any:
-            nonlocal captured_state
-            captured_state = VerdictState()
-            tools = _make_verifier_tools(captured_state)
-            verify_tool = next(t for t in tools if t.name == "verification_verified")
+            tools = captured_tools[-1]
+            verify_tool = next(tool for tool in tools if tool.name == "verification_verified")
             await verify_tool.ainvoke({"evidence": "apply form opened"})
             return MagicMock(output={"messages": []})
 
         verifier_instance = MagicMock()
         verifier_instance.astream_events = MagicMock(return_value="stream")
-        with patch.object(mw, "_build_verifier", return_value=verifier_instance), patch(
-            "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
-            side_effect=fake_consume,
+        with (
+            patch.object(
+                mw,
+                "_build_verifier",
+                side_effect=lambda tools: captured_tools.append(tools) or verifier_instance,
+            ),
+            patch(
+                "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
+                side_effect=fake_consume,
+            ) as consume,
         ):
-            result = self._run(
-                mw._verify(task_description="click apply", snapshot="<page/>")
-            )
-        self.assertIn("verifier_error", result)
+            result = self._run(mw._verify(task_description="click apply", snapshot="<page/>"))
+        self.assertEqual(result, "verified: apply form opened")
+        self.assertEqual(consume.await_count, 1)
+        self.assertIs(consume.await_args.kwargs["sink"], sink)
+        self.assertEqual(consume.await_args.kwargs["root_source"], "PostTaskVerifier")
+
+    def test_fresh_snapshot_is_visible_to_the_sink(self) -> None:
+        sink = CollectingSink()
+        mw = _make_middleware(sink)
+
+        snapshot = self._run(mw._fresh_snapshot())
+
+        self.assertEqual(snapshot, "<snapshot/>")
+        self.assertEqual(
+            [event.event for event in sink.events],
+            ["agent_tool_start", "agent_tool_end"],
+        )
+        self.assertTrue(sink.events[-1].data["completed"])
 
     def test_verify_returns_verifier_error_on_snapshot_failure(self) -> None:
         mw = _make_middleware()

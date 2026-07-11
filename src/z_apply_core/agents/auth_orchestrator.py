@@ -23,6 +23,7 @@ from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
 logger = logging.getLogger(__name__)
+MAX_AUTH_VERDICT_ATTEMPTS = 2
 
 
 async def run_auth_orchestrator(
@@ -106,6 +107,7 @@ async def run_auth_orchestrator(
             router,
             browser_tools,
             fallback_model=selection.llm,
+            sink=sink,
         ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
@@ -113,36 +115,45 @@ async def run_auth_orchestrator(
 
     run_config = cast(RunnableConfig, config.copy() if config else {})
 
-    stream = agent.astream_events(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _task_prompt(snapshot=snapshot),
-                }
-            ]
-        },
-        config=run_config,
-        version="v3",
-    )
-    stream_result = await consume_deepagent_stream(
-        stream,
-        sink=sink,
-        root_source="authenticate_default_account",
-    )
+    stream_result: dict[str, object] = {}
+    for attempt in range(1, MAX_AUTH_VERDICT_ATTEMPTS + 1):
+        stream = agent.astream_events(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": _task_prompt(snapshot=snapshot),
+                    }
+                ]
+            },
+            config=run_config,
+            version="v3",
+        )
+        result = await consume_deepagent_stream(
+            stream,
+            sink=sink,
+            root_source="authenticate_default_account",
+        )
+        stream_result = result.output
+        if auth_result is not None:
+            break
+        logger.warning(
+            "Authentication controller attempt %s/%s ended without a verdict",
+            attempt,
+            MAX_AUTH_VERDICT_ATTEMPTS,
+        )
     if auth_result is None:
         return AuthOrchestratorRun(
             summary=(
-                "Authentication was not verified: the authentication agent ended "
-                "without recording an evidence-backed verdict."
+                "Authentication was not verified: the authentication controller did "
+                "not record an evidence-backed verdict after "
+                f"{MAX_AUTH_VERDICT_ATTEMPTS} attempts."
             ),
             model_id=model_id,
             status="not_verified",
         )
     status, summary = auth_result
-    if status == "authenticated" and not _has_fresh_browser_inspection(
-        stream_result.output
-    ):
+    if status == "authenticated" and not _has_fresh_browser_inspection(stream_result):
         return AuthOrchestratorRun(
             summary=(
                 "Authentication was not verified: no completed BrowserSpecialist "

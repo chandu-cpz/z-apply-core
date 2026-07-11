@@ -88,6 +88,22 @@ class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("subagent evidence", rendered_text)
         self.assertIn("actual planning trace", rendered_reasoning)
 
+    async def test_authentication_controller_text_deltas_are_streamed(self) -> None:
+        sink = CollectingSink()
+
+        await consume_deepagent_stream(
+            FakeStream(),
+            sink=sink,
+            root_source="authenticate_default_account",
+        )
+
+        rendered_text = [
+            event.data.get("delta")
+            for event in sink.events
+            if event.event == "agent_message_delta" and event.data.get("kind") == "text"
+        ]
+        self.assertIn("fake JSON task call", rendered_text)
+
 
 if __name__ == "__main__":
     unittest.main()

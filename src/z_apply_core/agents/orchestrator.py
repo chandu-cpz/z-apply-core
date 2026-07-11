@@ -128,6 +128,7 @@ async def run_orchestrator(
         fallback_model=selection.llm,
         router=router,
         read_only_browser_tools=read_only_browser_tools,
+        sink=sink,
     )
     human_guard = HumanEscalationGuardMiddleware(progress)
     agent = create_deep_agent(
@@ -159,8 +160,10 @@ async def run_orchestrator(
             {
                 "role": "user",
                 "content": _task_prompt(
-                    job_url=job_url, task=task,
-                    snapshot=snapshot, resume_path=resume_path,
+                    job_url=job_url,
+                    task=task,
+                    snapshot=snapshot,
+                    resume_path=resume_path,
                 ),
             }
         ]
@@ -233,6 +236,12 @@ async def run_orchestrator(
             return OrchestratorRun(
                 summary=decision.explanation,
                 model_id=model_id,
+            )
+        if decision.status == "failed":
+            return OrchestratorRun(
+                summary=decision.explanation,
+                model_id=model_id,
+                status="failed",
             )
         if decision.status == "blocked":
             return OrchestratorRun(
