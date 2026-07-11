@@ -3,12 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Self
 
+from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
 
 from z_apply_core.browser_config import build_browser_config
 from z_apply_core.browser_tools import BrowserToolRegistry
 
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
+
+
+class BrowserToolExecutionError(ToolException):
+    """A browser backend tool result explicitly marked as an execution error."""
 
 
 class BrowserSession:
@@ -32,6 +37,7 @@ class BrowserSession:
             arguments or {},
             meta=self._call_meta(name),
         )
+        _raise_for_tool_error(name, result)
         return _text_content(result)
 
     async def call_tool_content(
@@ -45,6 +51,7 @@ class BrowserSession:
             arguments or {},
             meta=self._call_meta(name),
         )
+        _raise_for_tool_error(name, result)
         return _content_blocks(result)
 
     async def close(self) -> None:
@@ -65,6 +72,11 @@ def _text_content(result: Any) -> str:
         parts = [getattr(item, "text", None) for item in content]
         return "\n".join(part for part in parts if isinstance(part, str))
     return str(content)
+
+
+def _raise_for_tool_error(name: str, result: Any) -> None:
+    if getattr(result, "is_error", False) is True:
+        raise BrowserToolExecutionError(f'{name} failed: {_text_content(result)}')
 
 
 def _content_blocks(result: Any) -> list[dict[str, str]]:

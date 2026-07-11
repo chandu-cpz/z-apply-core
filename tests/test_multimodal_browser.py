@@ -10,7 +10,11 @@ from langchain_core.tools import BaseTool
 from mcp.types import ImageContent, TextContent
 
 from z_apply_core.agents.specialists.vision import build_vision_specialist
-from z_apply_core.browser_session import BrowserSession, _content_blocks
+from z_apply_core.browser_session import (
+    BrowserSession,
+    BrowserToolExecutionError,
+    _content_blocks,
+)
 from z_apply_core.browser_tools import BrowserToolRegistry
 
 
@@ -66,6 +70,25 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
             backend.call_tool.await_args_list[2].kwargs["meta"],
             {"raw": True},
         )
+
+    async def test_backend_error_result_raises_typed_tool_error(self) -> None:
+        backend = SimpleNamespace(
+            call_tool=AsyncMock(
+                return_value=SimpleNamespace(
+                    content="Error: browser cannot inspect the current state",
+                    is_error=True,
+                )
+            ),
+            close=AsyncMock(),
+        )
+        server = SimpleNamespace(
+            backend=backend,
+            backend_pool=SimpleNamespace(tools=[]),
+        )
+        session = BrowserSession(server)
+
+        with self.assertRaises(BrowserToolExecutionError):
+            await session.call_tool("browser_snapshot", {})
 
     def test_mcp_image_content_becomes_standard_langchain_block(self) -> None:
         result = SimpleNamespace(
