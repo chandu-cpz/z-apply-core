@@ -14,6 +14,7 @@ from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_
 
 CORE_ROOT = Path(__file__).resolve().parents[2]
 ROUTER_STATS_PATH = CORE_ROOT / ".z-apply" / "nim-router-stats.json"
+MAX_EXPLORATION_INTERVAL_SECONDS = 300.0
 
 
 def build_graph() -> Any:
@@ -45,6 +46,10 @@ async def run_job(
     )
     router_config.stats_path = str(ROUTER_STATS_PATH)
     router_config.timeout_seconds = min(router_config.timeout_seconds, 20.0)
+    router_config.exploration_interval_seconds = min(
+        router_config.exploration_interval_seconds,
+        MAX_EXPLORATION_INTERVAL_SECONDS,
+    )
     router = NimRouter(config=router_config)
     try:
         stream = graph.astream_events(
