@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from langchain_core.runnables.config import RunnableConfig
@@ -14,6 +15,7 @@ from z_apply_core.stream_events import FrameworkEventSink
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_RESUME_PATH = (CORE_ROOT / ".z-apply" / "input" / "Chandrakanth-V-Resume.pdf").resolve()
+_log = logging.getLogger(__name__)
 
 
 async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str]:
@@ -64,11 +66,16 @@ def _router_from_config(config: RunnableConfig) -> NimRouter:
 
 
 async def _fresh_snapshot(state: RunState) -> str:
+    fallback = str(state.get("snapshot", ""))
     runtime = state.get("runtime")
     if not isinstance(runtime, RunRuntime):
-        return str(state.get("snapshot", ""))
-    snapshot = await runtime.browser.tools.call("browser_snapshot")
-    return snapshot or str(state.get("snapshot", ""))
+        return fallback
+    try:
+        snapshot = await runtime.browser.tools.call("browser_snapshot")
+    except Exception as exc:  # noqa: BLE001 - preserve the completed run result
+        _log.warning("Final browser snapshot unavailable: %s", exc)
+        return fallback
+    return snapshot or fallback
 
 
 def _human_tools(state: RunState) -> list[BaseTool]:
