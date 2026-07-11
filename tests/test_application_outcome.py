@@ -194,6 +194,7 @@ class OutcomeEvaluatorContractTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(router, "lease", AsyncMock(return_value=selection)),
+            patch.object(router, "cooldown_model") as cooldown_model,
             patch(
                 "z_apply_core.agents.application_outcome.create_deep_agent",
                 return_value=evaluator,
@@ -216,6 +217,12 @@ class OutcomeEvaluatorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("typed decision", decision.explanation)
         self.assertEqual(len(evaluator.inputs), MAX_OUTCOME_VERDICT_ATTEMPTS)
         self.assertEqual(consume.await_count, MAX_OUTCOME_VERDICT_ATTEMPTS)
+        self.assertEqual(cooldown_model.call_count, MAX_OUTCOME_VERDICT_ATTEMPTS)
+        for retry_input in evaluator.inputs[1:]:
+            retry_message = retry_input["messages"][0]
+            self.assertIsInstance(retry_message, HumanMessage)
+            self.assertIn("form snapshot", retry_message.content)
+            self.assertNotIn("evaluator protocol", retry_message.content.split("\n\n")[0])
 
     async def test_recorded_transition_returns_without_a_duplicate_attempt(self) -> None:
         router = NimRouter()

@@ -35,7 +35,8 @@ submit does not prevent preparation work and is not a blocker until submission i
 """
 
 MAX_OUTCOME_ITERATIONS = 8
-MAX_OUTCOME_VERDICT_ATTEMPTS = 2
+MAX_OUTCOME_VERDICT_ATTEMPTS = 3
+EVALUATOR_PROTOCOL_COOLDOWN_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,17 +89,18 @@ async def evaluate_application_outcome(
     except (NimRouterError, ImportError, ValueError) as exc:
         return OutcomeDecision("failed", f"Outcome evaluator model selection failed: {exc}")
 
+    evaluator_router = NimRouterMiddleware(
+        router,
+        role="RecoveryAgent",
+        initial_selection=selection,
+    )
     evaluator = create_deep_agent(
         model=selection.llm,
         tools=[outcome_satisfied, outcome_needs_revision, outcome_blocked],
         system_prompt=load_prompt("goal_evaluator.md"),
         middleware=[
             ModelRetryMiddleware(max_retries=1, on_failure="error"),
-            NimRouterMiddleware(
-                router,
-                role="RecoveryAgent",
-                initial_selection=selection,
-            ),
+            evaluator_router,
         ],
     )
     prompt = _evaluation_prompt(
@@ -117,28 +119,26 @@ async def evaluate_application_outcome(
                 cast(Any, attempt_input),
                 version="v3",
             )
-            run = await consume_deepagent_stream(
+            await consume_deepagent_stream(
                 stream,
                 sink=sink,
                 root_source="GoalEvaluator",
             )
         except Exception as exc:  # noqa: BLE001 - report an explicit runtime failure
             errors.append(str(exc))
-            attempt_input = {
-                "messages": [
-                    HumanMessage(
-                        content=(
-                            "The previous evaluator model call failed technically. Re-evaluate "
-                            "the supplied application evidence and call exactly one outcome "
-                            "transition tool now."
-                        )
-                    )
-                ]
-            }
+            _cool_evaluator_model(router, evaluator_router)
+            attempt_input = _clean_outcome_retry_input(
+                prompt,
+                "The previous evaluator model call failed technically.",
+            )
             continue
         if decision is not None:
             return decision
-        attempt_input = _outcome_verdict_resume_input(run.output)
+        _cool_evaluator_model(router, evaluator_router)
+        attempt_input = _clean_outcome_retry_input(
+            prompt,
+            "The previous evaluator returned without a typed outcome transition.",
+        )
 
     detail = "; ".join(errors) if errors else "no outcome transition tool was called"
     return OutcomeDecision(
@@ -151,21 +151,32 @@ async def evaluate_application_outcome(
     )
 
 
-def _outcome_verdict_resume_input(output: dict[str, Any]) -> dict[str, Any]:
-    state = {key: value for key, value in output.items() if key in {"messages", "todos", "files"}}
-    messages = list(state.get("messages", ()))
-    messages.append(
-        HumanMessage(
-            content=(
-                "Your evidence audit above did not call an outcome transition tool. "
-                "Complete the same evaluation now by calling exactly one of "
-                "outcome_satisfied, outcome_needs_revision, or outcome_blocked. "
-                "Do not repeat the audit in prose."
-            )
+def _cool_evaluator_model(
+    router: NimRouter,
+    middleware: NimRouterMiddleware,
+) -> None:
+    if middleware.last_model_id:
+        router.cooldown_model(
+            middleware.last_model_id,
+            EVALUATOR_PROTOCOL_COOLDOWN_SECONDS,
         )
-    )
-    state["messages"] = messages
-    return state
+
+
+def _clean_outcome_retry_input(prompt: str, failure: str) -> dict[str, Any]:
+    return {
+        "messages": [
+            HumanMessage(
+                content=(
+                    f"{prompt}\n\n"
+                    f"{failure} Discard that model's prose and independently audit the "
+                    "application evidence above. Call exactly one of outcome_satisfied, "
+                    "outcome_needs_revision, or outcome_blocked now. Tool arguments must "
+                    "describe the application state and next application action, never this "
+                    "evaluator protocol."
+                )
+            )
+        ]
+    }
 
 
 def resume_input(
