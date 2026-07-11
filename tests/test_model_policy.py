@@ -41,7 +41,7 @@ class ModelPolicyTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(set(BANNED_MODEL_IDS_UNDER_30B) <= set(configured.excluded_models))
         self.assertIn("openai/gpt-oss-20b", configured.excluded_models)
-        self.assertNotIn("nvidia/nemotron-3-nano-30b-a3b", configured.excluded_models)
+        self.assertIn("nvidia/nemotron-3-nano-30b-a3b", configured.excluded_models)
         self.assertEqual(configured.exploration_interval_seconds, 300.0)
 
 
