@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import cast
+from typing import Any, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import ModelRetryMiddleware
+from langchain_core.messages import HumanMessage
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from nim_router import NimRouter
@@ -115,17 +116,13 @@ async def run_auth_orchestrator(
 
     run_config = cast(RunnableConfig, config.copy() if config else {})
 
-    stream_result: dict[str, object] = {}
+    attempt_input: dict[str, Any] = {
+        "messages": [{"role": "user", "content": _task_prompt(snapshot=snapshot)}]
+    }
+    cumulative_trace: list[dict[str, Any]] = []
     for attempt in range(1, MAX_AUTH_VERDICT_ATTEMPTS + 1):
         stream = agent.astream_events(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": _task_prompt(snapshot=snapshot),
-                    }
-                ]
-            },
+            cast(Any, attempt_input),
             config=run_config,
             version="v3",
         )
@@ -134,7 +131,9 @@ async def run_auth_orchestrator(
             sink=sink,
             root_source="authenticate_default_account",
         )
-        stream_result = result.output
+        trace = result.output.get("_z_apply_tool_trace")
+        if isinstance(trace, list):
+            cumulative_trace.extend(entry for entry in trace if isinstance(entry, dict))
         if auth_result is not None:
             break
         logger.warning(
@@ -142,6 +141,7 @@ async def run_auth_orchestrator(
             attempt,
             MAX_AUTH_VERDICT_ATTEMPTS,
         )
+        attempt_input = _auth_verdict_resume_input(result.output)
     if auth_result is None:
         return AuthOrchestratorRun(
             summary=(
@@ -153,7 +153,7 @@ async def run_auth_orchestrator(
             status="not_verified",
         )
     status, summary = auth_result
-    if status == "authenticated" and not _has_fresh_browser_inspection(stream_result):
+    if status == "authenticated" and not _has_fresh_browser_inspection(cumulative_trace):
         return AuthOrchestratorRun(
             summary=(
                 "Authentication was not verified: no completed BrowserSpecialist "
@@ -165,18 +165,31 @@ async def run_auth_orchestrator(
     return AuthOrchestratorRun(summary=summary, model_id=model_id, status=status)
 
 
-def _has_fresh_browser_inspection(output: dict[str, object]) -> bool:
-    trace = output.get("_z_apply_tool_trace")
-    if not isinstance(trace, list):
-        return False
+def _has_fresh_browser_inspection(trace: Sequence[dict[str, Any]]) -> bool:
     return any(
-        isinstance(entry, dict)
-        and entry.get("source") == "BrowserSpecialist"
+        entry.get("source") == "BrowserSpecialist"
         and entry.get("tool_name") == "browser_snapshot"
         and bool(entry.get("completed"))
         and not entry.get("error")
         for entry in trace
     )
+
+
+def _auth_verdict_resume_input(output: dict[str, Any]) -> dict[str, Any]:
+    state = {key: value for key, value in output.items() if key in {"messages", "todos", "files"}}
+    messages = list(cast(Sequence[Any], state.get("messages", ())))
+    messages.append(
+        HumanMessage(
+            content=(
+                "The fresh BrowserSpecialist inspection from this same authentication "
+                "run is already available above. Reconcile that evidence now and call "
+                "exactly one authentication verdict tool. Do not repeat the inspection "
+                "and do not return a prose-only verdict."
+            )
+        )
+    )
+    state["messages"] = messages
+    return state
 
 
 def _task_prompt(*, snapshot: str) -> str:

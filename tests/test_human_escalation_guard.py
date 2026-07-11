@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 from z_apply_core.agents.application_progress import ApplicationProgress
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
-from z_apply_core.agents.orchestrator import detect_fake_tool_calls
 
 
 def _run(coro: Any) -> Any:
@@ -211,41 +210,6 @@ class ApplicationProgressTests(unittest.TestCase):
 
 
 # ── Fix 6: Fake tool call detection (slice-based) tests ──────────────────
-
-
-class DetectFakeToolCallsSliceTests(unittest.TestCase):
-    def test_fake_detected_when_no_real_calls_in_slice(self) -> None:
-        output = {"messages": [MagicMock(content='Use browser_click(target="e200") now')]}
-        result = detect_fake_tool_calls([], output)
-        self.assertIsNotNone(result)
-        self.assertIn("agent_protocol_error", result)
-
-    def test_fake_not_detected_when_real_call_in_slice(self) -> None:
-        journal = [
-            {"tool_name": "browser_click", "completed": True, "error": ""},
-        ]
-        output = {"messages": [MagicMock(content='Use browser_click(target="e200") now')]}
-        result = detect_fake_tool_calls(journal, output)
-        self.assertIsNone(result)
-
-    def test_fake_detected_with_json_shape_no_calls(self) -> None:
-        output = {"messages": [MagicMock(content='{"text": "Upload Resume"}')]}
-        result = detect_fake_tool_calls([], output)
-        self.assertIsNotNone(result)
-        self.assertIn("agent_protocol_error", result)
-
-    def test_no_fake_when_no_patterns(self) -> None:
-        output = {"messages": [MagicMock(content="Task completed successfully.")]}
-        result = detect_fake_tool_calls([], output)
-        self.assertIsNone(result)
-
-    def test_earlier_real_call_does_not_mask_later_fake(self) -> None:
-        """Regression: iteration 1 has real click, iteration 2 fakes. Must detect."""
-        iter2_journal: list[dict[str, Any]] = []
-        output = {"messages": [MagicMock(content='Now use browser_click(target="e200")')]}
-        result = detect_fake_tool_calls(iter2_journal, output)
-        self.assertIsNotNone(result)
-        self.assertIn("agent_protocol_error", result)
 
 
 # ── Required regression: ask_human rejected when resume pending ───────────

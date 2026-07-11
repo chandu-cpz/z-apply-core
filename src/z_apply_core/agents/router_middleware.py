@@ -31,7 +31,7 @@ ROLE_POLICY: dict[str, dict[str, Any]] = {
     "Verifier": {"priority": "balanced", "reasoning": False},
     "auth_verifier": {"priority": "quality", "reasoning": True},
     "VisionSpecialist": {"priority": "balanced", "reasoning": False, "force_vision": True},
-    "RecoveryAgent": {"priority": "quality", "reasoning": True},
+    "RecoveryAgent": {"priority": "balanced", "reasoning": False},
 }
 
 

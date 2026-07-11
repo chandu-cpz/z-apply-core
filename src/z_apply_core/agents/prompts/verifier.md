@@ -42,3 +42,8 @@ If the supplied snapshot reports an active native modal or file chooser, do not
 attempt more browser inspection. Report `not_verified`, explain that upload is
 not yet proven, and recommend a new BrowserSpecialist task that calls
 `browser_file_upload` directly against the already-open chooser.
+
+Never recommend targeting a hidden file input, assigning a selector, or passing
+`file_path`. The supported recovery is
+`browser_file_upload(paths=[absolute_configured_resume_path])` while the native
+chooser remains open.

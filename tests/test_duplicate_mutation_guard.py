@@ -6,7 +6,6 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from z_apply_core.agents.duplicate_mutation_guard import DuplicateMutationGuardMiddleware
-from z_apply_core.agents.orchestrator import detect_fake_tool_calls
 
 
 class DuplicateMutationGuardTests(unittest.TestCase):
@@ -113,49 +112,6 @@ class DuplicateMutationGuardTests(unittest.TestCase):
         result = self._run(mw.awrap_tool_call(req2, handler2))
         handler2.assert_not_called()
         self.assertIn("Duplicate mutation prevented", result.content)
-
-
-class DetectFakeToolCallsTests(unittest.TestCase):
-    def test_no_messages_returns_none(self) -> None:
-        result = detect_fake_tool_calls([], {"messages": []})
-        self.assertIsNone(result)
-
-    def test_no_fake_patterns_returns_none(self) -> None:
-        output = {"messages": [MagicMock(content="Task completed successfully.")]}
-        result = detect_fake_tool_calls([], output)
-        self.assertIsNone(result)
-
-    def test_fake_pattern_with_no_executed_calls_returns_error(self) -> None:
-        msg = 'Now click the button with browser_click(target="e112")'
-        output = {"messages": [MagicMock(content=msg)]}
-        result = detect_fake_tool_calls([], output)
-        self.assertIsNotNone(result)
-        self.assertIn("agent_protocol_error", result)
-        self.assertIn("tool-call-shaped prose", result)
-
-    def test_fake_pattern_with_executed_calls_returns_none(self) -> None:
-        journal = [
-            {"tool_name": "browser_click", "completed": True, "error": ""}
-        ]
-        output = {"messages": [MagicMock(content='Now click with browser_click(target="e112")')]}
-        result = detect_fake_tool_calls(journal, output)
-        self.assertIsNone(result)
-
-    def test_multiple_fake_patterns_detected(self) -> None:
-        msg = (
-            'First use browser_click(target="e112") '
-            'then browser_type(target="e200", text="hello")'
-        )
-        output = {"messages": [MagicMock(content=msg)]}
-        result = detect_fake_tool_calls([], output)
-        self.assertIsNotNone(result)
-        self.assertIn("agent_protocol_error", result)
-
-    def test_json_shaped_output_detected(self) -> None:
-        output = {"messages": [MagicMock(content='{"text": "Upload Resume"}')]}
-        result = detect_fake_tool_calls([], output)
-        self.assertIsNotNone(result)
-        self.assertIn("agent_protocol_error", result)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,15 @@ from langchain_core.tools import BaseTool, StructuredTool
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 
+_AGENT_TOOL_DESCRIPTIONS = {
+    "browser_file_upload": (
+        "Upload files into the currently open native file chooser. This tool has no "
+        "target or selector argument. First open the chooser with browser_click, then "
+        "immediately call browser_file_upload with paths as a JSON array of absolute "
+        "paths, for example paths=[\"/absolute/resume.pdf\"]."
+    ),
+}
+
 INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_snapshot",
     "browser_find",
@@ -103,7 +112,12 @@ class BrowserToolRegistry:
         return StructuredTool.from_function(
             coroutine=call_tool,
             name=spec.name,
-            description=spec.description or spec.title or spec.name,
+            description=(
+                _AGENT_TOOL_DESCRIPTIONS.get(spec.name)
+                or spec.description
+                or spec.title
+                or spec.name
+            ),
             args_schema=_tool_schema(spec),
             infer_schema=False,
         )

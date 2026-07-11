@@ -72,13 +72,10 @@ class AuthOrchestratorContractTests(unittest.IsolatedAsyncioTestCase):
         async def stream_result(*_args: Any, **_kwargs: Any) -> V3RunResult:
             nonlocal calls
             calls += 1
-            if calls == 2:
-                verdict = next(
-                    tool for tool in captured_tools if tool.name == "authentication_verified"
-                )
-                await verdict.ainvoke({"evidence": "Welcome, Chandrakanth"})
+            if calls == 1:
                 return V3RunResult(
                     output={
+                        "messages": [],
                         "_z_apply_tool_trace": [
                             {
                                 "source": "BrowserSpecialist",
@@ -89,7 +86,11 @@ class AuthOrchestratorContractTests(unittest.IsolatedAsyncioTestCase):
                         ]
                     }
                 )
-            return V3RunResult(output={})
+            verdict = next(
+                tool for tool in captured_tools if tool.name == "authentication_verified"
+            )
+            await verdict.ainvoke({"evidence": "Welcome, Chandrakanth"})
+            return V3RunResult(output={"messages": []})
 
         with (
             patch.object(router, "lease", AsyncMock(return_value=selection)),
@@ -117,6 +118,8 @@ class AuthOrchestratorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "authenticated")
         self.assertEqual(result.summary, "Welcome, Chandrakanth")
         self.assertEqual(len(agent.inputs), 2)
+        reminder = agent.inputs[1]["messages"][-1]
+        self.assertIn("call exactly one authentication verdict tool", reminder.content)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from z_apply_core.agents.application_outcome import (
     MAX_OUTCOME_VERDICT_ATTEMPTS,
     OutcomeDecision,
     evaluate_application_outcome,
+    fresh_snapshot,
 )
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.stream_events import V3RunResult
@@ -27,7 +28,7 @@ class FakeWorker:
 
 
 class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_premature_worker_stop_is_evaluated_and_resumed_with_full_state(
+    async def test_premature_worker_stop_resumes_without_untrusted_assistant_prose(
         self,
     ) -> None:
         worker = FakeWorker()
@@ -109,8 +110,10 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         resumed = worker.inputs[1]
         self.assertEqual(resumed["todos"], first_output["todos"])
         self.assertEqual(resumed["files"], first_output["files"])
+        self.assertEqual(len(resumed["messages"]), 1)
         self.assertIsInstance(resumed["messages"][-1], HumanMessage)
         self.assertIn("Upload the configured resume", resumed["messages"][-1].content)
+        self.assertNotIn("I will inspect the form", resumed["messages"][-1].content)
         cooldown_model.assert_called_once_with("provider/model", 60.0)
         final_journal = evaluator.await_args_list[-1].kwargs["tool_journal"]
         self.assertEqual(
@@ -171,6 +174,19 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class OutcomeEvaluatorContractTests(unittest.IsolatedAsyncioTestCase):
+    async def test_fresh_snapshot_preserves_current_modal_failure(self) -> None:
+        snapshot_tool = MagicMock()
+        snapshot_tool.name = "browser_snapshot"
+        snapshot_tool.ainvoke = AsyncMock(
+            side_effect=RuntimeError("browser_snapshot does not handle modal state")
+        )
+
+        snapshot = await fresh_snapshot([snapshot_tool], "stale form snapshot")
+
+        self.assertIn("Snapshot unavailable", snapshot)
+        self.assertIn("modal state", snapshot)
+        self.assertNotEqual(snapshot, "stale form snapshot")
+
     async def test_missing_transition_is_retried_then_reported_as_failed(self) -> None:
         router = NimRouter()
         selection = SimpleNamespace(llm=MagicMock(), info=SimpleNamespace(id="provider/model"))

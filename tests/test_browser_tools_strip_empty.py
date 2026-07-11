@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from typing import Any
+from unittest.mock import AsyncMock
 
 from z_apply_core.browser_tools import BrowserToolRegistry
 
@@ -95,6 +96,21 @@ class StripEmptyArgsTests(unittest.TestCase):
         self._run(tools[0].coroutine(target="#btn", filename="out.png"))
         self.assertEqual(self.captured["target"], "#btn")
         self.assertEqual(self.captured["filename"], "out.png")
+
+    def test_file_upload_tool_exposes_native_chooser_contract(self) -> None:
+        spec = SimpleSpec(
+            name="browser_file_upload",
+            title="Upload files",
+            description="Upload one or multiple files",
+            parameters=[SimpleParam("paths", list[str], None, "File paths", False)],
+        )
+        registry = BrowserToolRegistry(specs=[spec], caller=AsyncMock())
+
+        tool = registry.langchain_tools()[0]
+
+        self.assertIn("currently open native file chooser", tool.description)
+        self.assertIn('paths=["/absolute/resume.pdf"]', tool.description)
+        self.assertIn("no target or selector", tool.description)
 
 
 if __name__ == "__main__":

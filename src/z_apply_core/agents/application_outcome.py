@@ -84,7 +84,7 @@ async def evaluate_application_outcome(
         return "Blocking dependency recorded."
 
     try:
-        selection = await router.lease(tools=True, priority="quality", reasoning=True)
+        selection = await router.lease(tools=True, priority="balanced", reasoning=False)
     except (NimRouterError, ImportError, ValueError) as exc:
         return OutcomeDecision("failed", f"Outcome evaluator model selection failed: {exc}")
 
@@ -93,7 +93,7 @@ async def evaluate_application_outcome(
         tools=[outcome_satisfied, outcome_needs_revision, outcome_blocked],
         system_prompt=load_prompt("goal_evaluator.md"),
         middleware=[
-            ModelRetryMiddleware(max_retries=3, on_failure="error"),
+            ModelRetryMiddleware(max_retries=1, on_failure="error"),
             NimRouterMiddleware(
                 router,
                 role="RecoveryAgent",
@@ -108,17 +108,37 @@ async def evaluate_application_outcome(
         snapshot=snapshot,
     )
     errors: list[str] = []
+    attempt_input: dict[str, Any] = {
+        "messages": [{"role": "user", "content": prompt}]
+    }
     for _attempt in range(1, MAX_OUTCOME_VERDICT_ATTEMPTS + 1):
         try:
             stream = evaluator.astream_events(
-                {"messages": [{"role": "user", "content": prompt}]},
+                cast(Any, attempt_input),
                 version="v3",
             )
-            await consume_deepagent_stream(stream, sink=sink, root_source="GoalEvaluator")
+            run = await consume_deepagent_stream(
+                stream,
+                sink=sink,
+                root_source="GoalEvaluator",
+            )
         except Exception as exc:  # noqa: BLE001 - report an explicit runtime failure
             errors.append(str(exc))
+            attempt_input = {
+                "messages": [
+                    HumanMessage(
+                        content=(
+                            "The previous evaluator model call failed technically. Re-evaluate "
+                            "the supplied application evidence and call exactly one outcome "
+                            "transition tool now."
+                        )
+                    )
+                ]
+            }
+            continue
         if decision is not None:
             return decision
+        attempt_input = _outcome_verdict_resume_input(run.output)
 
     detail = "; ".join(errors) if errors else "no outcome transition tool was called"
     return OutcomeDecision(
@@ -131,21 +151,55 @@ async def evaluate_application_outcome(
     )
 
 
-def resume_input(output: dict[str, Any], decision: OutcomeDecision) -> dict[str, Any]:
+def _outcome_verdict_resume_input(output: dict[str, Any]) -> dict[str, Any]:
     state = {key: value for key, value in output.items() if key in {"messages", "todos", "files"}}
-    messages = list(cast(Sequence[Any], state.get("messages", ())))
+    messages = list(state.get("messages", ()))
     messages.append(
         HumanMessage(
             content=(
-                "Independent application-outcome evaluation: needs revision.\n\n"
-                f"Evidence audit:\n{decision.explanation}\n\n"
-                f"Next concrete action:\n{decision.next_action}\n\n"
-                "Continue from the existing browser state. Perform the action through the "
-                "appropriate specialist now; do not restate or redesign the whole plan."
+                "Your evidence audit above did not call an outcome transition tool. "
+                "Complete the same evaluation now by calling exactly one of "
+                "outcome_satisfied, outcome_needs_revision, or outcome_blocked. "
+                "Do not repeat the audit in prose."
             )
         )
     )
     state["messages"] = messages
+    return state
+
+
+def resume_input(
+    output: dict[str, Any],
+    decision: OutcomeDecision,
+    *,
+    task: str,
+    snapshot: str,
+    resume_path: str,
+) -> dict[str, Any]:
+    """Start a clean worker turn from trusted runtime evidence and model feedback.
+
+    Prior assistant prose is intentionally excluded: only durable DeepAgents
+    state plus the fresh browser snapshot and independent evaluator decision
+    cross an outcome-iteration boundary.
+    """
+    state = {key: value for key, value in output.items() if key in {"todos", "files"}}
+    state["messages"] = [
+        HumanMessage(
+            content=(
+                "Continue the current job-application objective.\n\n"
+                f"Requested task:\n{task}\n\n"
+                f"Configured resume:\n{resume_path}\n\n"
+                "Independent application-outcome evaluation: needs revision.\n\n"
+                f"Evidence audit:\n{decision.explanation}\n\n"
+                f"Next concrete action:\n{decision.next_action}\n\n"
+                "BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE\n"
+                f"{snapshot}\n"
+                "END UNTRUSTED CURRENT BROWSER EVIDENCE\n\n"
+                "Perform the next action now through one actual native specialist task call. "
+                "Do not print, simulate, or invent task calls or specialist results."
+            )
+        )
+    ]
     return state
 
 
@@ -158,8 +212,8 @@ async def fresh_snapshot(browser_tools: Sequence[BaseTool], fallback: str) -> st
         return fallback
     try:
         value = await snapshot_tool.ainvoke({})
-    except Exception:  # noqa: BLE001 - evaluator still receives prior evidence
-        return fallback
+    except Exception as exc:  # noqa: BLE001 - evaluator needs the current evidence failure
+        return f"Snapshot unavailable: {exc}"
     return str(value or fallback)
 
 
@@ -171,8 +225,8 @@ def _evaluation_prompt(
     snapshot: str,
 ) -> str:
     evidence = {
-        "messages": [_message_record(message) for message in output.get("messages", ())],
         "todos": output.get("todos", []),
+        "files": output.get("files", {}),
         "tool_journal": list(tool_journal),
         "current_browser_snapshot": snapshot,
     }
@@ -191,18 +245,6 @@ Call exactly one outcome transition tool. If any criterion lacks direct evidence
 and name the next concrete operation. Use blocked only for a current dependency that prevents all
 remaining safe progress.
 """
-
-
-def _message_record(message: Any) -> dict[str, Any]:
-    return {
-        "type": type(message).__name__,
-        "name": getattr(message, "name", None),
-        "content": getattr(message, "content", ""),
-        "tool_calls": getattr(message, "tool_calls", None),
-        "tool_call_id": getattr(message, "tool_call_id", None),
-    }
-
-
 def append_tool_journal(
     journal: list[dict[str, Any]],
     stream_result: V3RunResult,

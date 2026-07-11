@@ -94,8 +94,9 @@ Resume upload is one semantic operation made of multiple tool calls:
 1. Confirm the target is the primary resume/CV control, not Additional
    Documents, Add attachment, or another optional upload.
 2. Click that primary file control once to open the native file chooser.
-3. **Immediately call `browser_file_upload` with the absolute file path while the chooser is
-   open.** Do NOT call `browser_click` again. Do NOT call `browser_snapshot`.
+3. **Immediately call `browser_file_upload` with
+   `paths=["<absolute configured resume path>"]` while the chooser is open.**
+   Do NOT call `browser_click` again. Do NOT call `browser_snapshot`.
    Do NOT inspect or reason about the native chooser between those two calls.
 
 Proceed immediately to `browser_file_upload`; do not click the file control
@@ -113,6 +114,11 @@ browser tool reports that it cannot handle the modal state, do not snapshot,
 click, press Escape, or reopen the control. Immediately call
 `browser_file_upload` with the configured absolute resume path, then inspect
 the resulting page state.
+
+`browser_file_upload` has no target, ref, selector, or `file_path` argument. Do
+not search for a hidden file input and do not propose assigning a selector such
+as `#resumeUploadInput`. The supported upload contract is the active native
+chooser followed by `browser_file_upload(paths=[absolute_path])`.
 
 Do not upload any other file. If current evidence already confirms
 `Chandrakanth-V-Resume.pdf` in the primary resume field, report it and do not
