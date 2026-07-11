@@ -11,6 +11,7 @@ from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 
 from z_apply_core.agents.browser_action_verification import BrowserActionVerificationMiddleware
+from z_apply_core.agents.duplicate_mutation_guard import DuplicateMutationGuardMiddleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.browser import build_browser_specialist
@@ -53,6 +54,7 @@ async def build_specialists(
             router=router,
             role="BrowserSpecialist",
             model=fallback_model,
+            extra_middleware=[DuplicateMutationGuardMiddleware()],
         ),
         _with_routing(
             build_vision_specialist(browser_tools),

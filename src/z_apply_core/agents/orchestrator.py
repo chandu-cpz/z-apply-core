@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -27,12 +28,29 @@ from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
-from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
+from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES, VERIFIER_BROWSER_TOOLS
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
 logger = logging.getLogger(__name__)
 NO_PROGRESS_MODEL_COOLDOWN_SECONDS = 60.0
+
+_FAKE_TOOL_CALL_PATTERNS = (
+    "browser_click(",
+    "browser_type(",
+    "browser_fill_form(",
+    "browser_select_option(",
+    "browser_file_upload(",
+    "browser_find(",
+    "browser_snapshot(",
+)
+
+_JSON_TOOL_SHAPE_PATTERNS = (
+    '"text":',
+    '"target":',
+    '{"text":',
+    '{"target":',
+)
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/browser-artifacts"
@@ -149,6 +167,24 @@ async def run_orchestrator(
         )
         stream_result = await consume_deepagent_stream(stream, sink=sink)
         append_tool_journal(tool_journal, stream_result)
+
+        fake_error = detect_fake_tool_calls(tool_journal, stream_result.output)
+        if fake_error:
+            node_info(logger, "goal_evaluator", "fake tool call detected: %s", fake_error[:120])
+            attempt_input = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": (
+                            f"CRITICAL PROTOCOL VIOLATION:\n{fake_error}\n\n"
+                            "Take a fresh browser_snapshot now and observe the current page state. "
+                            "Then decide what to do next based on actual evidence."
+                        ),
+                    }
+                ]
+            }
+            continue
+
         current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
         decision = await evaluate_application_outcome(
             task=task,
@@ -195,6 +231,47 @@ async def run_orchestrator(
         model_id=model_id,
         status="incomplete",
     )
+
+
+def detect_fake_tool_calls(
+    tool_journal: list[dict[str, Any]],
+    stream_output: dict[str, Any],
+) -> str | None:
+    """Detect if BrowserSpecialist emitted tool-call-shaped prose without executing tools.
+
+    Returns an error message if fake tool calls are detected, None otherwise.
+    """
+    messages = stream_output.get("messages", [])
+    last_content = ""
+    for msg in reversed(messages):
+        content = getattr(msg, "content", "") or ""
+        if isinstance(content, str) and content.strip():
+            last_content = content
+            break
+
+    if not last_content:
+        return None
+
+    has_fake_pattern = any(pat in last_content for pat in _FAKE_TOOL_CALL_PATTERNS)
+    has_json_shape = any(pat in last_content for pat in _JSON_TOOL_SHAPE_PATTERNS)
+    is_fake = has_fake_pattern or (has_json_shape and "{" in last_content and "}" in last_content)
+
+    browser_changing_calls = [
+        entry
+        for entry in tool_journal
+        if entry.get("tool_name") in BROWSER_CHANGING_TOOL_NAMES
+        and entry.get("completed")
+        and not entry.get("error")
+    ]
+
+    if is_fake and not browser_changing_calls:
+        return (
+            "agent_protocol_error: BrowserSpecialist emitted tool-call-shaped prose "
+            "without executing any browser tool. Do not claim tool execution happened "
+            "when it did not. Take a fresh snapshot to observe the current state."
+        )
+
+    return None
 
 
 def _task_prompt(*, job_url: str, task: str, snapshot: str, resume_path: str = "") -> str:

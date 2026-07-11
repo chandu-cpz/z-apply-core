@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Literal
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware.types import (
@@ -14,7 +15,7 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, tool
 from langgraph.types import Command
 from nim_router import NimRouter
 
@@ -23,6 +24,51 @@ from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationDecision:
+    status: Literal["verified", "not_verified", "blocked"]
+    detail: str
+
+
+class VerdictState:
+    """Mutable container shared between verdict tools and the caller."""
+
+    __slots__ = ("decision",)
+
+    def __init__(self) -> None:
+        self.decision: VerificationDecision | None = None
+
+
+def _make_verifier_tools(
+    state: VerdictState | None = None,
+) -> list[BaseTool]:
+    if state is None:
+        state = VerdictState()
+
+    @tool
+    async def verification_verified(evidence: str) -> str:
+        """Record that the requested operation is proven by current browser evidence."""
+        if state.decision is None:
+            state.decision = VerificationDecision("verified", evidence)
+        return "Verification verdict recorded."
+
+    @tool
+    async def verification_not_verified(reason: str) -> str:
+        """Record that evidence is missing, stale, contradictory, or shows the operation did not take effect."""
+        if state.decision is None:
+            state.decision = VerificationDecision("not_verified", reason)
+        return "Verification verdict recorded."
+
+    @tool
+    async def verification_blocked(reason: str) -> str:
+        """Record a specific current condition that prevents the named operation."""
+        if state.decision is None:
+            state.decision = VerificationDecision("blocked", reason)
+        return "Verification verdict recorded."
+
+    return [verification_verified, verification_not_verified, verification_blocked]
 
 
 class PostTaskVerificationMiddleware(
@@ -55,11 +101,21 @@ class PostTaskVerificationMiddleware(
             (tool for tool in read_only_browser_tools if tool.name == "browser_snapshot"),
             None,
         )
-        self._verifier = create_deep_agent(
-            model=fallback_model,
-            tools=list(read_only_browser_tools),
-            system_prompt=load_prompt(prompt_name),
-            middleware=[NimRouterMiddleware(router, role=verifier_role)],
+        self._read_only_browser_tools = list(read_only_browser_tools)
+        self._fallback_model = fallback_model
+        self._router = router
+        self._prompt_name = prompt_name
+        self._verifier_role = verifier_role
+
+    def _build_verifier(
+        self,
+        verdict_tools: list[BaseTool],
+    ) -> Any:
+        return create_deep_agent(
+            model=self._fallback_model,
+            tools=[*verdict_tools, *self._read_only_browser_tools],
+            system_prompt=load_prompt(self._prompt_name),
+            middleware=[NimRouterMiddleware(self._router, role=self._verifier_role)],
         )
 
     async def awrap_tool_call(
@@ -126,8 +182,12 @@ class PostTaskVerificationMiddleware(
         task_description: str,
         snapshot: str,
     ) -> str:
+        state = VerdictState()
+        verdict_tools = _make_verifier_tools(state)
+        verifier = self._build_verifier(verdict_tools)
+
         try:
-            stream = self._verifier.astream_events(
+            stream = verifier.astream_events(
                 {
                     "messages": [
                         {
@@ -140,17 +200,20 @@ class PostTaskVerificationMiddleware(
                                 f"{snapshot}\n\n"
                                 "Evaluate only whether the named semantic operation and "
                                 "success condition are satisfied. "
-                                "Return the required verdict format based on that evidence."
+                                "Call exactly one verdict tool to record your finding."
                             ),
                         }
                     ]
                 },
                 version="v3",
             )
-            run = await consume_deepagent_stream(stream)
+            await consume_deepagent_stream(stream)
         except Exception as exc:  # noqa: BLE001 - verdict is returned to the orchestrator
             return f"verifier_error: automatic verifier failed: {exc}"
-        return _last_message_text(run.output) or "verifier_error: verifier returned no result."
+
+        if state.decision is None:
+            return "verifier_error: verifier ended without recording a verdict"
+        return f"{state.decision.status}: {state.decision.detail}"
 
     async def _fresh_snapshot(self) -> str:
         if self._snapshot_tool is None:
@@ -159,22 +222,3 @@ class PostTaskVerificationMiddleware(
             return str(await self._snapshot_tool.ainvoke({}))
         except Exception as exc:  # noqa: BLE001 - passed to verifier as failed evidence
             return f"Snapshot unavailable: {exc}"
-
-
-def _last_message_text(output: dict[str, Any]) -> str:
-    messages = output.get("messages")
-    if not isinstance(messages, list):
-        return ""
-    for message in reversed(messages):
-        content = getattr(message, "content", "")
-        if isinstance(content, str) and content.strip():
-            return content.strip()
-        if isinstance(content, list):
-            parts = [
-                item.get("text", "")
-                for item in content
-                if isinstance(item, dict) and isinstance(item.get("text"), str)
-            ]
-            if parts:
-                return "\n".join(parts).strip()
-    return ""

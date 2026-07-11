@@ -32,8 +32,6 @@ Rules:
   from post-upload evidence such as the correct filename or populated primary
   resume field.
 
-Return exactly one line:
-
-- `verified: <operation-specific browser evidence>`
-- `blocked: <specific blocker and the operation it prevents>`
-- `not_verified: <missing or contradictory evidence>`
+You MUST call exactly one of the three verdict tools to record your finding.
+Do NOT output verdict text directly. The verdict tool is the only way to
+record a result.
