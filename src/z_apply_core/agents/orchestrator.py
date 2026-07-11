@@ -30,6 +30,7 @@ from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
 logger = logging.getLogger(__name__)
+NO_PROGRESS_MODEL_COOLDOWN_SECONDS = 60.0
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/browser-artifacts"
@@ -85,6 +86,11 @@ async def run_orchestrator(
         model_id,
     )
 
+    router_middleware = NimRouterMiddleware(
+        router,
+        role="orchestrator",
+        initial_selection=selection,
+    )
     agent = create_deep_agent(
         model=selection.llm,
         tools=list(human_tools),
@@ -94,11 +100,7 @@ async def run_orchestrator(
                 ["BrowserSpecialist", "FieldMapper", "AnswerWriter", "Verifier", "VisionSpecialist"]
             ),
             ModelRetryMiddleware(max_retries=3, on_failure="error"),
-            NimRouterMiddleware(
-                router,
-                role="orchestrator",
-                initial_selection=selection,
-            ),
+            router_middleware,
         ],
         subagents=await build_specialists(
             router,
@@ -124,6 +126,7 @@ async def run_orchestrator(
 
     for iteration in range(MAX_OUTCOME_ITERATIONS):
         node_info(logger, "goal_evaluator", "starting outcome iteration %s", iteration + 1)
+        journal_start = len(tool_journal)
         stream = agent.astream_events(
             cast(Any, attempt_input),
             config=run_config,
@@ -151,6 +154,22 @@ async def run_orchestrator(
                 model_id=model_id,
                 status="incomplete",
             )
+        if not any(
+            entry.get("completed") and not entry.get("error")
+            for entry in tool_journal[journal_start:]
+        ):
+            stalled_model_id = router_middleware.last_model_id
+            if stalled_model_id:
+                router.cooldown_model(
+                    stalled_model_id,
+                    NO_PROGRESS_MODEL_COOLDOWN_SECONDS,
+                )
+                node_info(
+                    logger,
+                    "goal_evaluator",
+                    "no executable progress; cooling model %s before retry",
+                    stalled_model_id,
+                )
         attempt_input = resume_input(stream_result.output, decision)
 
     return OrchestratorRun(

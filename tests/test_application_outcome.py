@@ -33,17 +33,10 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
             info=SimpleNamespace(id="provider/model"),
         )
         first_output = {
-            "messages": [AIMessage(content="The form is open; I will upload the resume next.")],
+            "messages": [AIMessage(content="I will inspect the form and upload the resume next.")],
             "todos": [{"content": "Upload resume", "status": "pending"}],
             "files": {"notes.md": "worker state"},
-            "_z_apply_tool_trace": [
-                {
-                    "source": "BrowserSpecialist",
-                    "tool_name": "browser_click",
-                    "completed": True,
-                    "output": "application form visible",
-                }
-            ],
+            "_z_apply_tool_trace": [],
         }
         second_output = {
             "messages": [AIMessage(content="Resume uploaded and form review completed.")],
@@ -61,6 +54,7 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(router, "lease", AsyncMock(return_value=selection)),
+            patch.object(router, "cooldown_model") as cooldown_model,
             patch(
                 "z_apply_core.agents.orchestrator.create_deep_agent",
                 return_value=worker,
@@ -113,10 +107,11 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resumed["files"], first_output["files"])
         self.assertIsInstance(resumed["messages"][-1], HumanMessage)
         self.assertIn("Upload the configured resume", resumed["messages"][-1].content)
+        cooldown_model.assert_called_once_with("provider/model", 60.0)
         final_journal = evaluator.await_args_list[-1].kwargs["tool_journal"]
         self.assertEqual(
             [entry["tool_name"] for entry in final_journal],
-            ["browser_click", "browser_file_upload"],
+            ["browser_file_upload"],
         )
 
 

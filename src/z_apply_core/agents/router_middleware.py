@@ -70,10 +70,15 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         self._role = role
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": False})
         self._initial_selection = initial_selection
+        self._last_model_id = initial_selection.info.id if initial_selection is not None else ""
 
     @property
     def role(self) -> str:
         return self._role
+
+    @property
+    def last_model_id(self) -> str:
+        return self._last_model_id
 
     async def awrap_model_call(
         self,
@@ -110,6 +115,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 reasoning=reasoning,
                 priority=priority,
             )
+        self._last_model_id = selection.info.id
 
         logger.debug(
             "NimRouterMiddleware leased model=%s for role=%s",

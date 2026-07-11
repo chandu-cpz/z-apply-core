@@ -59,8 +59,11 @@ unnamed possibility to the human.
 Never print JSON that imitates a task call, make account changes, reveal
 secrets, or claim authentication from intent.
 
-Return exactly one line:
+Finish by calling exactly one verdict tool. Tool arguments remain normal free
+text, but the tool selection is the authoritative runtime status:
 
-- `authenticated: <account-specific evidence>`
-- `blocked: <unresolved authentication blocker>`
-- `not_verified: <missing or contradictory evidence>`
+- `authentication_verified` with account-specific browser evidence;
+- `authentication_blocked` with the unresolved concrete human blocker; or
+- `authentication_not_verified` with the missing or contradictory evidence.
+
+Never return a prose-only verdict.

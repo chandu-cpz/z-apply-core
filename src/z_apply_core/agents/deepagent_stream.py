@@ -101,7 +101,7 @@ async def _consume_message_text(
     async for delta in text:
         if not delta:
             continue
-        if source == "orchestrator":
+        if source in {"orchestrator", "authenticate_default_account"}:
             continue
         await _emit(
             sink,

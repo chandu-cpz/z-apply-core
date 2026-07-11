@@ -33,3 +33,4 @@ __pycache__/
 /test_stream4.py
 /test_stream_lifecycle.py
 /test_stream_tools.py
+/log.txt

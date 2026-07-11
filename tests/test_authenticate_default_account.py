@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from nim_router import NimRouter
 
-from z_apply_core.agents.result import OrchestratorRun
+from z_apply_core.agents.result import AuthOrchestratorRun
 from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
 from z_apply_core.nodes.authenticate_default_account import (
     SIMPLIFY_DASHBOARD_URL,
@@ -73,11 +73,12 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
         )
         captured: dict[str, Any] = {}
 
-        async def fake_run_auth_orchestrator(**kwargs: Any) -> OrchestratorRun:
+        async def fake_run_auth_orchestrator(**kwargs: Any) -> AuthOrchestratorRun:
             captured.update(kwargs)
-            return OrchestratorRun(
-                summary="authenticated: Simplify verified by Verifier.",
+            return AuthOrchestratorRun(
+                summary="Simplify verified by Verifier.",
                 model_id="test/model",
+                status="authenticated",
             )
 
         with (

@@ -55,7 +55,7 @@ async def authenticate_default_account(
         )
 
         restored_snapshot = await _restore_job_page(runtime, original_url)
-        status = _status_from_summary(run.summary)
+        status = run.status
         await _emit(sink, status, run.summary)
         return {
             "auth_status": status,
@@ -83,19 +83,6 @@ async def _restore_job_page(runtime: RunRuntime, original_url: str) -> str:
     if restored_snapshot.startswith("### Error"):
         return restored_snapshot
     return await runtime.browser.tools.call("browser_snapshot")
-
-
-def _status_from_summary(summary: str) -> str:
-    text = summary.lower()
-    if "blocked" in text:
-        return "blocked"
-    if "not_verified" in text or "not verified" in text:
-        return "not_verified"
-    if "not authenticated" in text or "unauthenticated" in text:
-        return "not_verified"
-    if "authenticated" in text:
-        return "authenticated"
-    return "unknown"
 
 
 def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
