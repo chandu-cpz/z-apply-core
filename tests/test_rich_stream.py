@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unittest
 from io import StringIO
-from unittest.mock import MagicMock, patch
 
 from rich.console import Console
 
@@ -15,43 +14,61 @@ def event(event_name: str, *, name: str, **data: object) -> FrameworkTraceEvent:
 
 
 class RichStreamRendererTests(unittest.IsolatedAsyncioTestCase):
-    async def test_live_trace_becomes_static_in_chronological_order(self) -> None:
+    async def test_agent_lifecycle_uses_logger_instead_of_direct_console_output(self) -> None:
         output = StringIO()
         renderer = RichStreamRenderer(
             Console(file=output, color_system=None, force_terminal=False, width=100)
         )
 
-        with patch("z_apply_core.rich_stream.Live", return_value=MagicMock()) as live_type:
+        with self.assertLogs("z_apply_core.rich_stream", level="INFO") as captured:
             await renderer.accept(
                 event(
-                    "agent_message_delta",
+                    "agent_lifecycle",
                     name="BrowserSpecialist",
-                    kind="reasoning",
-                    delta="internal chain of thought",
-                )
-            )
-            await renderer.accept(
-                event(
-                    "agent_message_delta",
-                    name="BrowserSpecialist",
-                    kind="text",
-                    delta="Observed the application form.",
-                )
-            )
-            await renderer.accept(
-                event(
-                    "agent_tool_start",
-                    name="BrowserSpecialist",
-                    tool_name="browser_snapshot",
-                    input={},
+                    status="started",
+                    path="",
                 )
             )
 
+        self.assertIn("BrowserSpecialist", captured.output[0])
+        self.assertIn("started", captured.output[0])
+        self.assertEqual(output.getvalue(), "")
+
+    async def test_buffered_deltas_flush_as_static_panels_before_tools(self) -> None:
+        output = StringIO()
+        renderer = RichStreamRenderer(
+            Console(file=output, color_system=None, force_terminal=False, width=100)
+        )
+
+        await renderer.accept(
+            event(
+                "agent_message_delta",
+                name="BrowserSpecialist",
+                kind="reasoning",
+                delta="internal chain of thought",
+            )
+        )
+        await renderer.accept(
+            event(
+                "agent_message_delta",
+                name="BrowserSpecialist",
+                kind="text",
+                delta="Observed the application form.",
+            )
+        )
+        # Deltas stay buffered until a stream boundary.
+        self.assertEqual(output.getvalue(), "")
+
+        await renderer.accept(
+            event(
+                "agent_tool_start",
+                name="BrowserSpecialist",
+                tool_name="browser_snapshot",
+                input={},
+            )
+        )
+
         rendered = output.getvalue()
-        live_kwargs = live_type.call_args.kwargs
-        self.assertTrue(live_kwargs["transient"])
-        self.assertEqual(live_kwargs["vertical_overflow"], "ellipsis")
-        live_type.return_value.stop.assert_called_once_with()
         self.assertIn("internal chain of thought", rendered)
         self.assertIn("Observed the application form.", rendered)
         self.assertIn("tool start: browser_snapshot", rendered)

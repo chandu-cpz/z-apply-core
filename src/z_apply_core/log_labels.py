@@ -15,3 +15,12 @@ def node_info(logger: logging.Logger, node: str, message: str, *args: Any) -> No
 
 def run_info(logger: logging.Logger, message: str, *args: Any) -> None:
     logger.info("[black on green] RUN [/] " + message, *args, extra={"markup": True})
+
+
+def agent_info(logger: logging.Logger, agent: str, message: str, *args: Any) -> None:
+    logger.info(
+        "[black on yellow] AGENT [/][black on bright_blue] %s [/] " + message,
+        agent,
+        *args,
+        extra={"markup": True},
+    )
