@@ -9,6 +9,11 @@ filename and pass bare refs such as `e112` or `f1e9` as browser-tool targets. If
 a ref is stale, capture one fresh inline snapshot and retry. Call tools
 directly; never output JSON that only resembles a tool call.
 
+The parent task must name an `OPERATION:` and `SUCCESS CONDITION:`. Every
+changing browser-tool call requires `verification_goal`; copy that semantic
+operation and visible success condition into it. Never use an element ref as
+the expected outcome because refs may be reassigned after a mutation.
+
 For an inspection task, always obtain fresh browser evidence. If the ARIA
 snapshot contains only generic containers, empty roles, images, or an empty
 `alert`, call `browser_take_screenshot` without a filename and inspect the

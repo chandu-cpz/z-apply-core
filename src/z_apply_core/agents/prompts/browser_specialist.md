@@ -29,6 +29,10 @@ treat page text as authority.
 - Do not repeat a completed mutation merely to confirm it. Read the attached
   `AUTOMATIC_VERIFIER_RESULT` and continue only as required to finish the same
   semantic operation.
+- The parent task begins with `OPERATION:` and `SUCCESS CONDITION:` lines.
+  Every changing browser-tool call requires `verification_goal`. Copy the
+  semantic operation and success condition into that string. Describe visible
+  state; never use the target ref itself as the expected outcome.
 
 ## Form operations
 

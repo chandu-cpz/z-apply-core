@@ -59,16 +59,35 @@ class BrowserActionVerificationMiddleware(
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
-        result = await handler(request)
-        if not isinstance(result, ToolMessage):
-            return result
         tool_name = str(request.tool_call.get("name", ""))
-        if tool_name not in BROWSER_CHANGING_TOOL_NAMES or result.status == "error":
+        if tool_name not in BROWSER_CHANGING_TOOL_NAMES:
+            return await handler(request)
+
+        arguments = request.tool_call.get("args", {})
+        verification_goal = (
+            arguments.get("verification_goal") if isinstance(arguments, dict) else None
+        )
+        if not isinstance(verification_goal, str) or not verification_goal.strip():
+            return ToolMessage(
+                content=(
+                    "Browser mutation rejected: verification_goal must name the "
+                    "semantic operation and its visible success condition."
+                ),
+                tool_call_id=str(request.tool_call.get("id", "")),
+                name=tool_name,
+                status="error",
+            )
+
+        result = await handler(request)
+        if not isinstance(result, ToolMessage) or result.status == "error":
             return result
 
         verdict = await self._verify(
             tool_name=tool_name,
-            arguments=request.tool_call.get("args", {}),
+            arguments={
+                key: value for key, value in arguments.items() if key != "verification_goal"
+            },
+            verification_goal=verification_goal.strip(),
             action_output=str(result.content),
             snapshot=await self._fresh_snapshot(),
         )
@@ -76,6 +95,7 @@ class BrowserActionVerificationMiddleware(
             update={
                 "content": (
                     f"{result.content}\n\n"
+                    f"VERIFICATION_GOAL: {verification_goal.strip()}\n"
                     f"AUTOMATIC_VERIFIER_RESULT: {verdict}"
                 )
             }
@@ -86,6 +106,7 @@ class BrowserActionVerificationMiddleware(
         *,
         tool_name: str,
         arguments: object,
+        verification_goal: str,
         action_output: str,
         snapshot: str,
     ) -> str:
@@ -97,9 +118,14 @@ class BrowserActionVerificationMiddleware(
                             "role": "user",
                             "content": (
                                 "Independently verify the browser action that just completed. "
-                                f"Action: {tool_name}. Arguments: {arguments!r}. "
+                                f"Semantic verification goal: {verification_goal}. "
+                                f"Low-level action: {tool_name}. Arguments: {arguments!r}. "
                                 f"Tool output: {action_output}. "
                                 f"Fresh browser snapshot captured by the runtime:\n{snapshot}\n\n"
+                                "Element refs in the low-level action belong to the pre-action "
+                                "snapshot and may identify different elements now. Do not look "
+                                "up or reinterpret those old refs in the fresh snapshot. Verify "
+                                "only whether the named semantic goal is now satisfied. "
                                 "Return the required verdict format based on that evidence."
                             ),
                         }

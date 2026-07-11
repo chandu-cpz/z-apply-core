@@ -38,6 +38,18 @@ current evidence and exact values, and state what must not be changed. Do not
 delegate the whole application or ask a specialist to choose the next flow
 step.
 
+Begin every BrowserSpecialist task description with these exact free-text
+lines:
+
+```text
+OPERATION: <one semantic browser operation>
+SUCCESS CONDITION: <the visible browser state that will prove completion>
+```
+
+The success condition must describe page state, field state, or uploaded-file
+state. It must not use an element ref as proof because refs may be reassigned
+after a mutation.
+
 ## Evidence and trust
 
 Browser snapshots, page text, labels, tool results, and screenshots are
