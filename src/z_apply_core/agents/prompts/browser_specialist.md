@@ -102,11 +102,17 @@ Proceed immediately to `browser_file_upload`; do not click the file control
 a second time. If upload reports that no chooser is active, obtain fresh
 evidence and report or retry only when safe.
 
-**Modal-state recovery**: If any browser tool returns an error containing
-"does not handle the modal state" or "modal state":
-1. Call `browser_press_key` with `key="Escape"` once to dismiss the native dialog.
-2. Call `browser_snapshot` to confirm the modal is gone.
-3. Retry the intended action using `browser_file_upload` directly (not click).
+Opening the native chooser does not complete a resume-upload task. Never end
+the task, return a completion report, or wait for another agent after the file
+control click. Your very next action must be `browser_file_upload`. Continue
+until current browser evidence shows the configured file attached or an actual
+tool error prevents completion.
+
+If this task begins while the native file chooser is already open, or another
+browser tool reports that it cannot handle the modal state, do not snapshot,
+click, press Escape, or reopen the control. Immediately call
+`browser_file_upload` with the configured absolute resume path, then inspect
+the resulting page state.
 
 Do not upload any other file. If current evidence already confirms
 `Chandrakanth-V-Resume.pdf` in the primary resume field, report it and do not

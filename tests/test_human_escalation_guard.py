@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 from z_apply_core.agents.application_progress import ApplicationProgress
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.orchestrator import detect_fake_tool_calls
-from z_apply_core.agents.post_task_verification import extract_operation_kind
 
 
 def _run(coro: Any) -> Any:
@@ -209,40 +208,6 @@ class ApplicationProgressTests(unittest.TestCase):
 
 
 # ── Fix 3: Operation kind extraction tests ───────────────────────────────
-
-
-class OperationKindTests(unittest.TestCase):
-    def test_extracts_application_entry(self) -> None:
-        desc = (
-            "OPERATION KIND: application_entry\n"
-            "OPERATION: Click Apply\n"
-            "SUCCESS CONDITION: form visible"
-        )
-        self.assertEqual(extract_operation_kind(desc), "application_entry")
-
-    def test_extracts_resume_upload(self) -> None:
-        desc = (
-            "OPERATION KIND: resume_upload\n"
-            "OPERATION: Upload resume\n"
-            "SUCCESS CONDITION: file uploaded"
-        )
-        self.assertEqual(extract_operation_kind(desc), "resume_upload")
-
-    def test_extracts_fill_fields(self) -> None:
-        desc = (
-            "OPERATION KIND: fill_fields\n"
-            "OPERATION: Fill name field\n"
-            "SUCCESS CONDITION: field populated"
-        )
-        self.assertEqual(extract_operation_kind(desc), "fill_fields")
-
-    def test_extracts_inspect(self) -> None:
-        desc = "OPERATION KIND: inspect\nOPERATION: Observe page\nSUCCESS CONDITION: snapshot taken"
-        self.assertEqual(extract_operation_kind(desc), "inspect")
-
-    def test_returns_empty_when_missing(self) -> None:
-        desc = "OPERATION: Click Apply\nSUCCESS CONDITION: form visible"
-        self.assertEqual(extract_operation_kind(desc), "")
 
 
 # ── Fix 6: Fake tool call detection (slice-based) tests ──────────────────

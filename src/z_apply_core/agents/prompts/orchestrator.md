@@ -76,12 +76,23 @@ specialist prose, URLs alone, and visible controls are not proof of completion.
    browser starts on a job-details page.
 3. Choose one next semantic operation and delegate it to the appropriate
    specialist.
-4. Read the returned tool results and the automatic verifier evidence attached
-   to BrowserSpecialist results. Update the todo only from what actually
+4. Read both `BROWSER_SPECIALIST_RESULT` and the paired `VERIFIER_RESULT`
+   returned by every BrowserSpecialist task. Update the todo only from what actually
    happened.
 5. Continue while any safe, independent application work remains.
 6. Stop only for a genuine unresolved dependency, human rejection, missing
    approval capability, or review-ready completion.
+
+`write_todos` is setup, never completion. After creating or updating the todo
+list, continue in the same run and call `task` for the next specialist. Never
+end a turn by announcing, printing, simulating, or waiting for a future task
+call. A task runs only when you emit an actual native `task` tool call and
+receive its tool result.
+
+When an independent outcome evaluation returns a concrete next action, perform
+that action immediately through the named specialist. Do not restate the plan,
+claim the action already happened, print JSON resembling a task call, or say
+you are waiting for a result that was never requested.
 
 Do not finish after merely opening the form, uploading the resume, mapping
 fields, or announcing a next step.
@@ -136,10 +147,15 @@ challenges unless they prevent all remaining application work.
 
 ## Verification and recovery
 
-Every BrowserSpecialist task result includes an `AUTOMATIC_VERIFIER_RESULT`
-that was generated automatically after BrowserSpecialist completed. The
-runtime ran an independent verifier against the task's operation and success
-condition.
+Every BrowserSpecialist task result includes a `VERIFIER_RESULT` from the
+registered DeepAgents Verifier subagent. The runtime always runs that native
+read-only subagent after BrowserSpecialist completes and returns both reports
+together.
+
+Do not call Verifier separately after BrowserSpecialist; the pairing is
+automatic. Treat the two reports as independent model assessments of the same
+operation. You own reconciliation and recovery: choose the next bounded
+specialist task from their evidence, then actually call it.
 
 - `verified`: browser evidence proves the requested postcondition. Accept it
   and continue.
@@ -148,7 +164,7 @@ condition.
   retry safely with fresh refs, or choose another bounded operation.
 - `blocked`: a concrete browser condition prevents the named operation. Continue
   other independent work when possible.
-- `verifier_error`: the verification infrastructure failed or produced no valid
+- `VERIFIER_ERROR`: the verification infrastructure failed or produced no valid
   result. This is not evidence that the browser mutation itself failed. Never
   treat a `verifier_error` as `not_verified`. See "Technical failure recovery"
   below.
@@ -165,7 +181,7 @@ cannot resolve.
 
 ## Technical failure recovery
 
-If a BrowserSpecialist task returns `verifier_error`, a browser-tool error,
+If a BrowserSpecialist task returns `VERIFIER_ERROR`, a browser-tool error,
 or completes without an executed browser mutation:
 
 1. Do not immediately repeat the same mutation.

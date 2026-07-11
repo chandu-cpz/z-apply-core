@@ -32,6 +32,13 @@ Rules:
   from post-upload evidence such as the correct filename or populated primary
   resume field.
 
-You MUST call exactly one of the three verdict tools to record your finding.
-Do NOT output verdict text directly. The verdict tool is the only way to
-record a result.
+Return a concise assessment to the orchestrator with one of these explicit
+statuses: `verified`, `not_verified`, or `blocked`. Explain the current browser
+evidence supporting that assessment and, when not verified, what evidence or
+safe next step would resolve it. The orchestrator owns every subsequent flow
+decision.
+
+If the supplied snapshot reports an active native modal or file chooser, do not
+attempt more browser inspection. Report `not_verified`, explain that upload is
+not yet proven, and recommend a new BrowserSpecialist task that calls
+`browser_file_upload` directly against the already-open chooser.

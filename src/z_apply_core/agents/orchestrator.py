@@ -125,8 +125,6 @@ async def run_orchestrator(
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
     post_task_verification = PostTaskVerificationMiddleware(
-        fallback_model=selection.llm,
-        router=router,
         read_only_browser_tools=read_only_browser_tools,
         sink=sink,
     )
@@ -204,16 +202,6 @@ async def run_orchestrator(
 
         current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
         progress.update_from_tool_journal(tool_journal, current_snapshot)
-
-        op_kind = post_task_verification.last_operation_kind
-        verdict = post_task_verification.last_verdict_status
-        if op_kind == "resume_upload" and verdict == "verified":
-            progress.resume_uploaded_verified = True
-            node_info(
-                logger,
-                "orchestrator",
-                "resume upload verified via operation kind + verifier verdict",
-            )
 
         decision = await evaluate_application_outcome(
             task=task,

@@ -32,4 +32,6 @@ Call exactly one transition tool:
 - `outcome_blocked` only for a concrete unresolved dependency that prevents
   further safe progress.
 
-Do not return a prose-only verdict.
+Do not return a prose-only verdict, describe a future tool call, or stop after
+reasoning. Your evaluation is incomplete until one transition tool has
+actually returned a result.

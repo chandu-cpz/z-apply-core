@@ -25,10 +25,10 @@ logger = logging.getLogger(__name__)
 ROLE_POLICY: dict[str, dict[str, Any]] = {
     "orchestrator": {"priority": "balanced", "reasoning": False},
     "auth_orchestrator": {"priority": "balanced", "reasoning": False},
-    "BrowserSpecialist": {"priority": "fast", "reasoning": False},
+    "BrowserSpecialist": {"priority": "balanced", "reasoning": False},
     "FieldMapper": {"priority": "balanced", "reasoning": False},
     "AnswerWriter": {"priority": "quality", "reasoning": False},
-    "Verifier": {"priority": "quality", "reasoning": True},
+    "Verifier": {"priority": "balanced", "reasoning": False},
     "auth_verifier": {"priority": "quality", "reasoning": True},
     "VisionSpecialist": {"priority": "balanced", "reasoning": False, "force_vision": True},
     "RecoveryAgent": {"priority": "quality", "reasoning": True},
