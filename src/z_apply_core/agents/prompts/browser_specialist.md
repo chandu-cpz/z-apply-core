@@ -48,7 +48,10 @@ Instead, do one of:
 
 1. Call `browser_snapshot` without `filename` to get a fresh inline snapshot
    of the current page state, OR
-2. Read the artifact file using `read_file` with the returned path.
+2. Read the artifact file using `read_file`. The path in the link is relative;
+   prepend `/` to make it absolute for `read_file`. For example:
+   `.z-apply/browser-artifacts/page-...yml` →
+   `/.z-apply/browser-artifacts/page-...yml`
 
 Then inspect the post-action evidence to decide whether the success condition
 is met. Only after inspecting fresh evidence may you claim success or failure.
