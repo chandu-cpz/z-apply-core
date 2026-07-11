@@ -17,6 +17,7 @@ async def consume_deepagent_stream(
     stream: Any,
     *,
     sink: FrameworkEventSink | None = None,
+    root_source: str = "orchestrator",
 ) -> V3RunResult:
     started = time.monotonic()
     resolved = await _resolve_stream(stream)
@@ -24,9 +25,9 @@ async def consume_deepagent_stream(
 
     async with _managed_stream(resolved) as active_stream:
         await asyncio.gather(
-            _consume_messages("orchestrator", _projection(active_stream, "messages"), sink),
+            _consume_messages(root_source, _projection(active_stream, "messages"), sink),
             _consume_tool_calls(
-                "orchestrator",
+                root_source,
                 _projection(active_stream, "tool_calls"),
                 sink,
                 tool_trace,

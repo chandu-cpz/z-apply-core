@@ -7,19 +7,25 @@ from typing import Any, cast
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import FilesystemBackend
-from langchain.agents.middleware import AgentMiddleware, ModelRetryMiddleware
+from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
+from z_apply_core.agents.application_outcome import (
+    MAX_OUTCOME_ITERATIONS,
+    append_tool_journal,
+    evaluate_application_outcome,
+    fresh_snapshot,
+    resume_input,
+)
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
-from z_apply_core.agents.todo_guard import IncompleteTodosError, pending_todo_guard
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -93,7 +99,6 @@ async def run_orchestrator(
                 role="orchestrator",
                 initial_selection=selection,
             ),
-            cast(AgentMiddleware[Any, Any, Any], pending_todo_guard),
         ],
         subagents=await build_specialists(
             router,
@@ -106,28 +111,56 @@ async def run_orchestrator(
 
     run_config = cast(RunnableConfig, config.copy() if config else {})
 
-    stream = agent.astream_events(
-        {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": _task_prompt(job_url=job_url, task=task, snapshot=snapshot),
-                }
-            ]
-        },
-        config=run_config,
-        version="v3",
-    )
-    try:
-        stream_result = await consume_deepagent_stream(stream, sink=sink)
-    except IncompleteTodosError as exc:
-        return OrchestratorRun(
-            summary=str(exc),
-            model_id=model_id,
-            status="incomplete",
+    attempt_input: dict[str, Any] = {
+        "messages": [
+            {
+                "role": "user",
+                "content": _task_prompt(job_url=job_url, task=task, snapshot=snapshot),
+            }
+        ]
+    }
+    tool_journal: list[dict[str, Any]] = []
+    current_snapshot = snapshot
+
+    for iteration in range(MAX_OUTCOME_ITERATIONS):
+        node_info(logger, "goal_evaluator", "starting outcome iteration %s", iteration + 1)
+        stream = agent.astream_events(
+            cast(Any, attempt_input),
+            config=run_config,
+            version="v3",
         )
-    summary = _summary_from_output(stream_result.output)
-    return OrchestratorRun(summary=summary, model_id=model_id)
+        stream_result = await consume_deepagent_stream(stream, sink=sink)
+        append_tool_journal(tool_journal, stream_result)
+        current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
+        decision = await evaluate_application_outcome(
+            task=task,
+            output=stream_result.output,
+            tool_journal=tool_journal,
+            snapshot=current_snapshot,
+            router=router,
+            sink=sink,
+        )
+        if decision.status == "satisfied":
+            return OrchestratorRun(
+                summary=decision.explanation,
+                model_id=model_id,
+            )
+        if decision.status == "blocked":
+            return OrchestratorRun(
+                summary=decision.explanation,
+                model_id=model_id,
+                status="incomplete",
+            )
+        attempt_input = resume_input(stream_result.output, decision)
+
+    return OrchestratorRun(
+        summary=(
+            "Application outcome remained unfinished after "
+            f"{MAX_OUTCOME_ITERATIONS} independent evaluation cycles."
+        ),
+        model_id=model_id,
+        status="incomplete",
+    )
 
 
 def _task_prompt(*, job_url: str, task: str, snapshot: str) -> str:
@@ -169,29 +202,3 @@ Delegate browser evidence and changes only through BrowserSpecialist task calls.
 When finished, report what actually completed, what remains for the future
 submit slice, approval status, and why the run stopped. Never claim submission.
 """
-
-
-def _summary_from_output(output: dict[str, Any]) -> str:
-    messages = output.get("messages")
-    if isinstance(messages, list) and messages:
-        last = messages[-1]
-        content = _message_text(getattr(last, "content", ""))
-        if content:
-            return content[:1000]
-    return "Orchestrator completed without a final message."
-
-
-def _message_text(content: object) -> str:
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                text = item.get("text")
-                if isinstance(text, str):
-                    parts.append(text)
-            elif isinstance(item, str):
-                parts.append(item)
-        return "\n".join(parts).strip()
-    return str(content).strip()
