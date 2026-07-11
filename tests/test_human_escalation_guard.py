@@ -5,8 +5,12 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from z_apply_core.agents.application_progress import ApplicationProgress
+from z_apply_core.agents.application_progress import (
+    ApplicationProgress,
+    ApplicationProgressEventSink,
+)
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.stream_events import FrameworkTraceEvent
 
 
 def _run(coro: Any) -> Any:
@@ -204,6 +208,49 @@ class ApplicationProgressTests(unittest.TestCase):
         p = ApplicationProgress()
         p.mark_fields_mapped()
         self.assertTrue(p.fields_mapped)
+
+    def test_nested_upload_completion_event_updates_progress(self) -> None:
+        p = ApplicationProgress()
+        sink = ApplicationProgressEventSink(p)
+
+        _run(
+            sink.accept(
+                FrameworkTraceEvent(
+                    event="agent_tool_end",
+                    name="BrowserSpecialist",
+                    data={
+                        "tool_name": "browser_file_upload",
+                        "completed": True,
+                        "error": "",
+                        "output": "artifact output is not interpreted",
+                    },
+                    raw={},
+                )
+            )
+        )
+
+        self.assertTrue(p.resume_uploaded_verified)
+
+    def test_failed_nested_upload_event_does_not_update_progress(self) -> None:
+        p = ApplicationProgress()
+        sink = ApplicationProgressEventSink(p)
+
+        _run(
+            sink.accept(
+                FrameworkTraceEvent(
+                    event="agent_tool_end",
+                    name="BrowserSpecialist",
+                    data={
+                        "tool_name": "browser_file_upload",
+                        "completed": False,
+                        "error": "chooser unavailable",
+                    },
+                    raw={},
+                )
+            )
+        )
+
+        self.assertFalse(p.resume_uploaded_verified)
 
     def test_completed_field_mapper_task_is_typed_progress_evidence(self) -> None:
         p = ApplicationProgress()

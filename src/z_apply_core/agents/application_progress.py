@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
+
 _log = logging.getLogger(__name__)
 
 
@@ -69,3 +71,27 @@ class ApplicationProgress:
 
     def mark_form_open(self) -> None:
         self.form_open_verified = True
+
+
+class ApplicationProgressEventSink:
+    """Track typed nested tool completion events while preserving UI streaming."""
+
+    def __init__(
+        self,
+        progress: ApplicationProgress,
+        delegate: FrameworkEventSink | None = None,
+    ) -> None:
+        self._progress = progress
+        self._delegate = delegate
+
+    async def accept(self, event: FrameworkTraceEvent) -> None:
+        if (
+            event.event == "agent_tool_end"
+            and event.data.get("tool_name") == "browser_file_upload"
+            and event.data.get("completed") is True
+            and not event.data.get("error")
+        ):
+            self._progress.resume_uploaded_verified = True
+
+        if self._delegate is not None:
+            await self._delegate.accept(event)

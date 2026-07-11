@@ -20,7 +20,10 @@ from z_apply_core.agents.application_outcome import (
     fresh_snapshot,
     resume_input,
 )
-from z_apply_core.agents.application_progress import ApplicationProgress
+from z_apply_core.agents.application_progress import (
+    ApplicationProgress,
+    ApplicationProgressEventSink,
+)
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.post_task_verification import (
@@ -98,6 +101,7 @@ async def run_orchestrator(
         kw in snapshot.lower()
         for kw in ("resume", "upload", "cv", "choose file", "file input", "browse")
     )
+    progress_sink = ApplicationProgressEventSink(progress, sink)
 
     router_middleware = NimRouterMiddleware(
         router,
@@ -109,7 +113,7 @@ async def run_orchestrator(
     ]
     post_task_verification = PostTaskVerificationMiddleware(
         read_only_browser_tools=read_only_browser_tools,
-        sink=sink,
+        sink=progress_sink,
     )
     human_guard = HumanEscalationGuardMiddleware(progress)
     agent = create_deep_agent(
@@ -159,7 +163,7 @@ async def run_orchestrator(
             config=run_config,
             version="v3",
         )
-        stream_result = await consume_deepagent_stream(stream, sink=sink)
+        stream_result = await consume_deepagent_stream(stream, sink=progress_sink)
         append_tool_journal(tool_journal, stream_result)
 
         current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
@@ -171,7 +175,7 @@ async def run_orchestrator(
             tool_journal=tool_journal,
             snapshot=current_snapshot,
             router=router,
-            sink=sink,
+            sink=progress_sink,
         )
         node_info(
             logger,
