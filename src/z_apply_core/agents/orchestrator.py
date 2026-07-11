@@ -129,7 +129,10 @@ async def run_orchestrator(
         "messages": [
             {
                 "role": "user",
-                "content": _task_prompt(job_url=job_url, task=task, snapshot=snapshot, resume_path=resume_path),
+                "content": _task_prompt(
+                    job_url=job_url, task=task,
+                    snapshot=snapshot, resume_path=resume_path,
+                ),
             }
         ]
     }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Any
 
@@ -20,6 +21,8 @@ from nim_router import NimRouter
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
+
+_log = logging.getLogger(__name__)
 
 
 class PostTaskVerificationMiddleware(
@@ -65,30 +68,46 @@ class PostTaskVerificationMiddleware(
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         tool_name = str(request.tool_call.get("name", ""))
+        _log.info("PostTaskVerification: awrap_tool_call invoked, tool=%s", tool_name)
         if tool_name != "task":
             return await handler(request)
 
         arguments = request.tool_call.get("args", {})
         if not isinstance(arguments, dict):
+            _log.info("PostTaskVerification: args not dict, type=%s", type(arguments).__name__)
             return await handler(request)
 
         subagent_type = arguments.get("subagent_type")
         if subagent_type != self._target_subagent:
+            _log.info(
+                "PostTaskVerification: subagent_type=%s != target=%s, skipping",
+                subagent_type, self._target_subagent,
+            )
             return await handler(request)
 
         description = arguments.get("description", "")
+        _log.info("PostTaskVerification: intercepted task for %s, calling handler", subagent_type)
 
         result = await handler(request)
+        _log.info("PostTaskVerification: handler returned %s", type(result).__name__)
         if not isinstance(result, Command):
             return result
 
+        _log.info("PostTaskVerification: running verifier for task=%s", description[:120])
         verdict = await self._verify(
             task_description=str(description),
             snapshot=await self._fresh_snapshot(),
         )
+        _log.info("PostTaskVerification: verdict=%s", verdict[:200])
 
         messages = result.update.get("messages") if isinstance(result.update, dict) else None
         if not messages or not isinstance(messages[0], ToolMessage):
+            keys = (
+                list(result.update.keys())
+                if isinstance(result.update, dict)
+                else type(result.update)
+            )
+            _log.info("PostTaskVerification: no ToolMessage, keys=%s", keys)
             return result
 
         original = messages[0]
@@ -98,6 +117,7 @@ class PostTaskVerificationMiddleware(
             f"AUTOMATIC_VERIFIER_RESULT: {verdict}"
         )
         modified_msg = original.model_copy(update={"content": modified_content})
+        _log.info("PostTaskVerification: appended verifier result to ToolMessage")
         return Command(update={**result.update, "messages": [modified_msg]})
 
     async def _verify(
@@ -116,7 +136,7 @@ class PostTaskVerificationMiddleware(
                                 "Verify whether the BrowserSpecialist accomplished the "
                                 "orchestrator's requested operation. "
                                 f"Task description: {task_description}. "
-                                f"Fresh browser snapshot captured after BrowserSpecialist completed:\n"
+                                f"Fresh browser snapshot after BrowserSpecialist:\n"
                                 f"{snapshot}\n\n"
                                 "Evaluate only whether the named semantic operation and "
                                 "success condition are satisfied. "

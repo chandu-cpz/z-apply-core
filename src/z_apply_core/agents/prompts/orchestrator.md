@@ -44,11 +44,17 @@ lines:
 ```text
 OPERATION: <one semantic browser operation>
 SUCCESS CONDITION: <the visible browser state that will prove completion>
+CONFIGURED RESUME: <absolute file path from the task prompt, always include this>
 ```
 
 The success condition must describe page state, field state, or uploaded-file
 state. It must not use an element ref as proof because refs may be reassigned
 after a mutation.
+
+IMPORTANT: The task prompt contains a "Configured resume (absolute path)" line.
+Always copy that exact path into the CONFIGURED RESUME line of every
+BrowserSpecialist task description that involves resume upload. Never ask the
+user for the resume path — it is already provided.
 
 ## Evidence and trust
 
