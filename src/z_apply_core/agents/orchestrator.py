@@ -15,6 +15,7 @@ from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.application_outcome import (
     MAX_OUTCOME_ITERATIONS,
+    OutcomeDecision,
     append_tool_journal,
     evaluate_application_outcome,
     fresh_snapshot,
@@ -163,7 +164,35 @@ async def run_orchestrator(
             config=run_config,
             version="v3",
         )
-        stream_result = await consume_deepagent_stream(stream, sink=progress_sink)
+        try:
+            stream_result = await consume_deepagent_stream(stream, sink=progress_sink)
+        except Exception as exc:  # noqa: BLE001 - recover from a failed worker model turn
+            stalled_model_id = router_middleware.last_model_id
+            if stalled_model_id:
+                router.cooldown_model(
+                    stalled_model_id,
+                    NO_PROGRESS_MODEL_COOLDOWN_SECONDS,
+                )
+            node_info(
+                logger,
+                "orchestrator",
+                "worker iteration failed technically; continuing from fresh evidence: %s",
+                exc,
+            )
+            current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
+            attempt_input = resume_input(
+                {},
+                OutcomeDecision(
+                    "needs_revision",
+                    f"The previous worker model turn failed technically: {exc}",
+                    "Inspect the current browser state and continue the next safe unfinished "
+                    "application operation through an actual native specialist task.",
+                ),
+                task=task,
+                snapshot=current_snapshot,
+                resume_path=resume_path,
+            )
+            continue
         append_tool_journal(tool_journal, stream_result)
 
         current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)

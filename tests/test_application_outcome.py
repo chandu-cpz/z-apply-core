@@ -28,6 +28,59 @@ class FakeWorker:
 
 
 class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_worker_timeout_continues_from_fresh_evidence(self) -> None:
+        worker = FakeWorker()
+        router = NimRouter()
+        selection = SimpleNamespace(
+            llm=MagicMock(),
+            info=SimpleNamespace(id="provider/model"),
+        )
+
+        with (
+            patch.object(router, "lease", AsyncMock(return_value=selection)),
+            patch.object(router, "cooldown_model") as cooldown_model,
+            patch(
+                "z_apply_core.agents.orchestrator.create_deep_agent",
+                return_value=worker,
+            ),
+            patch(
+                "z_apply_core.agents.orchestrator.build_specialists",
+                AsyncMock(return_value=[]),
+            ),
+            patch(
+                "z_apply_core.agents.orchestrator.consume_deepagent_stream",
+                AsyncMock(
+                    side_effect=[
+                        TimeoutError("worker model timed out"),
+                        V3RunResult(output={"messages": [], "_z_apply_tool_trace": []}),
+                    ]
+                ),
+            ),
+            patch(
+                "z_apply_core.agents.orchestrator.fresh_snapshot",
+                AsyncMock(side_effect=["uploaded form snapshot", "review snapshot"]),
+            ),
+            patch(
+                "z_apply_core.agents.orchestrator.evaluate_application_outcome",
+                AsyncMock(return_value=OutcomeDecision("satisfied", "Review-ready.")),
+            ),
+        ):
+            result = await run_orchestrator(
+                job_url="https://example.test/job",
+                task="Prepare the application for review.",
+                snapshot="initial snapshot",
+                browser_tools=[],
+                config={},
+                router=router,
+            )
+
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(len(worker.inputs), 2)
+        retry_message = worker.inputs[1]["messages"][0]
+        self.assertIn("worker model timed out", retry_message.content)
+        self.assertIn("uploaded form snapshot", retry_message.content)
+        cooldown_model.assert_called_once_with("provider/model", 60.0)
+
     async def test_premature_worker_stop_resumes_without_untrusted_assistant_prose(
         self,
     ) -> None:
