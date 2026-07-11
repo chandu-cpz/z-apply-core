@@ -23,6 +23,7 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "microsoft/phi-3-vision-128k-instruct",
     "microsoft/phi-4-mini-instruct",
     "microsoft/phi-4-multimodal-instruct",
+    "moonshotai/kimi-k2-instruct-0905",
     "mistralai/codestral-22b-instruct-v0.1",
     "mistralai/mathstral-7b-v0.1",
     "mistralai/ministral-14b-instruct-2512",
@@ -41,7 +42,10 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "nvidia/nemotron-3-ultra-550b-a55b",
     "openai/gpt-oss-20b",
     "stepfun-ai/step-3.5-flash",
+    "stepfun-ai/step-3.7-flash",
     "nvidia/nemotron-3-nano-30b-a3b",
+    "qwen/qwen3.5-122b-a10b",
     "upstage/solar-10.7b-instruct",
     "zyphra/zamba2-7b-instruct",
+    "z-ai/glm-5.1",
 )

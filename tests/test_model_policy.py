@@ -17,7 +17,11 @@ class ModelPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("bytedance/seed-oss-36b-instruct", excluded)
         self.assertIn("google/gemma-4-31b-it", excluded)
         self.assertIn("meta/llama-3.1-70b-instruct", excluded)
+        self.assertIn("moonshotai/kimi-k2-instruct-0905", excluded)
+        self.assertIn("qwen/qwen3.5-122b-a10b", excluded)
         self.assertIn("stepfun-ai/step-3.5-flash", excluded)
+        self.assertIn("stepfun-ai/step-3.7-flash", excluded)
+        self.assertIn("z-ai/glm-5.1", excluded)
 
     async def test_run_job_adds_core_bans_to_environment_exclusions(self) -> None:
         configured = RouterConfig(
