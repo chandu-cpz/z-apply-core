@@ -11,6 +11,14 @@ from z_apply_core.model_policy import BANNED_MODEL_IDS_UNDER_30B
 
 
 class ModelPolicyTests(unittest.IsolatedAsyncioTestCase):
+    def test_excludes_models_observed_failing_native_tool_execution(self) -> None:
+        excluded = set(BANNED_MODEL_IDS_UNDER_30B)
+
+        self.assertIn("bytedance/seed-oss-36b-instruct", excluded)
+        self.assertIn("google/gemma-4-31b-it", excluded)
+        self.assertIn("meta/llama-3.1-70b-instruct", excluded)
+        self.assertIn("stepfun-ai/step-3.5-flash", excluded)
+
     async def test_run_job_adds_core_bans_to_environment_exclusions(self) -> None:
         configured = RouterConfig(
             excluded_models=[

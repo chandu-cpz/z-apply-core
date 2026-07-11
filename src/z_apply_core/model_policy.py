@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 # Static router exclusions for non-deprecated models returned by
-# ``ChatNVIDIA.get_available_models()`` that have fewer than 30 billion total
-# parameters. Keep this explicit because the discovery metadata does not expose
-# parameter counts.
+# ``ChatNVIDIA.get_available_models()``. This includes undersized models and
+# models observed repeatedly violating required native tool-call contracts.
 BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
+    "bytedance/seed-oss-36b-instruct",
     "google/codegemma-7b",
     "google/gemma-2-2b-it",
     "google/gemma-3-12b-it",
@@ -12,8 +12,10 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "google/gemma-3-4b-it",
     "google/gemma-3n-e2b-it",
     "google/gemma-3n-e4b-it",
+    "google/gemma-4-31b-it",
     "google/paligemma",
     "meta/llama-3.1-8b-instruct",
+    "meta/llama-3.1-70b-instruct",
     "meta/llama-3.2-11b-vision-instruct",
     "meta/llama-3.2-1b-instruct",
     "meta/llama-3.2-3b-instruct",
@@ -36,7 +38,9 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "nvidia/nemotron-nano-12b-v2-vl",
     "nvidia/nvclip",
     "nvidia/nvidia-nemotron-nano-9b-v2",
+    "nvidia/nemotron-3-ultra-550b-a55b",
     "openai/gpt-oss-20b",
+    "stepfun-ai/step-3.5-flash",
     "nvidia/nemotron-3-nano-30b-a3b",
     "upstage/solar-10.7b-instruct",
     "zyphra/zamba2-7b-instruct",
