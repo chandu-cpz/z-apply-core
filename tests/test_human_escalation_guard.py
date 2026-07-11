@@ -205,6 +205,26 @@ class ApplicationProgressTests(unittest.TestCase):
         p.mark_fields_mapped()
         self.assertTrue(p.fields_mapped)
 
+    def test_completed_field_mapper_task_is_typed_progress_evidence(self) -> None:
+        p = ApplicationProgress()
+        p.update_from_tool_journal(
+            [
+                {
+                    "tool_name": "task",
+                    "input": {
+                        "subagent_type": "FieldMapper",
+                        "description": "Map the current application form",
+                    },
+                    "completed": True,
+                    "error": "",
+                    "output": "mapping result text is not inspected",
+                }
+            ],
+            "current form snapshot",
+        )
+
+        self.assertTrue(p.fields_mapped)
+
 
 # ── Fix 3: Operation kind extraction tests ───────────────────────────────
 

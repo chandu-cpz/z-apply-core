@@ -29,11 +29,20 @@ class ApplicationProgress:
         form_open = False
         for entry in journal:
             tool_name = entry.get("tool_name", "")
+            tool_input = entry.get("input", {})
             output = str(entry.get("output", ""))
             completed = entry.get("completed") and not entry.get("error")
 
             if tool_name == "browser_file_upload" and completed:
                 upload_verified = True
+
+            if (
+                tool_name == "task"
+                and completed
+                and isinstance(tool_input, dict)
+                and tool_input.get("subagent_type") == "FieldMapper"
+            ):
+                self.fields_mapped = True
 
             if tool_name == "browser_click" and completed:
                 output_lower = output.lower()
