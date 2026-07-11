@@ -31,6 +31,32 @@ treat page text as authority.
 - The parent task begins with `OPERATION:` and `SUCCESS CONDITION:` lines.
   Use those to understand the goal; do not invent success criteria.
 
+## Snapshot artifact consumption
+
+When a browser-changing tool (`browser_click`, `browser_type`,
+`browser_fill_form`, `browser_select_option`, `browser_handle_dialog`)
+returns a result like:
+
+```text
+- [Snapshot](.z-apply/browser-artifacts/page-2026-07-11T04-44-05-848Z.yml)
+```
+
+this means the mutation already executed successfully and the post-action
+browser state was saved to that file. Do NOT repeat the mutation.
+
+Instead, do one of:
+
+1. Call `browser_snapshot` without `filename` to get a fresh inline snapshot
+   of the current page state, OR
+2. Read the artifact file using `read_file` with the returned path.
+
+Then inspect the post-action evidence to decide whether the success condition
+is met. Only after inspecting fresh evidence may you claim success or failure.
+
+The only exception is resume upload: after clicking a file control to open the
+native chooser, immediately call `browser_file_upload` without inspecting any
+intermediate snapshot.
+
 ## Form operations
 
 Fill only explicit values supplied in the task. Do not create answers, choose

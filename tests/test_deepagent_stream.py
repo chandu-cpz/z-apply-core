@@ -68,7 +68,7 @@ class FakeSubagent:
 
 
 class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
-    async def test_orchestrator_text_deltas_are_not_streamed(self) -> None:
+    async def test_orchestrator_text_deltas_are_streamed(self) -> None:
         sink = CollectingSink()
 
         await consume_deepagent_stream(FakeStream(), sink=sink)
@@ -84,7 +84,7 @@ class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
             if event.event == "agent_message_delta" and event.data.get("kind") == "reasoning"
         ]
 
-        self.assertNotIn("fake JSON task call", rendered_text)
+        self.assertIn("fake JSON task call", rendered_text)
         self.assertIn("subagent evidence", rendered_text)
         self.assertIn("actual planning trace", rendered_reasoning)
 
