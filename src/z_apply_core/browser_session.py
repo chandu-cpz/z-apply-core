@@ -75,7 +75,10 @@ def _text_content(result: Any) -> str:
 
 
 def _raise_for_tool_error(name: str, result: Any) -> None:
-    if getattr(result, "is_error", False) is True:
+    if bool(
+        getattr(result, "is_error", False)
+        or getattr(result, "isError", False)
+    ):
         raise BrowserToolExecutionError(f'{name} failed: {_text_content(result)}')
 
 

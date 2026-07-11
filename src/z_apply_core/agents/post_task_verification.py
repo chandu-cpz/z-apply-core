@@ -71,7 +71,15 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
 
         description = str(arguments.get("description", ""))
         _log.info("PostTaskVerification: running native %s task", self._target_subagent)
-        browser_result = await handler(request)
+        try:
+            browser_result = await handler(request)
+        except Exception as exc:  # noqa: BLE001 - return control to the orchestrator
+            _log.warning(
+                "PostTaskVerification: native %s task failed technically: %s",
+                self._target_subagent,
+                exc,
+            )
+            return _technical_failure_message(request, exc)
         browser_message = _command_tool_message(browser_result)
         if browser_message is None:
             _log.warning(
@@ -106,7 +114,15 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                 "PostTaskVerification: evidence unavailable; continuing native %s task",
                 self._target_subagent,
             )
-            browser_result = await handler(request.override(tool_call=recovery_call))
+            try:
+                browser_result = await handler(request.override(tool_call=recovery_call))
+            except Exception as exc:  # noqa: BLE001 - orchestrator owns retry decisions
+                _log.warning(
+                    "PostTaskVerification: continued %s task failed technically: %s",
+                    self._target_subagent,
+                    exc,
+                )
+                return _technical_failure_message(request, exc)
             browser_message = _command_tool_message(browser_result)
             if browser_message is None:
                 _log.warning(
@@ -208,3 +224,19 @@ def _command_tool_message(result: ToolMessage | Command[Any]) -> ToolMessage | N
     if not isinstance(messages, list):
         return None
     return next((message for message in messages if isinstance(message, ToolMessage)), None)
+
+
+def _technical_failure_message(
+    request: ToolCallRequest,
+    error: Exception,
+) -> ToolMessage:
+    return ToolMessage(
+        content=(
+            "BrowserSpecialist task failed technically before its semantic operation could "
+            f"be verified: {error}. Obtain current browser evidence and decide whether to "
+            "retry the same operation or choose another safe recovery action."
+        ),
+        name="task",
+        tool_call_id=str(request.tool_call.get("id", "")),
+        status="error",
+    )

@@ -90,6 +90,24 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(BrowserToolExecutionError):
             await session.call_tool("browser_snapshot", {})
 
+    async def test_mcp_call_result_error_flag_raises_typed_tool_error(self) -> None:
+        backend = SimpleNamespace(
+            call_tool=AsyncMock(
+                return_value=SimpleNamespace(
+                    content="backend closed with an error",
+                    isError=True,
+                )
+            ),
+            close=AsyncMock(),
+        )
+        server = SimpleNamespace(
+            backend=backend,
+            backend_pool=SimpleNamespace(tools=[]),
+        )
+
+        with self.assertRaises(BrowserToolExecutionError):
+            await BrowserSession(server).call_tool("browser_snapshot", {})
+
     def test_mcp_image_content_becomes_standard_langchain_block(self) -> None:
         result = SimpleNamespace(
             content=[

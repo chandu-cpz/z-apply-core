@@ -124,6 +124,18 @@ class NativeTaskPairingTests(unittest.TestCase):
         self.assertEqual(handler.await_count, 1)
         self.assertEqual(result, handler.return_value)
 
+    def test_browser_task_timeout_returns_typed_error_to_orchestrator(self) -> None:
+        middleware = _make_middleware()
+
+        async def handler(_request: ToolCallRequest) -> Command[Any]:
+            raise TimeoutError("model stream timed out")
+
+        result = self._run(middleware.awrap_tool_call(_task_request(), handler))
+
+        self.assertIsInstance(result, ToolMessage)
+        self.assertEqual(result.status, "error")
+        self.assertIn("model stream timed out", str(result.content))
+
     def test_fresh_snapshot_is_visible_to_stream_sink(self) -> None:
         sink = CollectingSink()
         middleware = _make_middleware(sink)
