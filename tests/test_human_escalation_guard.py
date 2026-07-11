@@ -252,6 +252,13 @@ class ApplicationProgressTests(unittest.TestCase):
 
         self.assertFalse(p.resume_uploaded_verified)
 
+    def test_journal_refresh_does_not_regress_stream_verified_upload(self) -> None:
+        p = ApplicationProgress(resume_uploaded_verified=True)
+
+        p.update_from_tool_journal([], "current form snapshot")
+
+        self.assertTrue(p.resume_uploaded_verified)
+
     def test_completed_field_mapper_task_is_typed_progress_evidence(self) -> None:
         p = ApplicationProgress()
         p.update_from_tool_journal(

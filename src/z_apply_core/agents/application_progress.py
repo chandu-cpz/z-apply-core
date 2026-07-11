@@ -51,7 +51,7 @@ class ApplicationProgress:
                 if "snapshot" in output_lower:
                     form_open = True
 
-        self.resume_uploaded_verified = upload_verified
+        self.resume_uploaded_verified = self.resume_uploaded_verified or upload_verified
 
         if form_open and not self.form_open_verified:
             self.form_open_verified = True
