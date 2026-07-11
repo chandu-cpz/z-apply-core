@@ -140,11 +140,17 @@ that was generated automatically after BrowserSpecialist completed. The
 runtime ran an independent verifier against the task's operation and success
 condition.
 
-- `verified`: accept the specific supported postcondition and continue.
-- `not_verified`: do not claim success. Use the returned reason to re-inspect,
+- `verified`: browser evidence proves the requested postcondition. Accept it
+  and continue.
+- `not_verified`: the verifier successfully ran, but browser evidence does not
+  prove the requested postcondition. Use the returned reason to re-inspect,
   retry safely with fresh refs, or choose another bounded operation.
-- `blocked`: treat it as a blocker only for the named operation. Continue other
-  independent work when possible.
+- `blocked`: a concrete browser condition prevents the named operation. Continue
+  other independent work when possible.
+- `verifier_error`: the verification infrastructure failed or produced no valid
+  result. This is not evidence that the browser mutation itself failed. Never
+  treat a `verifier_error` as `not_verified`. See "Technical failure recovery"
+  below.
 
 Resume upload is one semantic operation with an intermediate file-control
 click and a final file upload. Verification runs after BrowserSpecialist
@@ -155,6 +161,25 @@ Use Verifier only for independent inspection when there was no preceding
 BrowserSpecialist task or when evidence remains contradictory. Use
 VisionSpecialist only for a named visual question that ARIA/DOM evidence
 cannot resolve.
+
+## Technical failure recovery
+
+If a BrowserSpecialist task returns `verifier_error`, a browser-tool error,
+or completes without an executed browser mutation:
+
+1. Do not immediately repeat the same mutation.
+2. Obtain fresh browser evidence first.
+3. If fresh evidence proves the desired postcondition already exists, continue
+   the application flow without repeating the mutation.
+4. If the operation is still required, retry it at most once when safe.
+5. After two failed attempts at the same semantic operation without executable
+   progress or observable success, stop or surface a technical failure rather
+   than endlessly retrying it.
+6. Never call `ask_human` merely because browser automation, model tool calling,
+   or automatic verification failed. Human escalation is for genuine human
+   dependencies: missing candidate information, genuinely ambiguous field
+   meaning/options, CAPTCHA/OTP/authentication requiring human identity, or
+   explicit approval/rejection.
 
 ## Review and approval
 

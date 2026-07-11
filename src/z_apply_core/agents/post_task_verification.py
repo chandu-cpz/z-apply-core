@@ -149,8 +149,8 @@ class PostTaskVerificationMiddleware(
             )
             run = await consume_deepagent_stream(stream)
         except Exception as exc:  # noqa: BLE001 - verdict is returned to the orchestrator
-            return f"not_verified: automatic verifier failed: {exc}"
-        return _last_message_text(run.output) or "not_verified: verifier returned no result."
+            return f"verifier_error: automatic verifier failed: {exc}"
+        return _last_message_text(run.output) or "verifier_error: verifier returned no result."
 
     async def _fresh_snapshot(self) -> str:
         if self._snapshot_tool is None:

@@ -97,7 +97,7 @@ class BrowserToolRegistry:
     def _to_langchain_tool(self, spec: BrowserToolSpec) -> BaseTool:
         async def call_tool(**kwargs: Any) -> Any:
             caller = self._langchain_callers.get(spec.name, self._caller)
-            arguments = dict(kwargs)
+            arguments = {k: v for k, v in kwargs.items() if v is not None and v != ""}
             return await caller(spec.name, arguments)
 
         return StructuredTool.from_function(
