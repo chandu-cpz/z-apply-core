@@ -33,12 +33,7 @@ class ApplicationProgress:
             completed = entry.get("completed") and not entry.get("error")
 
             if tool_name == "browser_file_upload" and completed:
-                output_lower = output.lower()
-                if any(
-                    kw in output_lower
-                    for kw in ("uploaded", "resume", ".pdf", "success", "file")
-                ):
-                    upload_verified = True
+                upload_verified = True
 
             if tool_name == "browser_click" and completed:
                 output_lower = output.lower()

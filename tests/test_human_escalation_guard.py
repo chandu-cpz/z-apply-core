@@ -169,14 +169,14 @@ class ApplicationProgressTests(unittest.TestCase):
         self.assertFalse(p.resume_uploaded_verified)
         self.assertFalse(p.fields_mapped)
 
-    def test_update_from_tool_journal_upload_verified(self) -> None:
+    def test_completed_upload_artifact_is_typed_progress_evidence(self) -> None:
         p = ApplicationProgress()
         journal = [
             {
                 "tool_name": "browser_file_upload",
                 "completed": True,
                 "error": "",
-                "output": "Uploaded Resume.pdf",
+                "output": "- [Snapshot](.z-apply/browser-artifacts/page.yml)",
             },
         ]
         p.update_from_tool_journal(journal, "resume upload section visible")
