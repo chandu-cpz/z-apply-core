@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import unittest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -29,7 +28,7 @@ class DuplicateMutationGuardTests(unittest.TestCase):
         mw = DuplicateMutationGuardMiddleware()
         handler = AsyncMock(return_value=MagicMock(content="ok"))
         request = self._make_request("browser_snapshot", {})
-        result = self._run(mw.awrap_tool_call(request, handler))
+        self._run(mw.awrap_tool_call(request, handler))
         handler.assert_called_once()
 
     def test_first_mutation_allowed(self) -> None:
@@ -77,7 +76,7 @@ class DuplicateMutationGuardTests(unittest.TestCase):
         self._run(mw.awrap_tool_call(req1, handler))
         handler2 = AsyncMock(return_value=MagicMock(content="clicked"))
         req2 = self._make_request("browser_click", {"target": "e112"})
-        result = self._run(mw.awrap_tool_call(req2, handler2))
+        self._run(mw.awrap_tool_call(req2, handler2))
         handler2.assert_called_once()
 
     def test_task_resets_state(self) -> None:
@@ -127,7 +126,8 @@ class DetectFakeToolCallsTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_fake_pattern_with_no_executed_calls_returns_error(self) -> None:
-        output = {"messages": [MagicMock(content='Now click the button with browser_click(target="e112")')]}
+        msg = 'Now click the button with browser_click(target="e112")'
+        output = {"messages": [MagicMock(content=msg)]}
         result = detect_fake_tool_calls([], output)
         self.assertIsNotNone(result)
         self.assertIn("agent_protocol_error", result)
@@ -142,13 +142,11 @@ class DetectFakeToolCallsTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_multiple_fake_patterns_detected(self) -> None:
-        output = {
-            "messages": [
-                MagicMock(
-                    content='First use browser_click(target="e112") then browser_type(target="e200", text="hello")'
-                )
-            ]
-        }
+        msg = (
+            'First use browser_click(target="e112") '
+            'then browser_type(target="e200", text="hello")'
+        )
+        output = {"messages": [MagicMock(content=msg)]}
         result = detect_fake_tool_calls([], output)
         self.assertIsNotNone(result)
         self.assertIn("agent_protocol_error", result)

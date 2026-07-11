@@ -102,7 +102,13 @@ class BrowserActionVerificationIntegrationTests(unittest.IsolatedAsyncioTestCase
         self.assertEqual(
             backend_calls,
             [
-                ("browser_click", {"target": "e112"}),
+                (
+                    "browser_click",
+                    {
+                        "target": "e112",
+                        "verification_goal": goal,
+                    },
+                ),
                 ("browser_snapshot", {}),
             ],
         )

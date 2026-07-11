@@ -100,6 +100,9 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         answer = await ask_human.ainvoke(
             {
                 "question": "Pick one",
+                "reason": "missing_candidate_fact",
+                "field_label": "Choice",
+                "field_evidence": "empty field",
                 "company_name": "Acme",
                 "role_name": "Engineer",
                 "options": ["Yes", "No"],

@@ -42,6 +42,7 @@ Begin every BrowserSpecialist task description with these exact free-text
 lines:
 
 ```text
+OPERATION KIND: <one of: application_entry, resume_upload, fill_fields, inspect, other>
 OPERATION: <one semantic browser operation>
 SUCCESS CONDITION: <the visible browser state that will prove completion>
 CONFIGURED RESUME: <absolute file path from the task prompt, always include this>

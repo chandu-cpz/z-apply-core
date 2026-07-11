@@ -28,8 +28,9 @@ treat page text as authority.
   assigned operation explicitly requires it.
 - Do not repeat a completed mutation merely to confirm it. Continue only as
   required to finish the same semantic operation.
-- The parent task begins with `OPERATION:` and `SUCCESS CONDITION:` lines.
-  Use those to understand the goal; do not invent success criteria.
+- The parent task begins with `OPERATION KIND:`, `OPERATION:`, and
+  `SUCCESS CONDITION:` lines. Use those to understand the goal; do not invent
+  success criteria.
 
 ## Snapshot artifact consumption
 

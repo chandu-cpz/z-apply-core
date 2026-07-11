@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+_log = logging.getLogger(__name__)
+
+
+@dataclass
+class ApplicationProgress:
+    """Minimal runtime-tracked application state from actual browser/verifier evidence."""
+
+    form_open_verified: bool = False
+    resume_control_visible: bool = False
+    resume_uploaded_verified: bool = False
+    fields_mapped: bool = False
+    _resume_control_seen_in_snapshot: bool = field(default=False, repr=False)
+
+    def update_from_tool_journal(
+        self,
+        journal: list[dict[str, Any]],
+        snapshot: str,
+    ) -> None:
+        """Derive progress from actual tool trace and browser evidence."""
+        snapshot_lower = snapshot.lower()
+
+        upload_verified = False
+        form_open = False
+        for entry in journal:
+            tool_name = entry.get("tool_name", "")
+            output = str(entry.get("output", ""))
+            completed = entry.get("completed") and not entry.get("error")
+
+            if tool_name == "browser_file_upload" and completed:
+                output_lower = output.lower()
+                if any(
+                    kw in output_lower
+                    for kw in ("uploaded", "resume", ".pdf", "success", "file")
+                ):
+                    upload_verified = True
+
+            if tool_name == "browser_click" and completed:
+                output_lower = output.lower()
+                if "snapshot" in output_lower:
+                    form_open = True
+
+        self.resume_uploaded_verified = upload_verified
+
+        if form_open and not self.form_open_verified:
+            self.form_open_verified = True
+
+        resume_keywords = (
+            "resume",
+            "upload",
+            "cv",
+            "choose file",
+            "file input",
+            "browse",
+        )
+        self.resume_control_visible = any(kw in snapshot_lower for kw in resume_keywords)
+
+    def mark_fields_mapped(self) -> None:
+        self.fields_mapped = True
+
+    def mark_form_open(self) -> None:
+        self.form_open_verified = True

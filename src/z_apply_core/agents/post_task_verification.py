@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -25,11 +26,14 @@ from z_apply_core.agents.router_middleware import NimRouterMiddleware
 
 _log = logging.getLogger(__name__)
 
+_OPERATION_KIND_RE = re.compile(r"OPERATION KIND:\s*(\S+)", re.IGNORECASE)
+
 
 @dataclass(frozen=True, slots=True)
 class VerificationDecision:
     status: Literal["verified", "not_verified", "blocked"]
     detail: str
+    operation_kind: str = ""
 
 
 class VerdictState:
@@ -56,7 +60,7 @@ def _make_verifier_tools(
 
     @tool
     async def verification_not_verified(reason: str) -> str:
-        """Record that evidence is missing, stale, contradictory, or shows the operation did not take effect."""
+        """Record that evidence is missing, stale, or the operation did not take effect."""
         if state.decision is None:
             state.decision = VerificationDecision("not_verified", reason)
         return "Verification verdict recorded."
@@ -69,6 +73,12 @@ def _make_verifier_tools(
         return "Verification verdict recorded."
 
     return [verification_verified, verification_not_verified, verification_blocked]
+
+
+def extract_operation_kind(task_description: str) -> str:
+    """Extract OPERATION KIND from task description."""
+    match = _OPERATION_KIND_RE.search(task_description)
+    return match.group(1).lower() if match else ""
 
 
 class PostTaskVerificationMiddleware(
@@ -106,6 +116,8 @@ class PostTaskVerificationMiddleware(
         self._router = router
         self._prompt_name = prompt_name
         self._verifier_role = verifier_role
+        self.last_operation_kind: str = ""
+        self.last_verdict_status: str = ""
 
     def _build_verifier(
         self,
@@ -156,6 +168,10 @@ class PostTaskVerificationMiddleware(
         )
         _log.info("PostTaskVerification: verdict=%s", verdict[:200])
 
+        operation_kind = extract_operation_kind(str(description))
+        self.last_operation_kind = operation_kind
+        self.last_verdict_status = verdict.split(":")[0].strip() if ":" in verdict else ""
+
         messages = result.update.get("messages") if isinstance(result.update, dict) else None
         if not messages or not isinstance(messages[0], ToolMessage):
             keys = (
@@ -169,12 +185,14 @@ class PostTaskVerificationMiddleware(
         original = messages[0]
         modified_content = (
             f"{original.content}\n\n"
+            f"OPERATION_KIND: {operation_kind}\n"
             f"VERIFICATION_GOAL: {description}\n"
             f"AUTOMATIC_VERIFIER_RESULT: {verdict}"
         )
         modified_msg = original.model_copy(update={"content": modified_content})
         _log.info("PostTaskVerification: appended verifier result to ToolMessage")
-        return Command(update={**result.update, "messages": [modified_msg]})
+        base = dict(result.update) if isinstance(result.update, dict) else {}
+        return Command(update={**base, "messages": [modified_msg]})
 
     async def _verify(
         self,
@@ -213,6 +231,7 @@ class PostTaskVerificationMiddleware(
 
         if state.decision is None:
             return "verifier_error: verifier ended without recording a verdict"
+        extract_operation_kind(task_description)
         return f"{state.decision.status}: {state.decision.detail}"
 
     async def _fresh_snapshot(self) -> str:

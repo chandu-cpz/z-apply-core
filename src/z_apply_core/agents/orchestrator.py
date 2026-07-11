@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -21,8 +20,12 @@ from z_apply_core.agents.application_outcome import (
     fresh_snapshot,
     resume_input,
 )
+from z_apply_core.agents.application_progress import ApplicationProgress
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
-from z_apply_core.agents.post_task_verification import PostTaskVerificationMiddleware
+from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.post_task_verification import (
+    PostTaskVerificationMiddleware,
+)
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
@@ -107,6 +110,12 @@ async def run_orchestrator(
         model_id,
     )
 
+    progress = ApplicationProgress()
+    progress.resume_control_visible = any(
+        kw in snapshot.lower()
+        for kw in ("resume", "upload", "cv", "choose file", "file input", "browse")
+    )
+
     router_middleware = NimRouterMiddleware(
         router,
         role="orchestrator",
@@ -120,6 +129,7 @@ async def run_orchestrator(
         router=router,
         read_only_browser_tools=read_only_browser_tools,
     )
+    human_guard = HumanEscalationGuardMiddleware(progress)
     agent = create_deep_agent(
         model=selection.llm,
         tools=list(human_tools),
@@ -130,6 +140,7 @@ async def run_orchestrator(
             ),
             ModelRetryMiddleware(max_retries=3, on_failure="error"),
             router_middleware,
+            human_guard,
             post_task_verification,
         ],
         subagents=await build_specialists(
@@ -168,7 +179,10 @@ async def run_orchestrator(
         stream_result = await consume_deepagent_stream(stream, sink=sink)
         append_tool_journal(tool_journal, stream_result)
 
-        fake_error = detect_fake_tool_calls(tool_journal, stream_result.output)
+        fake_error = detect_fake_tool_calls(
+            tool_journal[journal_start:],
+            stream_result.output,
+        )
         if fake_error:
             node_info(logger, "goal_evaluator", "fake tool call detected: %s", fake_error[:120])
             attempt_input = {
@@ -186,6 +200,18 @@ async def run_orchestrator(
             continue
 
         current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
+        progress.update_from_tool_journal(tool_journal, current_snapshot)
+
+        op_kind = post_task_verification.last_operation_kind
+        verdict = post_task_verification.last_verdict_status
+        if op_kind == "resume_upload" and verdict == "verified":
+            progress.resume_uploaded_verified = True
+            node_info(
+                logger,
+                "orchestrator",
+                "resume upload verified via operation kind + verifier verdict",
+            )
+
         decision = await evaluate_application_outcome(
             task=task,
             output=stream_result.output,
@@ -194,6 +220,15 @@ async def run_orchestrator(
             router=router,
             sink=sink,
         )
+        node_info(
+            logger,
+            "goal_evaluator",
+            "outcome decision: status=%s explanation=%s next_action=%s",
+            decision.status,
+            decision.explanation[:200],
+            decision.next_action[:200],
+        )
+
         if decision.status == "satisfied":
             return OrchestratorRun(
                 summary=decision.explanation,
@@ -234,12 +269,14 @@ async def run_orchestrator(
 
 
 def detect_fake_tool_calls(
-    tool_journal: list[dict[str, Any]],
+    recent_journal: list[dict[str, Any]],
     stream_output: dict[str, Any],
 ) -> str | None:
     """Detect if BrowserSpecialist emitted tool-call-shaped prose without executing tools.
 
-    Returns an error message if fake tool calls are detected, None otherwise.
+    Checks only the recent journal slice (current iteration), not the full
+    cumulative history. This prevents earlier real mutations from masking
+    later fake tool calls.
     """
     messages = stream_output.get("messages", [])
     last_content = ""
@@ -258,7 +295,7 @@ def detect_fake_tool_calls(
 
     browser_changing_calls = [
         entry
-        for entry in tool_journal
+        for entry in recent_journal
         if entry.get("tool_name") in BROWSER_CHANGING_TOOL_NAMES
         and entry.get("completed")
         and not entry.get("error")

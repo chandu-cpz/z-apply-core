@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from z_apply_core.agents.post_task_verification import (
     PostTaskVerificationMiddleware,
-    VerificationDecision,
     VerdictState,
     _make_verifier_tools,
 )
@@ -114,14 +113,13 @@ class VerifyResultTests(unittest.TestCase):
 
         verifier_instance = MagicMock()
         verifier_instance.astream_events = MagicMock(return_value="stream")
-        with patch.object(mw, "_build_verifier", return_value=verifier_instance):
-            with patch(
-                "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
-                side_effect=fake_consume,
-            ):
-                result = self._run(
-                    mw._verify(task_description="click apply", snapshot="<page/>")
-                )
+        with patch.object(mw, "_build_verifier", return_value=verifier_instance), patch(
+            "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
+            side_effect=fake_consume,
+        ):
+            result = self._run(
+                mw._verify(task_description="click apply", snapshot="<page/>")
+            )
         self.assertTrue(result.startswith("verifier_error:"))
         self.assertIn("without recording a verdict", result)
 
@@ -139,14 +137,13 @@ class VerifyResultTests(unittest.TestCase):
 
         verifier_instance = MagicMock()
         verifier_instance.astream_events = MagicMock(return_value="stream")
-        with patch.object(mw, "_build_verifier", return_value=verifier_instance):
-            with patch(
-                "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
-                side_effect=fake_consume,
-            ):
-                result = self._run(
-                    mw._verify(task_description="click apply", snapshot="<page/>")
-                )
+        with patch.object(mw, "_build_verifier", return_value=verifier_instance), patch(
+            "z_apply_core.agents.post_task_verification.consume_deepagent_stream",
+            side_effect=fake_consume,
+        ):
+            result = self._run(
+                mw._verify(task_description="click apply", snapshot="<page/>")
+            )
         self.assertIn("verifier_error", result)
 
     def test_verify_returns_verifier_error_on_snapshot_failure(self) -> None:
