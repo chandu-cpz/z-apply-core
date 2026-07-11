@@ -3,12 +3,17 @@ from __future__ import annotations
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
+from pathlib import Path
 
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.human.tools import make_human_tools
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
 from z_apply_core.stream_events import FrameworkEventSink
+
+
+CORE_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_RESUME_PATH = (CORE_ROOT / ".z-apply" / "input" / "Chandrakanth-V-Resume.pdf").resolve()
 
 
 async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str]:
@@ -23,6 +28,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         human_tools=_human_tools(state),
         sink=sink,
         router=router,
+        resume_path=str(DEFAULT_RESUME_PATH),
     )
     snapshot = await _fresh_snapshot(state)
     return {

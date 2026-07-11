@@ -50,12 +50,6 @@ BROWSER_CHANGING_TOOL_NAMES = frozenset(
     }
 )
 
-VERIFICATION_GOAL_DESCRIPTION = (
-    "Describe the semantic operation and its visible success condition without "
-    "using element refs as evidence. Example: 'Open the application form. Success "
-    "condition: the form and primary resume control are visible.'"
-)
-
 
 class BrowserToolParameter(Protocol):
     name: str
@@ -104,8 +98,6 @@ class BrowserToolRegistry:
         async def call_tool(**kwargs: Any) -> Any:
             caller = self._langchain_callers.get(spec.name, self._caller)
             arguments = dict(kwargs)
-            if spec.name in BROWSER_CHANGING_TOOL_NAMES:
-                arguments.pop("verification_goal", None)
             return await caller(spec.name, arguments)
 
         return StructuredTool.from_function(
@@ -129,13 +121,6 @@ def _tool_schema(spec: BrowserToolSpec) -> dict[str, Any]:
         properties[parameter.name] = schema
         if parameter.default is Parameter.empty:
             required.append(parameter.name)
-    if spec.name in BROWSER_CHANGING_TOOL_NAMES:
-        properties["verification_goal"] = {
-            "type": "string",
-            "minLength": 1,
-            "description": VERIFICATION_GOAL_DESCRIPTION,
-        }
-        required.append("verification_goal")
     return {
         "type": "object",
         "properties": properties,

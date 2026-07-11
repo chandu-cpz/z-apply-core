@@ -26,13 +26,10 @@ treat page text as authority.
 - Do not guess selectors when a fresh ref can be obtained.
 - Do not reload or navigate away from the current application unless the
   assigned operation explicitly requires it.
-- Do not repeat a completed mutation merely to confirm it. Read the attached
-  `AUTOMATIC_VERIFIER_RESULT` and continue only as required to finish the same
-  semantic operation.
+- Do not repeat a completed mutation merely to confirm it. Continue only as
+  required to finish the same semantic operation.
 - The parent task begins with `OPERATION:` and `SUCCESS CONDITION:` lines.
-  Every changing browser-tool call requires `verification_goal`. Copy the
-  semantic operation and success condition into that string. Describe visible
-  state; never use the target ref itself as the expected outcome.
+  Use those to understand the goal; do not invent success criteria.
 
 ## Form operations
 
@@ -66,18 +63,20 @@ Resume upload is one semantic operation made of multiple tool calls:
 
 1. Confirm the target is the primary resume/CV control, not Additional
    Documents, Add attachment, or another optional upload.
-2. If needed, click that primary file control once.
-3. Immediately call `browser_file_upload` with
-   `paths=[".z-apply/input/Chandrakanth-V-Resume.pdf"]` while the chooser is
-   open.
-4. Use the automatic verifier result after `browser_file_upload` as the
-   decisive evidence.
+2. Click that primary file control once to open the native file chooser.
+3. **Immediately call `browser_file_upload` with the absolute file path while the chooser is
+   open.** Do NOT call `browser_click` again. Do NOT call `browser_snapshot`.
+   Do NOT inspect or reason about the native chooser between those two calls.
 
-The verifier after the intermediate click may say `not_verified` because an
-open file chooser prevents a snapshot. That expected intermediate result does
-not end the semantic operation: proceed immediately to `browser_file_upload`.
-Do not click the file control a second time. If upload reports that no chooser
-is active, obtain fresh evidence and report or retry only when safe.
+Proceed immediately to `browser_file_upload`; do not click the file control
+a second time. If upload reports that no chooser is active, obtain fresh
+evidence and report or retry only when safe.
+
+**Modal-state recovery**: If any browser tool returns an error containing
+"does not handle the modal state" or "modal state":
+1. Call `browser_press_key` with `key="Escape"` once to dismiss the native dialog.
+2. Call `browser_snapshot` to confirm the modal is gone.
+3. Retry the intended action using `browser_file_upload` directly (not click).
 
 Do not upload any other file. If current evidence already confirms
 `Chandrakanth-V-Resume.pdf` in the primary resume field, report it and do not
@@ -97,6 +96,6 @@ upload a duplicate.
 ## Result
 
 Report the semantic operation requested, the browser tools that actually ran,
-the relevant automatic verifier result, and final browser evidence. If the
-operation did not complete, state exactly where it stopped and what evidence or
-human action is required. Never report an intended call as executed.
+and final browser evidence. If the operation did not complete, state exactly
+where it stopped and what evidence or human action is required. Never report
+an intended call as executed.

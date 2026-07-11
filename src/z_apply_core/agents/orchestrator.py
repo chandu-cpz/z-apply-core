@@ -21,11 +21,13 @@ from z_apply_core.agents.application_outcome import (
     resume_input,
 )
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
+from z_apply_core.agents.post_task_verification import PostTaskVerificationMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -61,6 +63,7 @@ async def run_orchestrator(
     human_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
     router: NimRouter | None = None,
+    resume_path: str = "",
 ) -> OrchestratorRun:
     if not isinstance(router, NimRouter):
         return OrchestratorRun(
@@ -91,6 +94,14 @@ async def run_orchestrator(
         role="orchestrator",
         initial_selection=selection,
     )
+    read_only_browser_tools = [
+        tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
+    ]
+    post_task_verification = PostTaskVerificationMiddleware(
+        fallback_model=selection.llm,
+        router=router,
+        read_only_browser_tools=read_only_browser_tools,
+    )
     agent = create_deep_agent(
         model=selection.llm,
         tools=list(human_tools),
@@ -101,6 +112,7 @@ async def run_orchestrator(
             ),
             ModelRetryMiddleware(max_retries=3, on_failure="error"),
             router_middleware,
+            post_task_verification,
         ],
         subagents=await build_specialists(
             router,
@@ -117,7 +129,7 @@ async def run_orchestrator(
         "messages": [
             {
                 "role": "user",
-                "content": _task_prompt(job_url=job_url, task=task, snapshot=snapshot),
+                "content": _task_prompt(job_url=job_url, task=task, snapshot=snapshot, resume_path=resume_path),
             }
         ]
     }
@@ -182,7 +194,8 @@ async def run_orchestrator(
     )
 
 
-def _task_prompt(*, job_url: str, task: str, snapshot: str) -> str:
+def _task_prompt(*, job_url: str, task: str, snapshot: str, resume_path: str = "") -> str:
+    resume_hint = f"\nConfigured resume (absolute path):\n{resume_path}" if resume_path else ""
     return f"""Run the requested orchestration task using the browser's current state.
 
 Job URL:
@@ -193,6 +206,7 @@ or navigate back to it merely to begin.
 
 Requested task:
 {task}
+{resume_hint}
 
 BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE
 {snapshot}

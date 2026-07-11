@@ -47,20 +47,12 @@ async def build_specialists(
     read_only_browser_tools = [
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
-    browser_verification = BrowserActionVerificationMiddleware(
-        fallback_model=fallback_model,
-        router=router,
-        read_only_browser_tools=read_only_browser_tools,
-        prompt_name="verifier.md",
-        verifier_role="Verifier",
-    )
     return [
         _with_routing(
             build_browser_specialist(browser_tools),
             router=router,
             role="BrowserSpecialist",
             model=fallback_model,
-            extra_middleware=[browser_verification],
         ),
         _with_routing(
             build_vision_specialist(browser_tools),

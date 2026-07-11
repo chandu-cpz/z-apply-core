@@ -69,8 +69,9 @@ specialist prose, URLs alone, and visible controls are not proof of completion.
    browser starts on a job-details page.
 3. Choose one next semantic operation and delegate it to the appropriate
    specialist.
-4. Read the returned tool results and automatic verifier evidence. Update the
-   todo only from what actually happened.
+4. Read the returned tool results and the automatic verifier evidence attached
+   to BrowserSpecialist results. Update the todo only from what actually
+   happened.
 5. Continue while any safe, independent application work remains.
 6. Stop only for a genuine unresolved dependency, human rejection, missing
    approval capability, or review-ready completion.
@@ -86,8 +87,8 @@ Use this order adaptively; skip steps already supported by current evidence:
    safe application-entry control. If the form is already open, do not click an
    entry control.
 2. When a primary resume/CV control is available and its prerequisites are
-   satisfied, ask BrowserSpecialist to upload
-   `.z-apply/input/Chandrakanth-V-Resume.pdf`. Do not upload again when current
+   satisfied, ask BrowserSpecialist to upload the configured resume (absolute
+   path provided in the task prompt). Do not upload again when current
    evidence already confirms that exact file in the primary resume field.
 3. Use the completed upload's verifier evidence to assess parsing and autofill.
 4. Ask FieldMapper to map the remaining visible application fields.
@@ -128,23 +129,26 @@ challenges unless they prevent all remaining application work.
 
 ## Verification and recovery
 
-Browser mutations receive an `AUTOMATIC_VERIFIER_RESULT` in their tool result.
+Every BrowserSpecialist task result includes an `AUTOMATIC_VERIFIER_RESULT`
+that was generated automatically after BrowserSpecialist completed. The
+runtime ran an independent verifier against the task's operation and success
+condition.
 
-- `verified`: accept only the specific supported postcondition and continue.
+- `verified`: accept the specific supported postcondition and continue.
 - `not_verified`: do not claim success. Use the returned reason to re-inspect,
   retry safely with fresh refs, or choose another bounded operation.
 - `blocked`: treat it as a blocker only for the named operation. Continue other
   independent work when possible.
 
 Resume upload is one semantic operation with an intermediate file-control
-click and a final file upload. Verification after the intermediate click may
-be inconclusive because the file chooser is open. Let BrowserSpecialist finish
-the upload and use the verifier result after `browser_file_upload` as the
+click and a final file upload. Verification runs after BrowserSpecialist
+completes the entire upload sequence. Use the verifier result as the
 decisive upload evidence.
 
 Use Verifier only for independent inspection when there was no preceding
-browser mutation or when evidence remains contradictory. Use VisionSpecialist
-only for a named visual question that ARIA/DOM evidence cannot resolve.
+BrowserSpecialist task or when evidence remains contradictory. Use
+VisionSpecialist only for a named visual question that ARIA/DOM evidence
+cannot resolve.
 
 ## Review and approval
 
