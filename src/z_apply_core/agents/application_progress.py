@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -13,75 +12,127 @@ from langchain.agents.middleware.types import (
     ToolCallRequest,
 )
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool, tool
 from langgraph.types import Command
 
+from z_apply_core.agents.application_state import ApplicationState, EvidenceRef, FieldState
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
-
-_log = logging.getLogger(__name__)
 
 
 @dataclass
 class ApplicationProgress:
-    """Minimal runtime-tracked application state from actual browser/verifier evidence."""
+    """Compatibility view over the typed state ledger used by runtime guards."""
 
-    form_open_verified: bool = False
-    resume_control_visible: bool = False
-    resume_uploaded_verified: bool = False
-    fields_mapped: bool = False
-    _resume_control_seen_in_snapshot: bool = field(default=False, repr=False)
+    state: ApplicationState = field(default_factory=ApplicationState)
+
+    @property
+    def form_open_verified(self) -> bool:
+        return self.state.form_open is not None
+
+    @property
+    def resume_control_visible(self) -> bool:
+        return self.state.resume_control is not None
+
+    @property
+    def resume_uploaded_verified(self) -> bool:
+        return self.state.resume_uploaded is not None
+
+    @property
+    def fields_mapped(self) -> bool:
+        return self.state.fields_mapped
 
     def update_from_tool_journal(
         self,
         journal: list[dict[str, Any]],
         snapshot: str,
     ) -> None:
-        """Derive progress from actual tool trace and browser evidence."""
-        snapshot_lower = snapshot.lower()
+        """No-op compatibility hook.
 
-        upload_verified = False
-        form_open = False
-        for entry in journal:
-            tool_name = entry.get("tool_name", "")
-            tool_input = entry.get("input", {})
-            output = str(entry.get("output", ""))
-            completed = entry.get("completed") and not entry.get("error")
-
-            if tool_name == "browser_file_upload" and completed:
-                upload_verified = True
-
-            if (
-                tool_name == "task"
-                and completed
-                and isinstance(tool_input, dict)
-                and tool_input.get("subagent_type") == "FieldMapper"
-            ):
-                self.fields_mapped = True
-
-            if tool_name == "browser_click" and completed:
-                output_lower = output.lower()
-                if "snapshot" in output_lower:
-                    form_open = True
-
-        self.resume_uploaded_verified = self.resume_uploaded_verified or upload_verified
-
-        if form_open and not self.form_open_verified:
-            self.form_open_verified = True
-
-        resume_keywords = (
-            "resume",
-            "upload",
-            "cv",
-            "choose file",
-            "file input",
-            "browse",
-        )
-        self.resume_control_visible = any(kw in snapshot_lower for kw in resume_keywords)
+        Browser state is intentionally not inferred from journals or snapshot text.
+        Typed specialist/verifier tools commit transitions at their own boundaries.
+        """
+        del journal, snapshot
 
     def mark_fields_mapped(self) -> None:
-        self.fields_mapped = True
+        if not self.state.fields:
+            raise ValueError("Field mapping requires typed field records.")
 
     def mark_form_open(self) -> None:
-        self.form_open_verified = True
+        self.state.form_open = EvidenceRef("verifier", "runtime", "explicit form-open verdict")
+
+    def record_verification(
+        self,
+        *,
+        operation: str,
+        status: str,
+        evidence: str,
+    ) -> None:
+        if status != "verified":
+            return
+        ref = EvidenceRef("verifier", "PostTaskVerifier", evidence)
+        if operation == "form_open":
+            self.state.form_open = ref
+        elif operation == "resume_control":
+            self.state.resume_control = ref
+        elif operation == "resume_upload":
+            self.state.resume_uploaded = ref
+        elif operation == "review_ready":
+            self.state.review_complete = ref
+        elif operation == "field_fill":
+            self.state.filled_fields["verified field batch"] = ref
+
+    def record_human_answer(self, field_label: str) -> None:
+        self.state.human_answers[field_label] = EvidenceRef(
+            "human", "ask_human", "human answer recorded"
+        )
+
+    def record_submit_approval(self, approved: bool) -> None:
+        self.state.approval_requested = EvidenceRef(
+            "human", "request_submit_approval", "human decision recorded"
+        )
+        self.state.approval_status = "approved" if approved else "rejected"
+
+
+def make_field_map_tools(progress: ApplicationProgress) -> list[BaseTool]:
+    @tool
+    async def record_field_map(
+        fields: list[dict[str, object]],
+        resume_control_visible: bool,
+        evidence: str,
+    ) -> str:
+        """Record the complete current field map from fresh read-only browser evidence."""
+        mapped: dict[str, FieldState] = {}
+        allowed = {
+            "already_satisfied",
+            "candidate_fact_available",
+            "human_answer_needed",
+            "ambiguous",
+            "deferred_challenge",
+        }
+        for item in fields:
+            label, ref, required, status = (
+                item.get("label"),
+                item.get("ref"),
+                item.get("required"),
+                item.get("status"),
+            )
+            if not isinstance(label, str) or not label.strip() or not isinstance(ref, str):
+                raise ValueError("Each mapped field needs non-empty label and ref.")
+            if not isinstance(required, bool) or status not in allowed:
+                raise ValueError("Each mapped field needs boolean required and valid status.")
+            mapped[label] = FieldState(
+                label=label,
+                ref=ref,
+                required=required,
+                status=status,  # type: ignore[arg-type]
+                evidence=EvidenceRef("field_map", "FieldMapper", evidence),
+            )
+        progress.state.fields = mapped
+        if resume_control_visible:
+            progress.state.resume_control = EvidenceRef("field_map", "FieldMapper", evidence)
+        return "Typed field map recorded."
+
+    return [record_field_map]
 
 
 class ApplicationProgressEventSink:
@@ -96,22 +147,12 @@ class ApplicationProgressEventSink:
         self._delegate = delegate
 
     async def accept(self, event: FrameworkTraceEvent) -> None:
-        if (
-            event.event == "agent_tool_end"
-            and event.data.get("tool_name") == "browser_file_upload"
-            and event.data.get("completed") is True
-            and not event.data.get("error")
-        ):
-            self._progress.resume_uploaded_verified = True
-
         if self._delegate is not None:
             await self._delegate.accept(event)
 
 
-class BrowserUploadProgressMiddleware(
-    AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
-):
-    """Commit completed upload state at the nested browser-tool boundary."""
+class BrowserUploadProgressMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
+    """Compatibility pass-through; upload requires a typed verifier verdict."""
 
     def __init__(self, progress: ApplicationProgress) -> None:
         super().__init__()
@@ -123,13 +164,4 @@ class BrowserUploadProgressMiddleware(
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         result = await handler(request)
-        if (
-            str(request.tool_call.get("name", "")) == "browser_file_upload"
-            and not _tool_result_is_error(result)
-        ):
-            self._progress.resume_uploaded_verified = True
         return result
-
-
-def _tool_result_is_error(result: ToolMessage | Command[Any]) -> bool:
-    return isinstance(result, ToolMessage) and result.status == "error"

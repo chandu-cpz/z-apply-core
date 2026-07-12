@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Any, Literal, cast
 
 from deepagents import create_deep_agent
@@ -12,9 +12,15 @@ from langchain_core.tools import BaseTool, tool
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
+from z_apply_core.agents.application_state import ApplicationState
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
+from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.terminal_guard import (
+    TerminalDecisionGuardMiddleware,
+    TerminalDecisionRecorded,
+)
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult
 
 APPLICATION_OUTCOME_RUBRIC = """Evaluate the complete observable run against every criterion:
@@ -54,7 +60,9 @@ async def evaluate_application_outcome(
     snapshot: str,
     router: NimRouter,
     sink: FrameworkEventSink | None,
+    application_state: ApplicationState | None = None,
 ) -> OutcomeDecision:
+    del output, tool_journal
     decision: OutcomeDecision | None = None
 
     @tool
@@ -101,18 +109,17 @@ async def evaluate_application_outcome(
         middleware=[
             ModelRetryMiddleware(max_retries=1, on_failure="error"),
             evaluator_router,
+            ProseToolCallGuardMiddleware(),
+            TerminalDecisionGuardMiddleware(lambda: decision is not None),
         ],
     )
     prompt = _evaluation_prompt(
         task=task,
-        output=output,
-        tool_journal=tool_journal,
         snapshot=snapshot,
+        application_state=application_state,
     )
     errors: list[str] = []
-    attempt_input: dict[str, Any] = {
-        "messages": [{"role": "user", "content": prompt}]
-    }
+    attempt_input: dict[str, Any] = {"messages": [{"role": "user", "content": prompt}]}
     for _attempt in range(1, MAX_OUTCOME_VERDICT_ATTEMPTS + 1):
         try:
             stream = evaluator.astream_events(
@@ -124,6 +131,10 @@ async def evaluate_application_outcome(
                 sink=sink,
                 root_source="GoalEvaluator",
             )
+        except TerminalDecisionRecorded:
+            if decision is not None:
+                return decision
+            raise
         except Exception as exc:  # noqa: BLE001 - report an explicit runtime failure
             errors.append(str(exc))
             _cool_evaluator_model(router, evaluator_router)
@@ -231,15 +242,12 @@ async def fresh_snapshot(browser_tools: Sequence[BaseTool], fallback: str) -> st
 def _evaluation_prompt(
     *,
     task: str,
-    output: dict[str, Any],
-    tool_journal: Sequence[dict[str, Any]],
     snapshot: str,
+    application_state: ApplicationState | None,
 ) -> str:
     evidence = {
-        "todos": output.get("todos", []),
-        "files": output.get("files", {}),
-        "tool_journal": list(tool_journal),
-        "current_browser_snapshot": snapshot,
+        "application_state": asdict(application_state) if application_state is not None else {},
+        "latest_browser_snapshot": snapshot,
     }
     return f"""Evaluate the worker's complete observable execution against the automatic outcome.
 
@@ -256,6 +264,8 @@ Call exactly one outcome transition tool. If any criterion lacks direct evidence
 and name the next concrete operation. Use blocked only for a current dependency that prevents all
 remaining safe progress.
 """
+
+
 def append_tool_journal(
     journal: list[dict[str, Any]],
     stream_result: V3RunResult,
