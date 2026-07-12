@@ -5,9 +5,14 @@ from typing import Literal
 from langchain_core.tools import BaseTool, tool
 
 from z_apply_core.human.channel import HumanChannel
+from z_apply_core.memory.applicant_memory import CandidateMemory
 
 
-def make_human_tools(channel: HumanChannel) -> list[BaseTool]:
+def make_human_tools(
+    channel: HumanChannel,
+    *,
+    candidate_memory: CandidateMemory | None = None,
+) -> list[BaseTool]:
     @tool
     async def ask_human(
         question: str,
@@ -34,7 +39,14 @@ def make_human_tools(channel: HumanChannel) -> list[BaseTool]:
             role=role_name,
             options=options or [],
         )
-        return {"human_answer": answer}
+        stored = False
+        if candidate_memory is not None and reason == "missing_candidate_fact":
+            stored = await candidate_memory.remember_human_answer(
+                field_label=field_label,
+                question=question,
+                answer=answer,
+            )
+        return {"human_answer": answer, "candidate_memory_stored": str(stored).lower()}
 
     @tool
     async def request_submit_approval(

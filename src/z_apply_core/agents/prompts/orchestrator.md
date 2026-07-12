@@ -112,8 +112,9 @@ Use this order adaptively; skip steps already supported by current evidence:
 4. Ask FieldMapper to map the remaining visible application fields.
 5. Resolve each unanswered field:
    - Reuse an explicit candidate, saved-profile, autofill, or prior human fact.
-   - Ask AnswerWriter about exactly one field when candidate evidence may answer
-     it.
+   - Ask AnswerWriter about exactly one field before asking the human. It uses
+     candidate memory and explicit supplied evidence to resolve that single
+     field, or returns the precise missing fact.
    - Call `ask_human` only when the required answer is not available or the
      current meaning/options are genuinely ambiguous.
 6. Ask BrowserSpecialist to fill a small explicit batch whose labels, refs,

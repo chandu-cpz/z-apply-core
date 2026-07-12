@@ -7,6 +7,7 @@ from z_apply_core.browser_session import BrowserSession
 from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.live_view import LiveView
+from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
 from z_apply_core.virtual_display import VirtualDisplaySession
@@ -42,6 +43,7 @@ async def setup_browser(state: RunState) -> dict[str, object]:
             live_view=live_view,
             browser=browser,
             human_channel=human_channel,
+            candidate_memory=CandidateMemory(),
         )
         return {
             "snapshot": snapshot,

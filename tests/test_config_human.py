@@ -117,7 +117,10 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        self.assertEqual(answer, {"human_answer": "Yes"})
+        self.assertEqual(
+            answer,
+            {"human_answer": "Yes", "candidate_memory_stored": "false"},
+        )
         self.assertEqual(approval, {"submit_approval": "approved"})
 
 

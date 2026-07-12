@@ -9,6 +9,7 @@ from nim_router import NimRouter
 
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.human.tools import make_human_tools
+from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
 from z_apply_core.stream_events import FrameworkEventSink
@@ -31,6 +32,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         sink=sink,
         router=router,
         resume_path=str(DEFAULT_RESUME_PATH),
+        candidate_memory=runtime_candidate_memory(state),
     )
     snapshot = await _fresh_snapshot(state)
     return {
@@ -82,4 +84,9 @@ def _human_tools(state: RunState) -> list[BaseTool]:
     runtime = state.get("runtime")
     if not isinstance(runtime, RunRuntime) or runtime.human_channel is None:
         return []
-    return make_human_tools(runtime.human_channel)
+    return make_human_tools(runtime.human_channel, candidate_memory=runtime.candidate_memory)
+
+
+def runtime_candidate_memory(state: RunState) -> CandidateMemory | None:
+    runtime = state.get("runtime")
+    return runtime.candidate_memory if isinstance(runtime, RunRuntime) else None

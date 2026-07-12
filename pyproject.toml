@@ -8,10 +8,12 @@ dependencies = [
     "deepagents>=0.6.12",
     "langchain-core>=1.4.8",
     "langchain-nim-router",
+    "langchain-nvidia-ai-endpoints>=1.4.3",
     "langgraph>=1.2.7",
     "playwright-python-mcp[camoufox]",
     "pydantic-settings>=2.14.2",
     "python-telegram-bot>=22.8",
+    "qdrant-client>=1.18.0",
     "rich>=15.0.0",
 ]
 

@@ -37,6 +37,7 @@ from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
 from z_apply_core.log_labels import node_info
+from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.stream_events import FrameworkEventSink
 
 logger = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ async def run_orchestrator(
     sink: FrameworkEventSink | None = None,
     router: NimRouter | None = None,
     resume_path: str = "",
+    candidate_memory: CandidateMemory | None = None,
 ) -> OrchestratorRun:
     if not isinstance(router, NimRouter):
         return OrchestratorRun(
@@ -134,6 +136,7 @@ async def run_orchestrator(
             router,
             browser_tools,
             fallback_model=selection.llm,
+            candidate_memory=candidate_memory,
         ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
