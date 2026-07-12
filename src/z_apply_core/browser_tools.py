@@ -14,7 +14,7 @@ _AGENT_TOOL_DESCRIPTIONS = {
         "Upload files into the currently open native file chooser. This tool has no "
         "target or selector argument. First open the chooser with browser_click, then "
         "immediately call browser_file_upload with paths as a JSON array of absolute "
-        "paths, for example paths=[\"/absolute/resume.pdf\"]."
+        'paths, for example paths=["/absolute/resume.pdf"].'
     ),
 }
 

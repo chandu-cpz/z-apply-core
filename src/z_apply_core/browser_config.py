@@ -6,10 +6,10 @@ from typing import Any
 from z_apply_core.config import load_settings
 
 
-def build_browser_config() -> dict[str, Any]:
+def build_browser_config(run_id: str = "manual") -> dict[str, Any]:
     workspace_dir = Path.cwd() / ".z-apply"
     profile_dir = workspace_dir / "browser-profile"
-    output_dir = workspace_dir / "browser-artifacts"
+    output_dir = workspace_dir / "runs" / run_id / "browser-artifacts"
     profile_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     settings = load_settings()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Self
+from uuid import uuid4
 
 from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
@@ -17,10 +18,11 @@ class BrowserToolExecutionError(ToolException):
 
 
 class BrowserSession:
-    def __init__(self, server: Any) -> None:
+    def __init__(self, server: Any, *, run_id: str) -> None:
         self._server = server
         self._backend = server.backend
-        self._capture_workspace = Path.cwd() / ".z-apply" / "browser-artifacts"
+        self.run_id = run_id
+        self._capture_workspace = Path.cwd() / ".z-apply" / "runs" / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(server.backend_pool.tools),
             self.call_tool,
@@ -28,8 +30,11 @@ class BrowserSession:
         )
 
     @classmethod
-    async def start(cls) -> Self:
-        return cls(await create_connection(build_browser_config()))
+    async def start(cls, *, run_id: str | None = None) -> Self:
+        resolved_run_id = run_id or uuid4().hex
+        return cls(
+            await create_connection(build_browser_config(resolved_run_id)), run_id=resolved_run_id
+        )
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         result = await self._backend.call_tool(
@@ -75,11 +80,8 @@ def _text_content(result: Any) -> str:
 
 
 def _raise_for_tool_error(name: str, result: Any) -> None:
-    if bool(
-        getattr(result, "is_error", False)
-        or getattr(result, "isError", False)
-    ):
-        raise BrowserToolExecutionError(f'{name} failed: {_text_content(result)}')
+    if bool(getattr(result, "is_error", False) or getattr(result, "isError", False)):
+        raise BrowserToolExecutionError(f"{name} failed: {_text_content(result)}")
 
 
 def _content_blocks(result: Any) -> list[dict[str, str]]:
