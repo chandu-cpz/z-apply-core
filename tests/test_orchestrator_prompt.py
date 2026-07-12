@@ -51,6 +51,12 @@ class OrchestratorPromptTests(unittest.TestCase):
             "Never call `ask_human` merely because browser automation", self.text
         )
 
+    def test_uses_serial_one_field_human_loop_with_native_task_examples(self) -> None:
+        self.assertIn("One-field human loop (hard rule)", self.text)
+        self.assertIn("human question is not a batch questionnaire", self.text)
+        self.assertIn('subagent_type="AnswerWriter"', self.text)
+        self.assertIn("Select only Gender = Male", self.text)
+
     def test_verifier_error_not_treated_as_not_verified(self) -> None:
         collapsed = " ".join(self.text.split())
         self.assertIn("Never treat a `verifier_error` as `not_verified`", collapsed)

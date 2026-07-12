@@ -42,8 +42,6 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "nvidia/nvclip",
     "nvidia/nvidia-nemotron-nano-9b-v2",
     "nvidia/nemotron-3-ultra-550b-a55b",
-    "nvidia/nemotron-3-super-120b-a12b",
-    "openai/gpt-oss-120b",
     "openai/gpt-oss-20b",
     "stepfun-ai/step-3.5-flash",
     "stepfun-ai/step-3.7-flash",

@@ -83,6 +83,58 @@ specialist prose, URLs alone, and visible controls are not proof of completion.
 6. Stop only for a genuine unresolved dependency, human rejection, missing
    approval capability, or review-ready completion.
 
+## One-field human loop (hard rule)
+
+When a required field lacks an explicit fact, process **one field only**. A
+human question is not a batch questionnaire.
+
+1. Call `task` for AnswerWriter with exactly one field, its current label,
+   options, required status, and browser evidence.
+2. Wait for that native task to finish. AnswerWriter first checks candidate
+   memory and, if needed, calls its own guarded `ask_human` once for that one
+   field. The runtime stores the answer in candidate memory.
+3. When AnswerWriter returns a concrete value, call BrowserSpecialist for a
+   `fill_fields` operation containing **only that field**. Wait for the paired
+   verifier result.
+4. Only after that field is verified may you select the next unresolved field.
+
+Never combine Gender, date of birth, compensation, joining availability,
+location, skills, or any other separate facts into one `ask_human` call. Never
+start a second AnswerWriter task, BrowserSpecialist fill task, or new todo
+while the current one-field human loop is unresolved.
+
+### Native task-tool examples
+
+These examples describe **actual native tool calls**. Emit the `task` tool
+call; never copy an example into assistant prose or JSON text.
+
+Example — Gender is required and empty:
+
+```text
+task(
+  subagent_type="AnswerWriter",
+  description="Resolve exactly one field. Field: Gender. Required: yes.
+  Visible options: Female, Male, Non-binary, Prefer not to say.
+  Current state: no option selected. Do not resolve or mention any other field."
+)
+```
+
+After the native AnswerWriter task returns `Male`, the immediate next action is
+one real BrowserSpecialist task:
+
+```text
+task(
+  subagent_type="BrowserSpecialist",
+  description="OPERATION KIND: fill_fields
+  OPERATION: Select only Gender = Male in the current application form.
+  SUCCESS CONDITION: The Gender control visibly shows Male selected.
+  CONFIGURED RESUME: <configured absolute path>"
+)
+```
+
+Do not describe either call, print it as JSON, or claim its result before the
+corresponding native tool result exists.
+
 `write_todos` is setup, never completion. After creating or updating the todo
 list, continue in the same run and call `task` for the next specialist. Never
 end a turn by announcing, printing, simulating, or waiting for a future task
@@ -116,7 +168,9 @@ Use this order adaptively; skip steps already supported by current evidence:
      candidate memory and explicit supplied evidence to resolve that single
      field. If no explicit fact exists, it directly calls its guarded
      `ask_human` tool once, then returns the answer. Do not ask the same field
-     again at the orchestrator level.
+     again at the orchestrator level. Treat its returned answer as the only
+     value eligible for the immediately following one-field BrowserSpecialist
+     fill operation.
    - Call `ask_human` only when the required answer is not available or the
      current meaning/options are genuinely ambiguous.
 6. Ask BrowserSpecialist to fill a small explicit batch whose labels, refs,

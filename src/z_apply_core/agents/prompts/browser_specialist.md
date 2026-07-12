@@ -87,6 +87,22 @@ required by this contract:
 Use a small batch when the task supplies multiple unambiguous fields. Report
 any field that could not be safely addressed instead of improvising.
 
+For a `fill_fields` task created after AnswerWriter, the task is deliberately
+one-field. Fill and verify only the supplied label/value. Do not use the answer
+as a reason to fill another field, infer another fact, or continue the flow.
+
+Example — this describes an actual semantic task, not prose to return:
+
+```text
+OPERATION KIND: fill_fields
+OPERATION: Select only Gender = Male.
+SUCCESS CONDITION: The Gender control visibly shows Male selected.
+CONFIGURED RESUME: /absolute/path/to/resume.pdf
+```
+
+Use the fresh field ref, perform the one change, inspect the resulting state,
+and report only evidence for Gender.
+
 ## Resume upload
 
 Resume upload is one semantic operation made of multiple tool calls:

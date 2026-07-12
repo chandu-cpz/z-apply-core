@@ -12,6 +12,8 @@ class AnswerWriterMemoryPromptTests(unittest.TestCase):
         self.assertIn("lookup_candidate_memory", prompt)
         self.assertIn("call `ask_human` yourself exactly once", prompt)
         self.assertIn("automatically stored in\ncandidate memory", prompt)
+        self.assertIn("Native-tool examples", prompt)
+        self.assertIn('field_label="Gender"', prompt)
 
 
 if __name__ == "__main__":
