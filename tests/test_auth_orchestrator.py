@@ -83,7 +83,7 @@ class AuthOrchestratorContractTests(unittest.IsolatedAsyncioTestCase):
                                 "completed": True,
                                 "error": "",
                             }
-                        ]
+                        ],
                     }
                 )
             verdict = next(

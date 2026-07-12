@@ -10,8 +10,12 @@ from z_apply_core.browser_tools import BrowserToolRegistry
 
 class SimpleParam:
     def __init__(
-        self, name: str, annotation: Any, default: Any,
-        description: str | None, hidden: bool,
+        self,
+        name: str,
+        annotation: Any,
+        default: Any,
+        description: str | None,
+        hidden: bool,
     ) -> None:
         self.name = name
         self.annotation = annotation
@@ -22,7 +26,10 @@ class SimpleParam:
 
 class SimpleSpec:
     def __init__(
-        self, name: str, title: str | None, description: str | None,
+        self,
+        name: str,
+        title: str | None,
+        description: str | None,
         parameters: list[SimpleParam],
     ) -> None:
         self.name = name

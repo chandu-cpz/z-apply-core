@@ -47,9 +47,7 @@ class OrchestratorPromptTests(unittest.TestCase):
         self.assertIn("After two failed attempts at the same semantic operation", self.text)
 
     def test_ask_human_not_for_technical_failures(self) -> None:
-        self.assertIn(
-            "Never call `ask_human` merely because browser automation", self.text
-        )
+        self.assertIn("Never call `ask_human` merely because browser automation", self.text)
 
     def test_uses_serial_one_field_human_loop_with_native_task_examples(self) -> None:
         self.assertIn("One-field human loop (hard rule)", self.text)
