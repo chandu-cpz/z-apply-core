@@ -20,9 +20,7 @@ from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
 _log = logging.getLogger(__name__)
 
 
-class DuplicateMutationGuardMiddleware(
-    AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
-):
+class DuplicateMutationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """Prevent the same browser mutation from being executed twice in one task.
 
     Tracks completed (tool_name, args) signatures within a single BrowserSpecialist
@@ -46,14 +44,6 @@ class DuplicateMutationGuardMiddleware(
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         tool_name = str(request.tool_call.get("name", ""))
-
-        if tool_name == "task":
-            arguments = request.tool_call.get("args", {})
-            subagent = arguments.get("subagent_type") if isinstance(arguments, dict) else None
-            if subagent == self._target_subagent:
-                self._completed_mutations.clear()
-                _log.info("DuplicateMutationGuard: reset for new %s task", self._target_subagent)
-            return await handler(request)
 
         if tool_name not in BROWSER_CHANGING_TOOL_NAMES:
             return await handler(request)
@@ -79,9 +69,10 @@ class DuplicateMutationGuardMiddleware(
             )
 
         result = await handler(request)
-        is_error = getattr(result, "status", "") == "error" or "error" in str(
-            getattr(result, "content", "")
-        ).lower()
+        is_error = (
+            getattr(result, "status", "") == "error"
+            or "error" in str(getattr(result, "content", "")).lower()
+        )
         if not is_error:
             self._completed_mutations.add(sig)
             _log.info(
@@ -90,3 +81,14 @@ class DuplicateMutationGuardMiddleware(
                 len(self._completed_mutations),
             )
         return result
+
+    async def aafter_agent(
+        self,
+        state: AgentState[ResponseT],
+        runtime: Any,
+    ) -> dict[str, Any] | None:
+        """The subagent run, rather than a parent-only task call, defines scope."""
+        del state, runtime
+        self._completed_mutations.clear()
+        _log.info("DuplicateMutationGuard: reset after BrowserSpecialist invocation")
+        return None

@@ -22,9 +22,7 @@ _HUMAN_CHALLENGE_REASONS = frozenset({"human_challenge"})
 _VALID_REASONS = frozenset({"missing_candidate_fact", "ambiguous_field", "human_challenge"})
 
 
-class HumanEscalationGuardMiddleware(
-    AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
-):
+class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """Prevent premature or unjustified ask_human calls.
 
     Enforces typed reasons and preconditions before allowing ask_human.
@@ -82,13 +80,8 @@ class HumanEscalationGuardMiddleware(
                 tool_call_id=str(request.tool_call.get("id", "")),
             )
 
-        if (
-            self._progress.resume_control_visible
-            and not self._progress.resume_uploaded_verified
-        ):
-            _log.info(
-                "HumanEscalationGuard: rejecting ask_human - resume upload pending"
-            )
+        if self._progress.resume_control_visible and not self._progress.resume_uploaded_verified:
+            _log.info("HumanEscalationGuard: rejecting ask_human - resume upload pending")
             return ToolMessage(
                 content=(
                     "Human escalation denied: independent automation work remains. "
