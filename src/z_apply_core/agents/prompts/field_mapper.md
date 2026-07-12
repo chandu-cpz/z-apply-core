@@ -44,6 +44,14 @@ mapping every independent field. State whether it gates an intermediate
 Next/Continue action or only final submission. A final-submit-only CAPTCHA is
 not part of the safe fill batch.
 
+## Typed result contract
+
+After inspecting current browser evidence, call `record_field_map` exactly once.
+Its `fields` argument must contain every visible field with `label`, `ref`,
+`required`, and the exact `status` from the classification list. Set
+`resume_control_visible` only when current browser evidence proves that control
+is visible. Put the fresh browser evidence supporting this map in `evidence`.
+
 ## Result
 
 End with:

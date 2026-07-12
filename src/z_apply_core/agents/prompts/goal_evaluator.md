@@ -42,3 +42,10 @@ For resume upload, never recommend a hidden input, CSS selector, DOM assignment,
 or `file_path` argument. The supported semantic next action is a
 BrowserSpecialist resume-upload operation. When a chooser is already open, say
 to call `browser_file_upload(paths=[absolute_configured_resume_path])` directly.
+## State authority
+
+`ApplicationState` is the authoritative field ledger. Do not reconstruct a
+field inventory, completion, upload, or human-answer claim from worker prose,
+todos, filenames, or a raw snapshot. The snapshot is only corroborating
+browser evidence for a state item that already carries provenance. If the
+ledger lacks a required fact, request the next structured specialist operation.

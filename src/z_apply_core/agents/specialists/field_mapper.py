@@ -9,7 +9,11 @@ from langchain_core.tools import BaseTool
 from z_apply_core.agents.prompts import load_prompt
 
 
-def build_field_mapper(browser_tools: Sequence[BaseTool]) -> SubAgent:
+def build_field_mapper(
+    browser_tools: Sequence[BaseTool],
+    *,
+    state_tools: Sequence[BaseTool] = (),
+) -> SubAgent:
     return cast(
         SubAgent,
         {
@@ -20,6 +24,6 @@ def build_field_mapper(browser_tools: Sequence[BaseTool]) -> SubAgent:
                 "without changing browser state."
             ),
             "system_prompt": load_prompt("field_mapper.md"),
-            "tools": list(browser_tools),
+            "tools": [*browser_tools, *state_tools],
         },
     )

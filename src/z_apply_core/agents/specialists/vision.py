@@ -10,9 +10,7 @@ from z_apply_core.agents.prompts import load_prompt
 
 
 def build_vision_specialist(browser_tools: Sequence[BaseTool]) -> SubAgent:
-    screenshot_tools = [
-        tool for tool in browser_tools if tool.name == "browser_take_screenshot"
-    ]
+    screenshot_tools = [tool for tool in browser_tools if tool.name == "browser_take_screenshot"]
     return cast(
         SubAgent,
         {

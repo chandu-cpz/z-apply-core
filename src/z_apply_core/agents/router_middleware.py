@@ -15,7 +15,10 @@ from langchain.agents.middleware.types import (
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AnyMessage
 from nim_router import NimRouter
+from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
+
+from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 
 logger = logging.getLogger(__name__)
 
@@ -119,28 +122,35 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
 
         logger.debug(
             "NimRouterMiddleware leased model=%s for role=%s",
-            selection.info.id, self._role,
+            selection.info.id,
+            self._role,
         )
 
         start = time.monotonic()
         try:
             leased_model: BaseChatModel = selection.llm
-            result: ModelResponse[ResponseT] = await handler(
-                request.override(model=leased_model)
-            )
+            result: ModelResponse[ResponseT] = await handler(request.override(model=leased_model))
         except BaseException as exc:  # noqa: BLE001 - re-raised after recording
             logger.debug(
                 "NimRouterMiddleware recording failure for model=%s role=%s",
                 selection.info.id,
                 self._role,
             )
+            protocol_failure = isinstance(exc, ToolProtocolViolation)
             self._router.record_failure(
                 selection.info.id,
                 error=exc,
+                kind=ErrorKind.TOOL_CALL_FAILURE if protocol_failure else None,
                 tools=tools,
                 structured=structured,
                 vision=vision,
             )
+            if protocol_failure:
+                logger.warning(
+                    "NimRouterMiddleware recorded tool protocol failure for model=%s role=%s",
+                    selection.info.id,
+                    self._role,
+                )
             raise
         else:
             latency = time.monotonic() - start

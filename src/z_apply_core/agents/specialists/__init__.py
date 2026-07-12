@@ -13,9 +13,11 @@ from nim_router import NimRouter
 from z_apply_core.agents.application_progress import (
     ApplicationProgress,
     BrowserUploadProgressMiddleware,
+    make_field_map_tools,
 )
 from z_apply_core.agents.browser_action_verification import BrowserActionVerificationMiddleware
 from z_apply_core.agents.duplicate_mutation_guard import DuplicateMutationGuardMiddleware
+from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.browser import build_browser_specialist
@@ -41,6 +43,7 @@ def _with_routing(
         *extra_middleware,
         ModelRetryMiddleware(max_retries=2, on_failure="error"),
         NimRouterMiddleware(router, role=role),
+        ProseToolCallGuardMiddleware(),
     ]
     return cast("SubAgent", enriched)
 
@@ -76,7 +79,10 @@ async def build_specialists(
             model=fallback_model,
         ),
         _with_routing(
-            build_field_mapper(read_only_browser_tools),
+            build_field_mapper(
+                read_only_browser_tools,
+                state_tools=make_field_map_tools(progress) if progress is not None else (),
+            ),
             router=router,
             role="FieldMapper",
             model=fallback_model,

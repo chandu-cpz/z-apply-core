@@ -16,10 +16,15 @@ from nim_router.errors import NimRouterError
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.orchestrator import CORE_ROOT, DEEPAGENT_FILESYSTEM_PERMISSIONS
 from z_apply_core.agents.prompts import load_prompt
+from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import AuthOrchestratorRun, AuthStatus
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_auth_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+from z_apply_core.agents.terminal_guard import (
+    TerminalDecisionGuardMiddleware,
+    TerminalDecisionRecorded,
+)
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -103,6 +108,8 @@ async def run_auth_orchestrator(
                 role="auth_orchestrator",
                 initial_selection=selection,
             ),
+            ProseToolCallGuardMiddleware(),
+            TerminalDecisionGuardMiddleware(lambda: auth_result is not None),
         ],
         subagents=await build_auth_specialists(
             router,
@@ -126,11 +133,16 @@ async def run_auth_orchestrator(
             config=run_config,
             version="v3",
         )
-        result = await consume_deepagent_stream(
-            stream,
-            sink=sink,
-            root_source="authenticate_default_account",
-        )
+        try:
+            result = await consume_deepagent_stream(
+                stream,
+                sink=sink,
+                root_source="authenticate_default_account",
+            )
+        except TerminalDecisionRecorded:
+            if auth_result is None:
+                raise
+            break
         trace = result.output.get("_z_apply_tool_trace")
         if isinstance(trace, list):
             cumulative_trace.extend(entry for entry in trace if isinstance(entry, dict))
