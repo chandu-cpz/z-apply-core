@@ -14,6 +14,28 @@ class FrameworkEventSink(Protocol):
         pass
 
 
+class SequencedEventSink:
+    """Attach a run-local total order and source identity to rendered events."""
+
+    def __init__(self, delegate: FrameworkEventSink | None, *, run_id: str) -> None:
+        self._delegate = delegate
+        self._run_id = run_id
+        self._sequence = 0
+
+    async def accept(self, event: FrameworkTraceEvent) -> None:
+        self._sequence += 1
+        data = {
+            **event.data,
+            "event_seq": self._sequence,
+            "run_id": self._run_id,
+            "agent_path": event.data.get("agent_path", event.name),
+        }
+        if self._delegate is not None:
+            await self._delegate.accept(
+                FrameworkTraceEvent(event.event, event.name, data, event.raw)
+            )
+
+
 @dataclass(slots=True)
 class FrameworkTraceEvent:
     event: str

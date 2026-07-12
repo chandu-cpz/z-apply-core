@@ -159,6 +159,8 @@ async def _consume_tool_calls(
 ) -> None:
     async for call in tool_calls:
         tool_name = str(call.tool_name)
+        tool_call_id = str(getattr(call, "tool_call_id", getattr(call, "id", "")))
+        parent_tool_call_id = str(getattr(call, "parent_tool_call_id", ""))
         await _emit(
             sink,
             "agent_tool_start",
@@ -166,6 +168,8 @@ async def _consume_tool_calls(
             {
                 "tool_name": tool_name,
                 "input": call.input,
+                "tool_call_id": tool_call_id,
+                "parent_tool_call_id": parent_tool_call_id,
             },
         )
         async for delta in call.output_deltas:
@@ -188,6 +192,8 @@ async def _consume_tool_calls(
                 "output": call.output,
                 "error": str(call.error) if call.error is not None else "",
                 "completed": call.completed,
+                "tool_call_id": tool_call_id,
+                "parent_tool_call_id": parent_tool_call_id,
             },
         )
         tool_trace.append(
@@ -198,6 +204,8 @@ async def _consume_tool_calls(
                 "output": call.output,
                 "error": str(call.error) if call.error is not None else "",
                 "completed": bool(call.completed),
+                "tool_call_id": tool_call_id,
+                "parent_tool_call_id": parent_tool_call_id,
             }
         )
 
