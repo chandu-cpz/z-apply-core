@@ -120,10 +120,18 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             )
         self._last_model_id = selection.info.id
 
-        logger.debug(
-            "NimRouterMiddleware leased model=%s for role=%s",
-            selection.info.id,
+        logger.info(
+            "router %s selected %s (priority=%s, tools=%s, structured=%s, "
+            "vision=%s, reasoning=%s, candidates=%d, exploring=%s)",
             self._role,
+            selection.info.id,
+            priority,
+            tools,
+            structured,
+            vision,
+            reasoning,
+            len(self._router._candidates) if hasattr(self._router, "_candidates") else 0,
+            bool(self._router._exploring) if hasattr(self._router, "_exploring") else False,
         )
 
         start = time.monotonic()
@@ -131,10 +139,11 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             leased_model: BaseChatModel = selection.llm
             result: ModelResponse[ResponseT] = await handler(request.override(model=leased_model))
         except BaseException as exc:  # noqa: BLE001 - re-raised after recording
-            logger.debug(
-                "NimRouterMiddleware recording failure for model=%s role=%s",
-                selection.info.id,
+            logger.warning(
+                "router %s model %s failed: %s",
                 self._role,
+                selection.info.id,
+                exc,
             )
             protocol_failure = isinstance(exc, ToolProtocolViolation)
             self._router.record_failure(
@@ -154,10 +163,10 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             raise
         else:
             latency = time.monotonic() - start
-            logger.debug(
-                "NimRouterMiddleware recording success for model=%s role=%s latency=%.2f",
-                selection.info.id,
+            logger.info(
+                "router %s model %s succeeded in %.2fs",
                 self._role,
+                selection.info.id,
                 latency,
             )
             self._router.record_success(

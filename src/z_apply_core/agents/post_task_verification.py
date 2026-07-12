@@ -205,7 +205,7 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
         except TerminalDecisionRecorded:
             pass
         except Exception as exc:  # noqa: BLE001
-            _log.warning("Post-task verifier failed: %s", exc)
+            _log.warning("Post-task verifier failed: %r", exc)
         return state.decision
 
     async def _fresh_snapshot(self) -> SnapshotEvidence:
