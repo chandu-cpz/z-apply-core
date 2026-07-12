@@ -1,0 +1,61 @@
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+    AgentState,
+    ContextT,
+    ResponseT,
+    ToolCallRequest,
+)
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
+
+
+class NoProgressCircuitOpen(RuntimeError):
+    """The active agent repeatedly attempted calls that cannot make progress."""
+
+
+class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
+    """End one agent turn after repeated denied or duplicate non-progress calls."""
+
+    def __init__(self, *, max_identical_denials: int = 2, max_non_progress: int = 3) -> None:
+        super().__init__()
+        self._max_identical_denials = max_identical_denials
+        self._max_non_progress = max_non_progress
+        self._last_denial = ""
+        self._same_denials = 0
+        self._non_progress = 0
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        result = await handler(request)
+        if _is_non_progress(result):
+            detail = str(getattr(result, "content", ""))
+            self._non_progress += 1
+            self._same_denials = self._same_denials + 1 if detail == self._last_denial else 1
+            self._last_denial = detail
+            if (
+                self._same_denials >= self._max_identical_denials
+                or self._non_progress >= self._max_non_progress
+            ):
+                raise NoProgressCircuitOpen(
+                    "no_progress: repeated denied or non-progress tool calls ended this agent turn"
+                )
+        else:
+            self._last_denial = ""
+            self._same_denials = 0
+            self._non_progress = 0
+        return result
+
+
+def _is_non_progress(result: ToolMessage | Command[Any]) -> bool:
+    if not isinstance(result, ToolMessage):
+        return False
+    text = str(result.content).lower()
+    return result.status == "error" or "denied:" in text or "duplicate mutation prevented" in text
