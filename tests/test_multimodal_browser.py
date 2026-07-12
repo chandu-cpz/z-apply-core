@@ -28,7 +28,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
             backend=backend,
             backend_pool=SimpleNamespace(tools=[]),
         )
-        session = BrowserSession(server)
+        session = BrowserSession(server, run_id="test-run")
 
         await session.call_tool(
             "browser_snapshot",
@@ -57,7 +57,9 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
                 {"filename": "root-leak.png", "fullPage": True},
             ),
         )
-        expected_workspace = str(Path.cwd() / ".z-apply" / "browser-artifacts")
+        expected_workspace = str(
+            Path.cwd() / ".z-apply" / "runs" / "test-run" / "browser-artifacts"
+        )
         self.assertEqual(
             backend.call_tool.await_args_list[0].kwargs["meta"],
             {"raw": True, "cwd": expected_workspace},
@@ -85,7 +87,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
             backend=backend,
             backend_pool=SimpleNamespace(tools=[]),
         )
-        session = BrowserSession(server)
+        session = BrowserSession(server, run_id="test-run")
 
         with self.assertRaises(BrowserToolExecutionError):
             await session.call_tool("browser_snapshot", {})
@@ -106,7 +108,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
         )
 
         with self.assertRaises(BrowserToolExecutionError):
-            await BrowserSession(server).call_tool("browser_snapshot", {})
+            await BrowserSession(server, run_id="test-run").call_tool("browser_snapshot", {})
 
     def test_mcp_image_content_becomes_standard_langchain_block(self) -> None:
         result = SimpleNamespace(

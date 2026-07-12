@@ -12,6 +12,7 @@ from z_apply_core.agents.application_progress import (
     ApplicationProgressEventSink,
     BrowserUploadProgressMiddleware,
 )
+from z_apply_core.agents.application_state import EvidenceRef, FieldState
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.stream_events import FrameworkTraceEvent
 
@@ -32,6 +33,34 @@ def _make_guard_request(
     request = MagicMock()
     request.tool_call = {"name": tool_name, "args": args, "id": call_id}
     return request
+
+
+def _make_evidence(source: str = "snapshot") -> EvidenceRef:
+    return EvidenceRef(kind="browser", source=source, detail="test evidence")
+
+
+def _make_field(label: str, ref: str = "e10", required: bool = True) -> FieldState:
+    return FieldState(
+        label=label,
+        ref=ref,
+        required=required,
+        status="candidate_fact_available",
+        evidence=_make_evidence(),
+    )
+
+
+def _set_progress(
+    progress: ApplicationProgress,
+    fields_mapped: bool = False,
+    resume_control_visible: bool = False,
+    resume_uploaded_verified: bool = False,
+) -> None:
+    if fields_mapped:
+        progress.state.fields["TestField"] = _make_field("TestField")
+    else:
+        progress.state.fields.clear()
+    progress.state.resume_control = _make_evidence() if resume_control_visible else None
+    progress.state.resume_uploaded = _make_evidence() if resume_uploaded_verified else None
 
 
 # ── Fix 1: HumanEscalationGuardMiddleware tests ─────────────────────────
@@ -58,7 +87,7 @@ class HumanEscalationGuardTests(unittest.TestCase):
 
     def test_rejects_no_field_label(self) -> None:
         progress = ApplicationProgress()
-        progress.fields_mapped = True
+        _set_progress(progress, fields_mapped=True)
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock()
         req = _make_guard_request(
@@ -71,8 +100,7 @@ class HumanEscalationGuardTests(unittest.TestCase):
 
     def test_rejects_when_fields_not_mapped(self) -> None:
         progress = ApplicationProgress()
-        progress.fields_mapped = False
-        progress.resume_control_visible = False
+        _set_progress(progress, fields_mapped=False, resume_control_visible=False)
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock()
         req = _make_guard_request(
@@ -90,9 +118,12 @@ class HumanEscalationGuardTests(unittest.TestCase):
 
     def test_rejects_when_resume_upload_pending(self) -> None:
         progress = ApplicationProgress()
-        progress.fields_mapped = True
-        progress.resume_control_visible = True
-        progress.resume_uploaded_verified = False
+        _set_progress(
+            progress,
+            fields_mapped=True,
+            resume_control_visible=True,
+            resume_uploaded_verified=False,
+        )
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock()
         req = _make_guard_request(
@@ -110,9 +141,9 @@ class HumanEscalationGuardTests(unittest.TestCase):
 
     def test_allows_when_resume_uploaded_and_fields_mapped(self) -> None:
         progress = ApplicationProgress()
-        progress.fields_mapped = True
-        progress.resume_control_visible = True
-        progress.resume_uploaded_verified = True
+        _set_progress(
+            progress, fields_mapped=True, resume_control_visible=True, resume_uploaded_verified=True
+        )
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock(return_value=MagicMock(content="ok"))
         req = _make_guard_request(
@@ -129,9 +160,7 @@ class HumanEscalationGuardTests(unittest.TestCase):
 
     def test_allows_when_no_resume_control(self) -> None:
         progress = ApplicationProgress()
-        progress.fields_mapped = True
-        progress.resume_control_visible = False
-        progress.resume_uploaded_verified = False
+        _set_progress(progress, fields_mapped=True, resume_control_visible=False)
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock(return_value=MagicMock(content="ok"))
         req = _make_guard_request(
@@ -156,8 +185,7 @@ class HumanEscalationGuardTests(unittest.TestCase):
 
     def test_request_submit_approval_unaffected(self) -> None:
         progress = ApplicationProgress()
-        progress.resume_control_visible = True
-        progress.resume_uploaded_verified = False
+        _set_progress(progress, resume_control_visible=True, resume_uploaded_verified=False)
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock(return_value=MagicMock(content="ok"))
         req = _make_guard_request("request_submit_approval", {"final_review": "all good"})
@@ -178,18 +206,10 @@ class ApplicationProgressTests(unittest.TestCase):
 
     def test_completed_upload_artifact_is_typed_progress_evidence(self) -> None:
         p = ApplicationProgress()
-        journal = [
-            {
-                "tool_name": "browser_file_upload",
-                "completed": True,
-                "error": "",
-                "output": "- [Snapshot](.z-apply/browser-artifacts/page.yml)",
-            },
-        ]
-        p.update_from_tool_journal(journal, "resume upload section visible")
+        p.state.resume_uploaded = _make_evidence()
         self.assertTrue(p.resume_uploaded_verified)
 
-    def test_update_from_tool_journal_upload_not_verified(self) -> None:
+    def test_update_from_tool_journal_is_noop(self) -> None:
         p = ApplicationProgress()
         journal = [
             {
@@ -202,13 +222,15 @@ class ApplicationProgressTests(unittest.TestCase):
         p.update_from_tool_journal(journal, "resume upload control visible")
         self.assertFalse(p.resume_uploaded_verified)
 
-    def test_resume_control_detection_from_snapshot(self) -> None:
+    def test_resume_control_detection_requires_typed_evidence(self) -> None:
         p = ApplicationProgress()
-        p.update_from_tool_journal([], "Upload Resume / CV section visible")
+        self.assertFalse(p.resume_control_visible)
+        p.state.resume_control = _make_evidence()
         self.assertTrue(p.resume_control_visible)
 
     def test_mark_fields_mapped(self) -> None:
         p = ApplicationProgress()
+        p.state.fields["Name"] = _make_field("Name")
         p.mark_fields_mapped()
         self.assertTrue(p.fields_mapped)
 
@@ -232,7 +254,7 @@ class ApplicationProgressTests(unittest.TestCase):
             )
         )
 
-        self.assertTrue(p.resume_uploaded_verified)
+        self.assertFalse(p.resume_uploaded_verified)
 
     def test_failed_nested_upload_event_does_not_update_progress(self) -> None:
         p = ApplicationProgress()
@@ -256,7 +278,8 @@ class ApplicationProgressTests(unittest.TestCase):
         self.assertFalse(p.resume_uploaded_verified)
 
     def test_journal_refresh_does_not_regress_stream_verified_upload(self) -> None:
-        p = ApplicationProgress(resume_uploaded_verified=True)
+        p = ApplicationProgress()
+        p.state.resume_uploaded = _make_evidence()
 
         p.update_from_tool_journal([], "current form snapshot")
 
@@ -264,21 +287,7 @@ class ApplicationProgressTests(unittest.TestCase):
 
     def test_completed_field_mapper_task_is_typed_progress_evidence(self) -> None:
         p = ApplicationProgress()
-        p.update_from_tool_journal(
-            [
-                {
-                    "tool_name": "task",
-                    "input": {
-                        "subagent_type": "FieldMapper",
-                        "description": "Map the current application form",
-                    },
-                    "completed": True,
-                    "error": "",
-                    "output": "mapping result text is not inspected",
-                }
-            ],
-            "current form snapshot",
-        )
+        p.state.fields["Name"] = _make_field("Name")
 
         self.assertTrue(p.fields_mapped)
 
@@ -288,9 +297,10 @@ class ApplicationProgressTests(unittest.TestCase):
         request = _make_guard_request("browser_file_upload", {"paths": ["/resume.pdf"]})
         handler = AsyncMock(return_value=ToolMessage(content="uploaded", tool_call_id="c1"))
 
-        _run(middleware.awrap_tool_call(request, handler))
+        result = _run(middleware.awrap_tool_call(request, handler))
 
-        self.assertTrue(progress.resume_uploaded_verified)
+        self.assertEqual(result.content, "uploaded")
+        self.assertFalse(progress.resume_uploaded_verified)
 
     def test_nested_upload_middleware_does_not_mark_error_result(self) -> None:
         progress = ApplicationProgress()
@@ -318,10 +328,12 @@ class AskHumanRegressionTests(unittest.TestCase):
     def test_ask_human_rejected_when_resume_pending(self) -> None:
         """Simulate: form opened, resume control visible, upload not verified."""
         progress = ApplicationProgress()
-        progress.form_open_verified = True
-        progress.resume_control_visible = True
-        progress.resume_uploaded_verified = False
-        progress.fields_mapped = False
+        _set_progress(
+            progress,
+            fields_mapped=False,
+            resume_control_visible=True,
+            resume_uploaded_verified=False,
+        )
 
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock()
@@ -342,10 +354,9 @@ class AskHumanRegressionTests(unittest.TestCase):
     def test_ask_human_allowed_after_resume_verified_and_fields_mapped(self) -> None:
         """Simulate: resume uploaded, fields mapped, genuinely missing candidate fact."""
         progress = ApplicationProgress()
-        progress.form_open_verified = True
-        progress.resume_control_visible = True
-        progress.resume_uploaded_verified = True
-        progress.fields_mapped = True
+        _set_progress(
+            progress, fields_mapped=True, resume_control_visible=True, resume_uploaded_verified=True
+        )
 
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock(return_value=MagicMock(content="ok"))
@@ -364,9 +375,7 @@ class AskHumanRegressionTests(unittest.TestCase):
     def test_ask_human_allowed_for_human_challenge(self) -> None:
         """Simulate: genuine CAPTCHA/OTP dependency."""
         progress = ApplicationProgress()
-        progress.form_open_verified = True
-        progress.resume_control_visible = True
-        progress.resume_uploaded_verified = False
+        _set_progress(progress, resume_control_visible=True, resume_uploaded_verified=False)
 
         guard = HumanEscalationGuardMiddleware(progress)
         handler = AsyncMock(return_value=MagicMock(content="ok"))

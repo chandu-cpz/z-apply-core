@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
+from z_apply_core.agents.application_progress import ApplicationProgress
 from z_apply_core.agents.post_task_verification import PostTaskVerificationMiddleware
 from z_apply_core.stream_events import FrameworkTraceEvent
 
@@ -51,8 +53,24 @@ def _make_middleware(
     snapshot_tool = AsyncMock()
     snapshot_tool.ainvoke = AsyncMock(return_value="<fresh form snapshot/>")
     snapshot_tool.name = "browser_snapshot"
+
+    mock_model = MagicMock()
+    mock_model.bind_tools = MagicMock(return_value=mock_model)
+
+    mock_router = MagicMock()
+    mock_router.lease = AsyncMock(
+        return_value=SimpleNamespace(
+            info=SimpleNamespace(id="test-model"),
+            llm=mock_model,
+            callback=MagicMock(),
+        )
+    )
+
     return PostTaskVerificationMiddleware(
+        fallback_model=mock_model,
+        router=mock_router,
         read_only_browser_tools=[snapshot_tool],
+        progress=ApplicationProgress(),
         sink=sink,
     )
 
@@ -61,7 +79,12 @@ class NativeTaskPairingTests(unittest.TestCase):
     def _run(self, coro: Any) -> Any:
         return asyncio.run(coro)
 
-    def test_browser_task_is_followed_by_native_verifier_task(self) -> None:
+    @patch("z_apply_core.agents.post_task_verification.create_deep_agent")
+    def test_browser_task_is_followed_by_native_verifier_task(self, mock_create: MagicMock) -> None:
+        mock_graph = AsyncMock()
+        mock_graph.astream_events = AsyncMock(return_value=iter([]))
+        mock_create.return_value = mock_graph
+
         middleware = _make_middleware()
         calls: list[dict[str, Any]] = []
 
@@ -72,28 +95,32 @@ class NativeTaskPairingTests(unittest.TestCase):
                 return _task_result("Clicked Apply and observed the form")
             return _task_result("verified: Fresh evidence shows application fields")
 
-        result = self._run(middleware.awrap_tool_call(_task_request(), handler))
+        async def fake_verify(**kwargs: Any) -> Any:
+            from z_apply_core.agents.post_task_verification import VerificationDecision
+
+            return VerificationDecision(
+                operation="form_open",
+                status="verified",
+                evidence="Fresh snapshot confirms form is open",
+            )
+
+        with patch.object(middleware, "_verify", side_effect=fake_verify):
+            result = self._run(middleware.awrap_tool_call(_task_request(), handler))
 
         self.assertEqual(
             [call["subagent_type"] for call in calls],
-            ["BrowserSpecialist", "Verifier"],
+            ["BrowserSpecialist"],
         )
-        verifier_prompt = calls[1]["description"]
-        self.assertIn("Open the application form", verifier_prompt)
-        self.assertIn("Clicked Apply and observed the form", verifier_prompt)
-        self.assertIn("<fresh form snapshot/>", verifier_prompt)
         message = result.update["messages"][0]
         self.assertIn("BROWSER_SPECIALIST_RESULT", str(message.content))
         self.assertIn("VERIFIER_RESULT", str(message.content))
-        self.assertIn("verified: Fresh evidence", str(message.content))
+        self.assertIn("verified", str(message.content))
 
     def test_non_browser_task_uses_native_handler_once(self) -> None:
         middleware = _make_middleware()
         handler = AsyncMock(return_value=_task_result("mapped fields"))
 
-        result = self._run(
-            middleware.awrap_tool_call(_task_request("FieldMapper"), handler)
-        )
+        result = self._run(middleware.awrap_tool_call(_task_request("FieldMapper"), handler))
 
         self.assertEqual(handler.await_count, 1)
         self.assertEqual(result, handler.return_value)
@@ -104,30 +131,31 @@ class NativeTaskPairingTests(unittest.TestCase):
         async def handler(_request: ToolCallRequest) -> Command[Any]:
             raise RuntimeError("field snapshot connection closed")
 
-        result = self._run(
-            middleware.awrap_tool_call(_task_request("FieldMapper"), handler)
-        )
+        result = self._run(middleware.awrap_tool_call(_task_request("FieldMapper"), handler))
 
         self.assertIsInstance(result, ToolMessage)
         self.assertEqual(result.status, "error")
-        self.assertIn("FieldMapper task failed technically", str(result.content))
+        self.assertIn("field snapshot connection closed", str(result.content))
 
-    def test_verifier_failure_is_returned_without_repeating_browser_task(self) -> None:
+    def test_verifier_failure_is_returned_as_typed_error(self) -> None:
         middleware = _make_middleware()
         calls: list[str] = []
 
         async def handler(request: ToolCallRequest) -> Command[Any]:
             subagent_type = request.tool_call["args"]["subagent_type"]
             calls.append(subagent_type)
-            if subagent_type == "Verifier":
-                raise RuntimeError("model unavailable")
             return _task_result("Browser mutation completed")
 
-        result = self._run(middleware.awrap_tool_call(_task_request(), handler))
+        async def failing_verify(**kwargs: Any) -> None:
+            return None
 
-        self.assertEqual(calls, ["BrowserSpecialist", "Verifier"])
-        message = result.update["messages"][0]
-        self.assertIn("VERIFIER_ERROR: model unavailable", str(message.content))
+        with patch.object(middleware, "_verify", side_effect=failing_verify):
+            result = self._run(middleware.awrap_tool_call(_task_request(), handler))
+
+        self.assertEqual(calls, ["BrowserSpecialist"])
+        self.assertIsInstance(result, ToolMessage)
+        self.assertEqual(result.status, "error")
+        self.assertIn("no typed verdict", str(result.content))
 
     def test_browser_result_without_tool_message_skips_verifier(self) -> None:
         middleware = _make_middleware()
@@ -150,32 +178,26 @@ class NativeTaskPairingTests(unittest.TestCase):
         self.assertEqual(result.status, "error")
         self.assertIn("model stream timed out", str(result.content))
 
-    def test_typed_browser_failure_continues_same_operation_once(self) -> None:
+    def test_typed_browser_failure_returns_typed_error(self) -> None:
         middleware = _make_middleware()
         calls: list[dict[str, Any]] = []
-        browser_attempt = 0
 
         async def handler(request: ToolCallRequest) -> Command[Any]:
-            nonlocal browser_attempt
             arguments = request.tool_call["args"]
             calls.append(arguments)
             if arguments["subagent_type"] == "BrowserSpecialist":
-                browser_attempt += 1
-                if browser_attempt == 1:
-                    raise RuntimeError("browser_snapshot does not handle the modal state")
-                return _task_result("Uploaded resume through the open chooser")
+                raise RuntimeError("browser_snapshot does not handle the modal state")
             return _task_result("verified uploaded resume")
 
         result = self._run(middleware.awrap_tool_call(_task_request(), handler))
 
         self.assertEqual(
             [call["subagent_type"] for call in calls],
-            ["BrowserSpecialist", "BrowserSpecialist", "Verifier"],
+            ["BrowserSpecialist"],
         )
-        self.assertIn("CONTINUE THE SAME BROWSER OPERATION", calls[1]["description"])
-        self.assertIn("native file chooser", calls[1]["description"])
-        message = result.update["messages"][0]
-        self.assertIn("verified uploaded resume", str(message.content))
+        self.assertIsInstance(result, ToolMessage)
+        self.assertEqual(result.status, "error")
+        self.assertIn("browser_snapshot does not handle the modal state", str(result.content))
 
     def test_fresh_snapshot_is_visible_to_stream_sink(self) -> None:
         sink = CollectingSink()
@@ -191,40 +213,46 @@ class NativeTaskPairingTests(unittest.TestCase):
         )
         self.assertTrue(sink.events[-1].data["completed"])
 
-    def test_snapshot_failure_continues_same_browser_specialist_before_verifier(self) -> None:
+    @patch("z_apply_core.agents.post_task_verification.create_deep_agent")
+    def test_snapshot_failure_returns_typed_error(self, mock_create: MagicMock) -> None:
         snapshot_tool = AsyncMock()
-        snapshot_tool.ainvoke = AsyncMock(
-            side_effect=[RuntimeError("browser evidence unavailable"), "<uploaded resume/>"]
-        )
+        snapshot_tool.ainvoke = AsyncMock(side_effect=RuntimeError("browser evidence unavailable"))
         snapshot_tool.name = "browser_snapshot"
+
+        mock_model = MagicMock()
+        mock_model.bind_tools = MagicMock(return_value=mock_model)
+
+        mock_router = MagicMock()
+        mock_router.lease = AsyncMock(
+            return_value=SimpleNamespace(
+                info=SimpleNamespace(id="test-model"),
+                llm=mock_model,
+                callback=MagicMock(),
+            )
+        )
+
         middleware = PostTaskVerificationMiddleware(
+            fallback_model=mock_model,
+            router=mock_router,
             read_only_browser_tools=[snapshot_tool],
+            progress=ApplicationProgress(),
         )
         calls: list[dict[str, Any]] = []
-        browser_attempt = 0
 
         async def handler(request: ToolCallRequest) -> Command[Any]:
-            nonlocal browser_attempt
             arguments = request.tool_call["args"]
             calls.append(arguments)
-            if arguments["subagent_type"] == "BrowserSpecialist":
-                browser_attempt += 1
-                return _task_result(f"browser attempt {browser_attempt}")
-            return _task_result("verified from uploaded resume evidence")
+            return _task_result("browser attempt completed")
 
         result = self._run(middleware.awrap_tool_call(_task_request(), handler))
 
         self.assertEqual(
             [call["subagent_type"] for call in calls],
-            ["BrowserSpecialist", "BrowserSpecialist", "Verifier"],
+            ["BrowserSpecialist"],
         )
-        self.assertIn("CONTINUE THE SAME BROWSER OPERATION", calls[1]["description"])
-        self.assertIn("browser evidence unavailable", calls[1]["description"])
-        verifier_prompt = calls[2]["description"]
-        self.assertIn("browser attempt 2", verifier_prompt)
-        self.assertIn("<uploaded resume/>", verifier_prompt)
-        message = result.update["messages"][0]
-        self.assertIn("verified from uploaded resume evidence", str(message.content))
+        self.assertIsInstance(result, ToolMessage)
+        self.assertEqual(result.status, "error")
+        self.assertIn("browser evidence unavailable", str(result.content))
 
 
 if __name__ == "__main__":

@@ -16,9 +16,7 @@ class DuplicateMutationGuardTests(unittest.TestCase):
         finally:
             loop.close()
 
-    def _make_request(
-        self, tool_name: str, args: dict[str, Any], call_id: str = "c1"
-    ) -> MagicMock:
+    def _make_request(self, tool_name: str, args: dict[str, Any], call_id: str = "c1") -> MagicMock:
         request = MagicMock()
         request.tool_call = {"name": tool_name, "args": args, "id": call_id}
         return request
@@ -84,11 +82,7 @@ class DuplicateMutationGuardTests(unittest.TestCase):
         req1 = self._make_request("browser_click", {"target": "e112"})
         self._run(mw.awrap_tool_call(req1, handler))
 
-        task_req = self._make_request(
-            "task", {"subagent_type": "BrowserSpecialist", "description": "do stuff"}
-        )
-        task_handler = AsyncMock(return_value=MagicMock(content="done"))
-        self._run(mw.awrap_tool_call(task_req, task_handler))
+        self._run(mw.aafter_agent(MagicMock(), MagicMock()))
 
         handler2 = AsyncMock(return_value=MagicMock(content="clicked again"))
         req2 = self._make_request("browser_click", {"target": "e112"})
@@ -101,17 +95,12 @@ class DuplicateMutationGuardTests(unittest.TestCase):
         req1 = self._make_request("browser_click", {"target": "e112"})
         self._run(mw.awrap_tool_call(req1, handler))
 
-        task_req = self._make_request(
-            "task", {"subagent_type": "FieldMapper", "description": "map fields"}
-        )
-        task_handler = AsyncMock(return_value=MagicMock(content="done"))
-        self._run(mw.awrap_tool_call(task_req, task_handler))
+        self._run(mw.aafter_agent(MagicMock(), MagicMock()))
 
         handler2 = AsyncMock()
         req2 = self._make_request("browser_click", {"target": "e112"})
-        result = self._run(mw.awrap_tool_call(req2, handler2))
-        handler2.assert_not_called()
-        self.assertIn("Duplicate mutation prevented", result.content)
+        self._run(mw.awrap_tool_call(req2, handler2))
+        handler2.assert_called_once()
 
 
 if __name__ == "__main__":

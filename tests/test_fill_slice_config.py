@@ -32,8 +32,8 @@ class FillSliceConfigTests(unittest.TestCase):
             for path in permission.paths
         ]
 
-        self.assertIn("/.z-apply/browser-artifacts", allowed_paths)
-        self.assertIn("/.z-apply/browser-artifacts/**", allowed_paths)
+        self.assertIn("/.z-apply/runs", allowed_paths)
+        self.assertIn("/.z-apply/runs/**", allowed_paths)
         self.assertIn(CANDIDATE_CONTEXT_VIRTUAL_PATH, allowed_paths)
         self.assertEqual(CANDIDATE_CONTEXT_VIRTUAL_PATH, "/chandrakanth_v_resume.md")
 

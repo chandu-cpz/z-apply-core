@@ -27,13 +27,11 @@ class BrowserSpecialistPromptTests(unittest.TestCase):
     def test_fresh_snapshot_or_read_file(self) -> None:
         collapsed = " ".join(self.text.split())
         self.assertIn("browser_snapshot", collapsed)
-        self.assertIn("read_file", collapsed)
+        self.assertIn("RESUME_PATH", collapsed)
 
     def test_resume_upload_exception_preserved(self) -> None:
         collapsed = " ".join(self.text.split())
-        self.assertIn(
-            "after clicking a file control to open the native chooser", collapsed
-        )
+        self.assertIn("after clicking a file control to open the native chooser", collapsed)
 
     def test_success_condition_evidence_required(self) -> None:
         collapsed = " ".join(self.text.split())
