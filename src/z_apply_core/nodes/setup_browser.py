@@ -44,6 +44,7 @@ async def setup_browser(state: RunState) -> dict[str, object]:
             browser=browser,
             human_channel=human_channel,
             candidate_memory=CandidateMemory(),
+            run_id=browser.run_id,
         )
         return {
             "snapshot": snapshot,

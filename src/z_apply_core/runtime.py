@@ -18,6 +18,7 @@ class RunRuntime:
     browser: BrowserSession
     human_channel: HumanChannel | None = None
     candidate_memory: CandidateMemory | None = None
+    run_id: str = ""
 
     async def close(self) -> None:
         if self.human_channel is not None:

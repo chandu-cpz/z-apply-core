@@ -26,8 +26,7 @@ class VirtualDisplaySession:
         virtual_display_cls: Any = module.VirtualDisplay
         if hasattr(virtual_display_cls, "xvfb_args"):
             virtual_display_cls.xvfb_args = tuple(
-                str(arg).replace("1x1x24", "1920x1080x24")
-                for arg in virtual_display_cls.xvfb_args
+                str(arg).replace("1x1x24", "1920x1080x24") for arg in virtual_display_cls.xvfb_args
             )
 
         self._previous_display = os.environ.get("DISPLAY")

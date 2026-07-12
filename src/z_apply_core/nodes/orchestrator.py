@@ -4,11 +4,10 @@ import logging
 from pathlib import Path
 
 from langchain_core.runnables.config import RunnableConfig
-from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 
 from z_apply_core.agents.orchestrator import run_orchestrator
-from z_apply_core.human.tools import make_human_tools
+from z_apply_core.human.channel import HumanChannel
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
@@ -28,11 +27,12 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         snapshot=str(state.get("snapshot", "")),
         browser_tools=state.get("browser_tools", ()),
         config=config,
-        human_tools=_human_tools(state),
+        human_channel=_human_channel(state),
         sink=sink,
         router=router,
         resume_path=str(DEFAULT_RESUME_PATH),
         candidate_memory=runtime_candidate_memory(state),
+        run_id=_run_id(state),
     )
     snapshot = await _fresh_snapshot(state)
     return {
@@ -61,9 +61,7 @@ def _router_from_config(config: RunnableConfig) -> NimRouter:
         )
     router = configurable.get("nim_router")
     if not isinstance(router, NimRouter):
-        raise ValueError(
-            "configurable['nim_router'] is missing or not a NimRouter instance."
-        )
+        raise ValueError("configurable['nim_router'] is missing or not a NimRouter instance.")
     return router
 
 
@@ -80,13 +78,18 @@ async def _fresh_snapshot(state: RunState) -> str:
     return snapshot or fallback
 
 
-def _human_tools(state: RunState) -> list[BaseTool]:
+def _human_channel(state: RunState) -> HumanChannel | None:
     runtime = state.get("runtime")
     if not isinstance(runtime, RunRuntime) or runtime.human_channel is None:
-        return []
-    return make_human_tools(runtime.human_channel, candidate_memory=runtime.candidate_memory)
+        return None
+    return runtime.human_channel
 
 
 def runtime_candidate_memory(state: RunState) -> CandidateMemory | None:
     runtime = state.get("runtime")
     return runtime.candidate_memory if isinstance(runtime, RunRuntime) else None
+
+
+def _run_id(state: RunState) -> str:
+    runtime = state.get("runtime")
+    return runtime.run_id if isinstance(runtime, RunRuntime) else ""

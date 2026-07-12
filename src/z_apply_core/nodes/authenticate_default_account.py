@@ -11,7 +11,7 @@ from z_apply_core.config import load_settings
 from z_apply_core.human.tools import make_human_tools
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
-from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent, SequencedEventSink
 
 SIMPLIFY_DASHBOARD_URL = "https://simplify.jobs/dashboard"
 
@@ -32,7 +32,7 @@ async def authenticate_default_account(
         }
 
     original_url = str(state["job_url"])
-    sink = _sink_from_config(config)
+    sink = SequencedEventSink(_sink_from_config(config), run_id=runtime.run_id)
     await _emit(sink, "started", "Opening Simplify auth check.")
 
     try:
@@ -103,9 +103,7 @@ def _router_from_config(config: RunnableConfig) -> NimRouter:
         )
     router = configurable.get("nim_router")
     if not isinstance(router, NimRouter):
-        raise ValueError(
-            "configurable['nim_router'] is missing or not a NimRouter instance."
-        )
+        raise ValueError("configurable['nim_router'] is missing or not a NimRouter instance.")
     return router
 
 

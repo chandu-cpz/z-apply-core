@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Literal
 
 from langchain_core.tools import BaseTool, tool
@@ -12,6 +13,8 @@ def make_human_tools(
     channel: HumanChannel,
     *,
     candidate_memory: CandidateMemory | None = None,
+    on_answer: Callable[[str], None] | None = None,
+    on_approval: Callable[[bool], None] | None = None,
 ) -> list[BaseTool]:
     @tool
     async def ask_human(
@@ -39,6 +42,8 @@ def make_human_tools(
             role=role_name,
             options=options or [],
         )
+        if on_answer is not None:
+            on_answer(field_label)
         stored = False
         if candidate_memory is not None and reason == "missing_candidate_fact":
             stored = await candidate_memory.remember_human_answer(
@@ -63,6 +68,8 @@ def make_human_tools(
             company=company_name,
             role=role_name,
         )
+        if on_approval is not None:
+            on_approval(approved)
         return {"submit_approval": "approved" if approved else "rejected"}
 
     return [ask_human, request_submit_approval]

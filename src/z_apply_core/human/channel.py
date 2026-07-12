@@ -14,8 +14,7 @@ class HumanChannel(Protocol):
         role: str = "Application",
         options: list[str] | None = None,
         risk: str = "medium",
-    ) -> str:
-        ...
+    ) -> str: ...
 
     async def confirm(
         self,
@@ -25,5 +24,4 @@ class HumanChannel(Protocol):
         url: str = "",
         company: str = "System",
         role: str = "Application",
-    ) -> bool:
-        ...
+    ) -> bool: ...

@@ -40,9 +40,7 @@ async def run_job(
     runtime = None
     router_config = RouterConfig.from_env()
     router_config.excluded_models = list(
-        dict.fromkeys(
-            [*router_config.excluded_models, *BANNED_MODEL_IDS_UNDER_30B]
-        )
+        dict.fromkeys([*router_config.excluded_models, *BANNED_MODEL_IDS_UNDER_30B])
     )
     router_config.stats_path = str(ROUTER_STATS_PATH)
     router_config.timeout_seconds = min(router_config.timeout_seconds, 20.0)
