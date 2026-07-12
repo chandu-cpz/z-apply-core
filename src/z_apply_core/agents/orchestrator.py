@@ -199,7 +199,8 @@ async def run_orchestrator(
     }
     tool_journal: list[dict[str, Any]] = []
     current_snapshot = snapshot
-    guarded_recoveries = 0
+    protocol_recoveries = 0
+    no_progress_recoveries = 0
 
     for iteration in range(MAX_OUTCOME_ITERATIONS):
         node_info(logger, "goal_evaluator", "starting outcome iteration %s", iteration + 1)
@@ -218,13 +219,24 @@ async def run_orchestrator(
                 "continuing from fresh evidence: %s",
                 exc,
             )
-            if isinstance(exc, (ToolProtocolViolation, NoProgressCircuitOpen)):
-                guarded_recoveries += 1
-                if guarded_recoveries > 1:
+            if isinstance(exc, ToolProtocolViolation):
+                protocol_recoveries += 1
+                if protocol_recoveries > 1:
                     return OrchestratorRun(
                         summary=(
-                            "The active model repeatedly violated the tool protocol or made "
-                            "no executable progress after a clean recovery turn."
+                            "The active model repeatedly violated the tool protocol "
+                            "after a clean recovery turn."
+                        ),
+                        model_id=model_id,
+                        status="failed",
+                    )
+            elif isinstance(exc, NoProgressCircuitOpen):
+                no_progress_recoveries += 1
+                if no_progress_recoveries > 1:
+                    return OrchestratorRun(
+                        summary=(
+                            "The active model made no executable progress "
+                            "after a clean recovery turn."
                         ),
                         model_id=model_id,
                         status="failed",

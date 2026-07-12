@@ -18,6 +18,14 @@ JSONToolCall = re.compile(
 
 _TOOLS_ONLY_NAMES = frozenset({"write_todos", "ask_human", "request_submit_approval", "task"})
 
+_SPECIALIST_RESULT_PREFIXES = frozenset({
+    "FIELD_MAPPER",
+    "ANSWER_WRITER",
+    "BROWSER_SPECIALIST",
+    "VERIFIER",
+    "VISION_SPECIALIST",
+})
+
 
 @dataclass(frozen=True, slots=True)
 class ToolProtocolViolationDetail:
@@ -111,9 +119,12 @@ def _detect_violations(
         text = _message_text(message.content)
         if not text:
             continue
-        violations.extend(_check_exact_tool_calls(text, tool_names))
-        violations.extend(_check_json_imitations(text, tool_names))
-        violations.extend(_check_fabricated_transcripts(text, tool_names))
+        prose_calls = _check_exact_tool_calls(text, tool_names)
+        json_calls = _check_json_imitations(text, tool_names)
+        violations.extend(prose_calls)
+        violations.extend(json_calls)
+        if prose_calls or json_calls:
+            violations.extend(_check_fabricated_transcripts(text))
     return violations
 
 
@@ -171,24 +182,20 @@ def _check_json_imitations(
 
 def _check_fabricated_transcripts(
     text: str,
-    tool_names: set[str],
 ) -> list[ToolProtocolViolationDetail]:
     violations: list[ToolProtocolViolationDetail] = []
     for match in ResultMarker.finditer(text):
         prefix = match.group(1)
-        if prefix not in tool_names:
+        if prefix not in _SPECIALIST_RESULT_PREFIXES:
             continue
-        line_start = text.rfind("\n", 0, match.start())
-        preceding = text[max(0, line_start + 1) : match.start()]
-        if InvocationPattern.search(preceding) or JSONToolCall.search(preceding):
-            excerpt = text[max(0, match.start() - 60) : min(len(text), match.end() + 40)]
-            violations.append(
-                ToolProtocolViolationDetail(
-                    kind="fabricated_transcript",
-                    detected_name=f"{prefix}_RESULT",
-                    content_excerpt=excerpt,
-                )
+        excerpt = text[max(0, match.start() - 60) : min(len(text), match.end() + 40)]
+        violations.append(
+            ToolProtocolViolationDetail(
+                kind="fabricated_transcript",
+                detected_name=f"{prefix}_RESULT",
+                content_excerpt=excerpt,
             )
+        )
     return violations
 
 

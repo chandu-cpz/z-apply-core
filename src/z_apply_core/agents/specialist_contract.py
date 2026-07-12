@@ -27,8 +27,11 @@ class SpecialistCompletionContractMiddleware(
 
     When a native ``task`` call targets a specialist with required tools,
     this middleware verifies the contract was satisfied.  If not, it returns
-    a real ``ToolMessage`` to the parent Orchestrator so the Orchestrator
-    itself decides recovery.
+    a structured ``SPECIALIST_FAILURE`` ToolMessage to the parent Orchestrator
+    so the Orchestrator itself decides recovery.
+
+    The only proof of completion is the ``field_map_commits`` counter
+    incrementing.  Agent prose is never authoritative truth.
     """
 
     def __init__(self, progress: ApplicationProgress) -> None:
@@ -53,59 +56,62 @@ class SpecialistCompletionContractMiddleware(
             return await handler(request)
 
         commits_before = self._progress.field_map_commits
+        call_id = str(request.tool_call.get("id", ""))
 
         try:
             result = await handler(request)
         except Exception as exc:  # noqa: BLE001
-            return ToolMessage(
-                content=(
-                    f"FieldMapper task failed before completing required work: {exc}"
-                ),
-                name="task",
-                tool_call_id=str(request.tool_call.get("id", "")),
-                status="error",
+            if self._progress.field_map_commits > commits_before:
+                _log.warning(
+                    "SpecialistContract: FieldMapper committed typed state "
+                    "then crashed: %s; preserving committed result",
+                    exc,
+                )
+                return _specialist_failure(
+                    kind="specialist_exception_after_commit",
+                    committed=True,
+                    detail=str(exc),
+                    call_id=call_id,
+                )
+            return _specialist_failure(
+                kind="specialist_exception",
+                committed=False,
+                detail=str(exc),
+                call_id=call_id,
             )
 
         if self._progress.field_map_commits > commits_before:
-            return result
-
-        if _has_committed_typed_state(result):
-            _log.info(
-                "SpecialistContract: FieldMapper committed typed state despite "
-                "counter not incrementing; preserving result"
-            )
             return result
 
         _log.warning(
             "SpecialistContract: FieldMapper task finished without calling "
             "record_field_map; returning SPECIALIST_FAILURE to Orchestrator"
         )
-        failure_payload = {
-            "role": "FieldMapper",
-            "kind": "required_tool_missing",
-            "required_tool": "record_field_map",
-            "committed": False,
-            "recovery_owner": "Orchestrator",
-        }
-        return ToolMessage(
-            content=(
-                f"SPECIALIST_FAILURE:\n{json.dumps(failure_payload, indent=2)}"
-            ),
-            name="task",
-            tool_call_id=str(request.tool_call.get("id", "")),
+        return _specialist_failure(
+            kind="required_tool_missing",
+            committed=False,
+            detail="FieldMapper finished without calling record_field_map",
+            call_id=call_id,
         )
 
 
-def _has_committed_typed_state(result: ToolMessage | Command[Any]) -> bool:
-    """Return True if the result carries evidence of committed typed state."""
-    text = ""
-    if isinstance(result, ToolMessage):
-        text = str(result.content)
-    elif isinstance(result, Command) and isinstance(result.update, dict):
-        messages = result.update.get("messages", [])
-        if isinstance(messages, list):
-            for msg in messages:
-                if isinstance(msg, ToolMessage):
-                    text = str(msg.content)
-                    break
-    return "Typed field map recorded" in text or "BROWSER_SPECIALIST_RESULT" in text
+def _specialist_failure(
+    *,
+    kind: str,
+    committed: bool,
+    detail: str,
+    call_id: str,
+) -> ToolMessage:
+    payload = {
+        "role": "FieldMapper",
+        "kind": kind,
+        "required_tool": "record_field_map",
+        "committed": committed,
+        "detail": detail,
+        "recovery_owner": "Orchestrator",
+    }
+    return ToolMessage(
+        content=f"SPECIALIST_FAILURE:\n{json.dumps(payload, indent=2)}",
+        name="task",
+        tool_call_id=call_id,
+    )

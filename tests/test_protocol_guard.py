@@ -262,7 +262,7 @@ class ProseToolCallGuardTests(unittest.TestCase):
         self._run(middleware.awrap_model_call(request, handler))
         self.assertEqual(handler.call_count, 1)
 
-    # Test: Fabricated transcript bundle
+    # Test: Fabricated transcript bundle — prose calls + RESULT markers
     def test_fabricated_transcript_bundle(self) -> None:
         tool = MagicMock()
         tool.name = "task"
@@ -283,7 +283,27 @@ class ProseToolCallGuardTests(unittest.TestCase):
         with self.assertRaises(ToolProtocolViolation):
             self._run(middleware.awrap_model_call(request, handler))
 
-    # Test: Standalone RESULT marker without preceding fake call
+    # Test: Fabricated transcript detector fires when prose calls present
+    def test_fabricated_transcript_detector_fires_with_prose_calls(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
+        response = _make_response([
+            AIMessage(
+                content=(
+                    "task(subagent_type='FieldMapper', description='Map')\n\n"
+                    "FIELD_MAPPER_RESULT: Gender"
+                ),
+                tool_calls=[],
+            ),
+        ])
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        with self.assertRaises(ToolProtocolViolation):
+            self._run(middleware.awrap_model_call(request, handler))
+        self.assertEqual(handler.call_count, 2)
+
+    # Test: Standalone RESULT marker without prose calls → allowed
     def test_standalone_result_marker_allowed(self) -> None:
         tool = MagicMock()
         tool.name = "task"
