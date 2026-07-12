@@ -46,11 +46,6 @@ class DuplicateMutationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Co
         tool_name = str(request.tool_call.get("name", ""))
 
         if tool_name not in BROWSER_CHANGING_TOOL_NAMES:
-            if tool_name == "browser_snapshot" and self._completed_mutations:
-                self._completed_mutations.clear()
-                _log.info(
-                    "DuplicateMutationGuard: cleared mutation history after fresh snapshot"
-                )
             return await handler(request)
 
         arguments = request.tool_call.get("args", {})

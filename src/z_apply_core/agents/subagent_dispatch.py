@@ -41,11 +41,18 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
         return message.model_copy(update={"tool_calls": normalized})
 
     def _normalize_call(self, call: Mapping[str, Any]) -> dict[str, Any]:
+        args = call.get("args")
         subagent_type = call.get("name")
         if not isinstance(subagent_type, str) or subagent_type not in self._subagent_types:
+            if subagent_type == "task" and isinstance(args, dict):
+                nested = args.get("subagent_type")
+                if isinstance(nested, str) and nested in self._subagent_types:
+                    description = args.get("description", "")
+                    if isinstance(description, str) and self._resume_path:
+                        description = description.replace("RESUME_PATH", self._resume_path)
+                        return {**call, "args": {**args, "description": description}}
             return dict(call)
 
-        args = call.get("args")
         description = args.get("description") if isinstance(args, dict) else None
         if not isinstance(description, str) or not description.strip():
             description = (

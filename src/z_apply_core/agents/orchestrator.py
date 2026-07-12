@@ -45,7 +45,6 @@ from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.stream_events import FrameworkEventSink, SequencedEventSink
 
 logger = logging.getLogger(__name__)
-NO_PROGRESS_MODEL_COOLDOWN_SECONDS = 60.0
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/runs"
@@ -206,12 +205,6 @@ async def run_orchestrator(
         try:
             stream_result = await consume_deepagent_stream(stream, sink=progress_sink)
         except Exception as exc:  # noqa: BLE001 - recover from a failed worker model turn
-            stalled_model_id = router_middleware.last_model_id
-            if stalled_model_id:
-                router.cooldown_model(
-                    stalled_model_id,
-                    NO_PROGRESS_MODEL_COOLDOWN_SECONDS,
-                )
             node_info(
                 logger,
                 "orchestrator",
@@ -287,18 +280,6 @@ async def run_orchestrator(
                 summary=decision.explanation,
                 model_id=model_id,
                 status="incomplete",
-            )
-        stalled_model_id = router_middleware.last_model_id
-        if stalled_model_id:
-            router.cooldown_model(
-                stalled_model_id,
-                NO_PROGRESS_MODEL_COOLDOWN_SECONDS,
-            )
-            node_info(
-                logger,
-                "goal_evaluator",
-                "outcome incomplete; cooling model %s before clean retry",
-                stalled_model_id,
             )
         attempt_input = resume_input(
             stream_result.output,

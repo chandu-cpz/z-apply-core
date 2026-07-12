@@ -42,7 +42,6 @@ submit does not prevent preparation work and is not a blocker until submission i
 
 MAX_OUTCOME_ITERATIONS = 8
 MAX_OUTCOME_VERDICT_ATTEMPTS = 3
-EVALUATOR_PROTOCOL_COOLDOWN_SECONDS = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,7 +136,6 @@ async def evaluate_application_outcome(
             raise
         except Exception as exc:  # noqa: BLE001 - report an explicit runtime failure
             errors.append(str(exc))
-            _cool_evaluator_model(router, evaluator_router)
             attempt_input = _clean_outcome_retry_input(
                 prompt,
                 "The previous evaluator model call failed technically.",
@@ -145,7 +143,6 @@ async def evaluate_application_outcome(
             continue
         if decision is not None:
             return decision
-        _cool_evaluator_model(router, evaluator_router)
         attempt_input = _clean_outcome_retry_input(
             prompt,
             "The previous evaluator returned without a typed outcome transition.",
@@ -160,17 +157,6 @@ async def evaluate_application_outcome(
             "The runtime stopped safely without making another browser change."
         ),
     )
-
-
-def _cool_evaluator_model(
-    router: NimRouter,
-    middleware: NimRouterMiddleware,
-) -> None:
-    if middleware.last_model_id:
-        router.cooldown_model(
-            middleware.last_model_id,
-            EVALUATOR_PROTOCOL_COOLDOWN_SECONDS,
-        )
 
 
 def _clean_outcome_retry_input(prompt: str, failure: str) -> dict[str, Any]:

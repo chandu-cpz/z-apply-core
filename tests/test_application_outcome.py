@@ -38,7 +38,6 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(router, "lease", AsyncMock(return_value=selection)),
-            patch.object(router, "cooldown_model") as cooldown_model,
             patch(
                 "z_apply_core.agents.orchestrator.create_deep_agent",
                 return_value=worker,
@@ -79,7 +78,6 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         retry_message = worker.inputs[1]["messages"][0]
         self.assertIn("worker model timed out", retry_message.content)
         self.assertIn("uploaded form snapshot", retry_message.content)
-        cooldown_model.assert_called_once_with("provider/model", 60.0)
 
     async def test_premature_worker_stop_resumes_without_untrusted_assistant_prose(
         self,
@@ -112,7 +110,6 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(router, "lease", AsyncMock(return_value=selection)),
-            patch.object(router, "cooldown_model") as cooldown_model,
             patch(
                 "z_apply_core.agents.orchestrator.create_deep_agent",
                 return_value=worker,
@@ -167,7 +164,6 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(resumed["messages"][-1], HumanMessage)
         self.assertIn("Upload the configured resume", resumed["messages"][-1].content)
         self.assertNotIn("I will inspect the form", resumed["messages"][-1].content)
-        cooldown_model.assert_called_once_with("provider/model", 60.0)
         final_journal = evaluator.await_args_list[-1].kwargs["tool_journal"]
         self.assertEqual(
             [entry["tool_name"] for entry in final_journal],
@@ -247,7 +243,6 @@ class OutcomeEvaluatorContractTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch.object(router, "lease", AsyncMock(return_value=selection)),
-            patch.object(router, "cooldown_model") as cooldown_model,
             patch(
                 "z_apply_core.agents.application_outcome.create_deep_agent",
                 return_value=evaluator,
@@ -270,7 +265,6 @@ class OutcomeEvaluatorContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("typed decision", decision.explanation)
         self.assertEqual(len(evaluator.inputs), MAX_OUTCOME_VERDICT_ATTEMPTS)
         self.assertEqual(consume.await_count, MAX_OUTCOME_VERDICT_ATTEMPTS)
-        self.assertEqual(cooldown_model.call_count, MAX_OUTCOME_VERDICT_ATTEMPTS)
         for retry_input in evaluator.inputs[1:]:
             retry_message = retry_input["messages"][0]
             self.assertIsInstance(retry_message, HumanMessage)
