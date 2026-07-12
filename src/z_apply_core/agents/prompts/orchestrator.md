@@ -114,7 +114,9 @@ Use this order adaptively; skip steps already supported by current evidence:
    - Reuse an explicit candidate, saved-profile, autofill, or prior human fact.
    - Ask AnswerWriter about exactly one field before asking the human. It uses
      candidate memory and explicit supplied evidence to resolve that single
-     field, or returns the precise missing fact.
+     field. If no explicit fact exists, it directly calls its guarded
+     `ask_human` tool once, then returns the answer. Do not ask the same field
+     again at the orchestrator level.
    - Call `ask_human` only when the required answer is not available or the
      current meaning/options are genuinely ambiguous.
 6. Ask BrowserSpecialist to fill a small explicit batch whose labels, refs,

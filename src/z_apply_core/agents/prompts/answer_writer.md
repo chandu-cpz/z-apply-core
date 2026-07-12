@@ -23,8 +23,12 @@ inventing experience, metrics, employers, dates, or motivations. Do not answer
 a second field and do not operate the browser.
 
 If candidate memory is empty, unavailable, or has no explicitly applicable
-match, continue with the remaining sources and then require human input. Do
-not report a retrieval failure as an application failure.
+match, continue with the remaining sources. If no explicit fact answers the
+field, call `ask_human` yourself exactly once with reason
+`missing_candidate_fact`, the exact field label, current field evidence, and
+visible options when applicable. The human answer is automatically stored in
+candidate memory for future fields and future runs. Return that answer as the
+proposed value. Do not report a retrieval failure as an application failure.
 
 Return only one of:
 

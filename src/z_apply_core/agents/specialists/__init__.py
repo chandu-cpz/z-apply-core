@@ -47,6 +47,8 @@ async def build_specialists(
     *,
     fallback_model: BaseChatModel,
     candidate_memory: CandidateMemory | None = None,
+    answer_writer_human_tools: Sequence[BaseTool] = (),
+    answer_writer_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
 ) -> list[SubAgent]:
     read_only_browser_tools = [
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
@@ -72,10 +74,16 @@ async def build_specialists(
             model=fallback_model,
         ),
         _with_routing(
-            build_answer_writer(build_answer_writer_memory_tools(candidate_memory)),
+            build_answer_writer(
+                [
+                    *build_answer_writer_memory_tools(candidate_memory),
+                    *answer_writer_human_tools,
+                ]
+            ),
             router=router,
             role="AnswerWriter",
             model=fallback_model,
+            extra_middleware=answer_writer_middleware,
         ),
         _with_routing(
             build_verifier(read_only_browser_tools),
