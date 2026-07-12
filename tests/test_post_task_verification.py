@@ -150,6 +150,33 @@ class NativeTaskPairingTests(unittest.TestCase):
         self.assertEqual(result.status, "error")
         self.assertIn("model stream timed out", str(result.content))
 
+    def test_typed_browser_failure_continues_same_operation_once(self) -> None:
+        middleware = _make_middleware()
+        calls: list[dict[str, Any]] = []
+        browser_attempt = 0
+
+        async def handler(request: ToolCallRequest) -> Command[Any]:
+            nonlocal browser_attempt
+            arguments = request.tool_call["args"]
+            calls.append(arguments)
+            if arguments["subagent_type"] == "BrowserSpecialist":
+                browser_attempt += 1
+                if browser_attempt == 1:
+                    raise RuntimeError("browser_snapshot does not handle the modal state")
+                return _task_result("Uploaded resume through the open chooser")
+            return _task_result("verified uploaded resume")
+
+        result = self._run(middleware.awrap_tool_call(_task_request(), handler))
+
+        self.assertEqual(
+            [call["subagent_type"] for call in calls],
+            ["BrowserSpecialist", "BrowserSpecialist", "Verifier"],
+        )
+        self.assertIn("CONTINUE THE SAME BROWSER OPERATION", calls[1]["description"])
+        self.assertIn("native file chooser", calls[1]["description"])
+        message = result.update["messages"][0]
+        self.assertIn("verified uploaded resume", str(message.content))
+
     def test_fresh_snapshot_is_visible_to_stream_sink(self) -> None:
         sink = CollectingSink()
         middleware = _make_middleware(sink)

@@ -84,7 +84,15 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                 self._target_subagent,
                 exc,
             )
-            return _technical_failure_message(request, self._target_subagent, exc)
+            recovered_result = await self._continue_after_browser_failure(
+                request=request,
+                handler=handler,
+                description=description,
+                failure=exc,
+            )
+            if recovered_result is None:
+                return _technical_failure_message(request, self._target_subagent, exc)
+            browser_result = recovered_result
         browser_message = _command_tool_message(browser_result)
         if browser_message is None:
             _log.warning(
@@ -184,6 +192,48 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
             base = dict(browser_result.update)
         _log.info("PostTaskVerification: paired native task results returned")
         return Command(update={**base, "messages": [combined]})
+
+    async def _continue_after_browser_failure(
+        self,
+        *,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+        description: str,
+        failure: Exception,
+    ) -> ToolMessage | Command[Any] | None:
+        recovery_description = (
+            f"{description}\n\n"
+            "CONTINUE THE SAME BROWSER OPERATION:\n"
+            "The previous BrowserSpecialist turn ended with this actual typed browser "
+            f"tool failure:\n{failure}\n\n"
+            "Inspect the current browser state only when the tool is available. If a "
+            "native file chooser or modal is already open, do not snapshot it, re-click "
+            "the triggering control, or restart the operation. Continue with the browser "
+            "tool that completes the original semantic operation."
+        )
+        recovery_call = cast(
+            ToolCall,
+            {
+                **request.tool_call,
+                "args": {
+                    "description": recovery_description,
+                    "subagent_type": self._target_subagent,
+                },
+            },
+        )
+        _log.info(
+            "PostTaskVerification: continuing native %s after typed tool failure",
+            self._target_subagent,
+        )
+        try:
+            return await handler(request.override(tool_call=recovery_call))
+        except Exception as exc:  # noqa: BLE001 - the orchestrator owns later recovery
+            _log.warning(
+                "PostTaskVerification: continued %s task failed technically: %s",
+                self._target_subagent,
+                exc,
+            )
+            return None
 
     async def _fresh_snapshot(self) -> SnapshotEvidence:
         if self._snapshot_tool is None:
