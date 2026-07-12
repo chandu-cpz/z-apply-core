@@ -19,6 +19,8 @@ from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
 
 _log = logging.getLogger(__name__)
 
+_NON_EFFECT_KEYS = frozenset({"element", "verification_goal", "description"})
+
 
 class DuplicateMutationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """Prevent the same browser mutation from being executed twice in one task.
@@ -35,7 +37,8 @@ class DuplicateMutationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Co
         self._completed_mutations: set[tuple[str, str]] = set()
 
     def _signature(self, tool_name: str, arguments: dict[str, Any]) -> tuple[str, str]:
-        canonical = json.dumps(arguments, sort_keys=True, default=str)
+        effective = {k: v for k, v in arguments.items() if k not in _NON_EFFECT_KEYS}
+        canonical = json.dumps(effective, sort_keys=True, default=str)
         return (tool_name, canonical)
 
     async def awrap_tool_call(

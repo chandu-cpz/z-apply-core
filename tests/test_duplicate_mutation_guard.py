@@ -102,6 +102,44 @@ class DuplicateMutationGuardTests(unittest.TestCase):
         self._run(mw.awrap_tool_call(req2, handler2))
         handler2.assert_called_once()
 
+    # Test J: Semantic click — same target, different metadata → same signature
+    def test_semantic_click_same_target_different_metadata_is_duplicate(self) -> None:
+        mw = DuplicateMutationGuardMiddleware()
+        handler = AsyncMock(return_value=MagicMock(content="clicked"))
+        req1 = self._make_request(
+            "browser_click",
+            {"target": "e112", "element": "Apply button"},
+        )
+        self._run(mw.awrap_tool_call(req1, handler))
+
+        handler2 = AsyncMock()
+        req2 = self._make_request(
+            "browser_click",
+            {"target": "e112", "element": "Apply"},
+        )
+        result = self._run(mw.awrap_tool_call(req2, handler2))
+        handler2.assert_not_called()
+        self.assertIn("Duplicate mutation prevented", result.content)
+
+    # Test J2: Same target, different verification_goal → still duplicate
+    def test_semantic_click_same_target_different_goal_is_duplicate(self) -> None:
+        mw = DuplicateMutationGuardMiddleware()
+        handler = AsyncMock(return_value=MagicMock(content="clicked"))
+        req1 = self._make_request(
+            "browser_click",
+            {"target": "e50", "element": "First Name", "verification_goal": "verify value"},
+        )
+        self._run(mw.awrap_tool_call(req1, handler))
+
+        handler2 = AsyncMock()
+        req2 = self._make_request(
+            "browser_click",
+            {"target": "e50", "element": "First Name", "verification_goal": "check it"},
+        )
+        result = self._run(mw.awrap_tool_call(req2, handler2))
+        handler2.assert_not_called()
+        self.assertIn("Duplicate mutation prevented", result.content)
+
 
 if __name__ == "__main__":
     unittest.main()

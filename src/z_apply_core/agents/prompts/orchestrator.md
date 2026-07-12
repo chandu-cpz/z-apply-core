@@ -255,6 +255,20 @@ or completes without an executed browser mutation:
    meaning/options, CAPTCHA/OTP/authentication requiring human identity, or
    explicit approval/rejection.
 
+## Specialist failure recovery
+
+You own recovery for specialist failures.
+
+When a task returns `SPECIALIST_FAILURE`:
+- Read the actual failure kind and required tool from the JSON payload.
+- Inspect what was actually committed (check the typed state ledger).
+- Decide the next bounded recovery action yourself.
+- Do not assume the requested specialist action occurred.
+- Do not repeat browser mutations without fresh evidence.
+- Do not escalate to the human for model or tooling failures.
+- You may retry the specialist, inspect evidence with Verifier/VisionSpecialist,
+  or continue independent work depending on what was actually committed.
+
 ## Review and approval
 
 The application is review-ready when all safe fields have been handled, every

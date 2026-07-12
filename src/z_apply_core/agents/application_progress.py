@@ -24,6 +24,7 @@ class ApplicationProgress:
     """Compatibility view over the typed state ledger used by runtime guards."""
 
     state: ApplicationState = field(default_factory=ApplicationState)
+    field_map_commits: int = 0
 
     @property
     def form_open_verified(self) -> bool:
@@ -130,6 +131,7 @@ def make_field_map_tools(progress: ApplicationProgress) -> list[BaseTool]:
         progress.state.fields = mapped
         if resume_control_visible:
             progress.state.resume_control = EvidenceRef("field_map", "FieldMapper", evidence)
+        progress.field_map_commits += 1
         return "Typed field map recorded."
 
     return [record_field_map]

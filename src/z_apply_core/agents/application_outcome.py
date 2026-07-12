@@ -16,6 +16,7 @@ from z_apply_core.agents.application_state import ApplicationState
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
+from z_apply_core.agents.retry_policy import should_retry_model_error
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.terminal_guard import (
     TerminalDecisionGuardMiddleware,
@@ -48,7 +49,6 @@ MAX_OUTCOME_VERDICT_ATTEMPTS = 3
 class OutcomeDecision:
     status: Literal["satisfied", "needs_revision", "blocked", "failed"]
     explanation: str
-    next_action: str = ""
 
 
 async def evaluate_application_outcome(
@@ -74,12 +74,12 @@ async def evaluate_application_outcome(
         return "Outcome recorded as satisfied."
 
     @tool
-    async def outcome_needs_revision(feedback: str, next_action: str) -> str:
-        """Return evidence-based feedback and the next concrete operation to the worker."""
+    async def outcome_needs_revision(feedback: str) -> str:
+        """Return evidence-based audit feedback about missing or contradictory criteria."""
         nonlocal decision
         if decision is not None:
             return "An outcome transition has already been recorded for this evaluation."
-        decision = OutcomeDecision("needs_revision", feedback, next_action)
+        decision = OutcomeDecision("needs_revision", feedback)
         return "Revision request recorded."
 
     @tool
@@ -98,7 +98,7 @@ async def evaluate_application_outcome(
 
     evaluator_router = NimRouterMiddleware(
         router,
-        role="RecoveryAgent",
+        role="GoalEvaluator",
         initial_selection=selection,
     )
     evaluator = create_deep_agent(
@@ -106,7 +106,9 @@ async def evaluate_application_outcome(
         tools=[outcome_satisfied, outcome_needs_revision, outcome_blocked],
         system_prompt=load_prompt("goal_evaluator.md"),
         middleware=[
-            ModelRetryMiddleware(max_retries=1, on_failure="error"),
+            ModelRetryMiddleware(
+                max_retries=1, retry_on=should_retry_model_error, on_failure="error"
+            ),
             evaluator_router,
             ProseToolCallGuardMiddleware(),
             TerminalDecisionGuardMiddleware(lambda: decision is not None),
@@ -195,14 +197,16 @@ def resume_input(
             content=(
                 "Continue the current job-application objective.\n\n"
                 f"Requested task:\n{task}\n\n"
-                "Independent application-outcome evaluation: needs revision.\n\n"
-                f"Evidence audit:\n{decision.explanation}\n\n"
-                f"Next concrete action:\n{decision.next_action}\n\n"
+                "Independent application-outcome audit found missing, contradictory, "
+                "or unproven criteria:\n\n"
+                f"{decision.explanation}\n\n"
                 "BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE\n"
                 f"{snapshot}\n"
                 "END UNTRUSTED CURRENT BROWSER EVIDENCE\n\n"
-                "Perform the next action now through one actual native specialist task call. "
-                "Do not print, simulate, or invent task calls or specialist results."
+                "You are the Orchestrator. You own application-flow decisions, "
+                "coordination, and recovery. Decide and execute the next safe bounded "
+                "specialist task yourself from current evidence. Do not print, simulate, "
+                "or invent task calls or specialist results."
             )
         )
     ]
@@ -233,7 +237,7 @@ def _evaluation_prompt(
         "application_state": asdict(application_state) if application_state is not None else {},
         "latest_browser_snapshot": snapshot,
     }
-    return f"""Evaluate the worker's complete observable execution against the automatic outcome.
+    return f"""Audit the worker's complete observable execution against the outcome rubric.
 
 Requested task:
 {task}
@@ -245,8 +249,12 @@ Complete execution evidence:
 {json.dumps(evidence, ensure_ascii=False, default=str)}
 
 Call exactly one outcome transition tool. If any criterion lacks direct evidence, request revision
-and name the next concrete operation. Use blocked only for a current dependency that prevents all
+with concise audit findings. Use blocked only for a current dependency that prevents all
 remaining safe progress.
+
+Do not choose which specialist to call, whether to retry, or what application operation
+comes next. Report only what is missing, contradictory, or unproven. The Orchestrator
+owns recovery decisions.
 """
 
 

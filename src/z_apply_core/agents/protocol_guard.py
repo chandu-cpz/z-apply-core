@@ -6,17 +6,26 @@ from typing import Any, Literal
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
-InvocationPattern = re.compile(r"(?m)^\s*([A-Za-z_][A-Za-z0-9_-]{1,80})\s*\(")
+InvocationPattern = re.compile(
+    r"(?m)(?:^|(?<=\s))([A-Za-z_][A-Za-z0-9_.-]{0,80})\s*\("
+)
 ResultMarker = re.compile(r"(?m)^\s*([A-Z][A-Z0-9_]{2,40})_RESULT\s*:")
+JSONToolCall = re.compile(
+    r"\{[^{}]*\"(?:tool|name)\"\s*:\s*\"([^\"]+)\""
+)
 
 _TOOLS_ONLY_NAMES = frozenset({"write_todos", "ask_human", "request_submit_approval", "task"})
 
 
 @dataclass(frozen=True, slots=True)
 class ToolProtocolViolationDetail:
-    kind: Literal["exact_prose_tool_call", "fabricated_transcript"]
+    kind: Literal[
+        "exact_prose_tool_call",
+        "json_tool_call_imitation",
+        "fabricated_transcript",
+    ]
     detected_name: str | None
     content_excerpt: str
 
@@ -38,7 +47,8 @@ class ProseToolCallGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Contex
         handler: Any,
     ) -> ModelResponse[ResponseT]:
         if not request.tools:
-            return await handler(request)
+            result_no_tools: ModelResponse[ResponseT] = await handler(request)
+            return result_no_tools
 
         tool_names = _available_tool_names(request)
         tool_names.update(_TOOLS_ONLY_NAMES)
@@ -68,7 +78,7 @@ def _available_tool_names(request: ModelRequest[Any]) -> set[str]:
     names: set[str] = set()
     for tool in request.tools:
         if hasattr(tool, "name"):
-            names.add(tool.name)
+            names.add(str(tool.name))
         elif isinstance(tool, dict):
             name = tool.get("name")
             if isinstance(name, str):
@@ -80,11 +90,13 @@ def _message_text(content: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "\n".join(
-            item.get("text", "")
-            for item in content
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
-        )
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                text_val = item.get("text", "")
+                if isinstance(text_val, str):
+                    parts.append(text_val)
+        return "\n".join(parts)
     return ""
 
 
@@ -100,6 +112,7 @@ def _detect_violations(
         if not text:
             continue
         violations.extend(_check_exact_tool_calls(text, tool_names))
+        violations.extend(_check_json_imitations(text, tool_names))
         violations.extend(_check_fabricated_transcripts(text, tool_names))
     return violations
 
@@ -120,6 +133,39 @@ def _check_exact_tool_calls(
                     content_excerpt=excerpt,
                 )
             )
+        elif "." in candidate:
+            for part in candidate.split("."):
+                if part in tool_names:
+                    excerpt = text[max(0, match.start() - 40) : min(len(text), match.end() + 40)]
+                    violations.append(
+                        ToolProtocolViolationDetail(
+                            kind="exact_prose_tool_call",
+                            detected_name=candidate,
+                            content_excerpt=excerpt,
+                        )
+                    )
+                    break
+    return violations
+
+
+def _check_json_imitations(
+    text: str,
+    tool_names: set[str],
+) -> list[ToolProtocolViolationDetail]:
+    violations: list[ToolProtocolViolationDetail] = []
+    for match in JSONToolCall.finditer(text):
+        tool_name = match.group(1)
+        if tool_name in tool_names:
+            start = max(0, match.start() - 20)
+            end = min(len(text), match.end() + 20)
+            excerpt = text[start:end]
+            violations.append(
+                ToolProtocolViolationDetail(
+                    kind="json_tool_call_imitation",
+                    detected_name=tool_name,
+                    content_excerpt=excerpt,
+                )
+            )
     return violations
 
 
@@ -134,7 +180,7 @@ def _check_fabricated_transcripts(
             continue
         line_start = text.rfind("\n", 0, match.start())
         preceding = text[max(0, line_start + 1) : match.start()]
-        if InvocationPattern.search(preceding):
+        if InvocationPattern.search(preceding) or JSONToolCall.search(preceding):
             excerpt = text[max(0, match.start() - 60) : min(len(text), match.end() + 40)]
             violations.append(
                 ToolProtocolViolationDetail(
@@ -149,20 +195,25 @@ def _check_fabricated_transcripts(
 def _correction_message(
     violations: list[ToolProtocolViolationDetail],
     messages: list[Any],
-) -> list[AIMessage]:
+) -> list[HumanMessage]:
     text_parts = [_message_text(m.content) for m in messages if isinstance(m, AIMessage)]
     raw = "\n".join(text_parts)
     excerpt = raw[:600]
     detected = {v.detected_name for v in violations if v.detected_name}
     names_str = ", ".join(sorted(detected)) if detected else "tool invocation syntax"
     return [
-        AIMessage(
+        HumanMessage(
             content=(
-                f"PROTOCOL ERROR: Your previous response wrote tool-call syntax as "
-                f"assistant text ({names_str}). Nothing executed. Emit native tool "
-                f"calls through the tool-calling interface. Do not print tool-name(...), "
-                f"JSON tool calls, or fabricated specialist results. Retry the same "
-                f"intended action now.\n\n"
+                f"RUNTIME PROTOCOL ERROR\n\n"
+                f"Your previous response attempted to represent native tool execution "
+                f"as assistant text ({names_str}). Nothing in that text executed.\n\n"
+                f"Retry the same intended action now using the actual native "
+                f"tool-calling interface.\n\n"
+                f"Do not print tool_name(...).\n"
+                f"Do not print JSON pretending to be a tool call.\n"
+                f"Do not invent specialist or verifier results.\n"
+                f"Do not explain the correction.\n"
+                f"Perform the intended native tool call directly.\n\n"
                 f"Your invalid output (truncated):\n{excerpt}"
             ),
         ),

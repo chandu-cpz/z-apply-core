@@ -138,7 +138,6 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
                         OutcomeDecision(
                             "needs_revision",
                             "The form opened, but no upload operation was recorded.",
-                            "Upload the configured resume through BrowserSpecialist.",
                         ),
                         OutcomeDecision("satisfied", "Application is review-ready."),
                     ]
@@ -162,7 +161,7 @@ class ApplicationOutcomeIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resumed["files"], first_output["files"])
         self.assertEqual(len(resumed["messages"]), 1)
         self.assertIsInstance(resumed["messages"][-1], HumanMessage)
-        self.assertIn("Upload the configured resume", resumed["messages"][-1].content)
+        self.assertIn("missing, contradictory", resumed["messages"][-1].content)
         self.assertNotIn("I will inspect the form", resumed["messages"][-1].content)
         final_journal = evaluator.await_args_list[-1].kwargs["tool_journal"]
         self.assertEqual(
@@ -286,7 +285,7 @@ class OutcomeEvaluatorContractTests(unittest.IsolatedAsyncioTestCase):
                 tool for tool in captured_tools if tool.name == "outcome_needs_revision"
             )
             await transition.ainvoke(
-                {"feedback": "Resume is not attached.", "next_action": "Upload the resume."}
+                {"feedback": "Resume is not attached."}
             )
             return V3RunResult(output={})
 
@@ -311,7 +310,6 @@ class OutcomeEvaluatorContractTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(decision.status, "needs_revision")
-        self.assertEqual(decision.next_action, "Upload the resume.")
         self.assertEqual(consume.await_count, 1)
 
 

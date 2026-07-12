@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import unittest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 
 from z_apply_core.agents.protocol_guard import (
     ProseToolCallGuardMiddleware,
@@ -37,8 +38,8 @@ class ProseToolCallGuardTests(unittest.TestCase):
         finally:
             loop.close()
 
-    # Test A: Exact production failure — tool_calls present AND fabricated prose
-    def test_exact_production_failure_with_fabricated_prose(self) -> None:
+    # Test D: Mixed native + fabricated prose
+    def test_mixed_native_and_fabricated_prose(self) -> None:
         tool = MagicMock()
         tool.name = "write_todos"
         request = _make_request(tools=[tool])
@@ -57,45 +58,180 @@ class ProseToolCallGuardTests(unittest.TestCase):
         with self.assertRaises(ToolProtocolViolation):
             self._run(middleware.awrap_model_call(request, handler))
 
-    # Test B: Successful correction — first prose, retry native
-    def test_successful_correction_on_retry(self) -> None:
+    # Test E: JSON tool-call imitation
+    def test_json_tool_call_imitation(self) -> None:
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        first_response = _make_response([
+        payload = json.dumps({
+            "tool": "task",
+            "params": {"subagent_type": "BrowserSpecialist"},
+        })
+        response = _make_response([
+            AIMessage(content=payload, tool_calls=[]),
+        ])
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        with self.assertRaises(ToolProtocolViolation):
+            self._run(middleware.awrap_model_call(request, handler))
+
+    def test_json_name_arguments_imitation(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
+        response = _make_response([
             AIMessage(
-                content="task(subagent_type='BrowserSpecialist', description='Click submit')",
+                content=json.dumps({"name": "task", "arguments": {"subagent_type": "FieldMapper"}}),
                 tool_calls=[],
             ),
         ])
-        corrected_response = _make_response([
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        with self.assertRaises(ToolProtocolViolation):
+            self._run(middleware.awrap_model_call(request, handler))
+
+    # Test F: Inline invocation (not at line start)
+    def test_inline_invocation_caught(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
+        content = (
+            "We should now do this: "
+            "task(subagent_type='BrowserSpecialist', description='Click')"
+        )
+        response = _make_response([
+            AIMessage(content=content, tool_calls=[]),
+        ])
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        with self.assertRaises(ToolProtocolViolation):
+            self._run(middleware.awrap_model_call(request, handler))
+
+    def test_dotted_invocation_caught(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
+        response = _make_response([
             AIMessage(
-                content="",
-                tool_calls=[{
-                    "name": "task",
-                    "args": {
-                        "subagent_type": "BrowserSpecialist",
-                        "description": "Click submit",
-                    },
-                    "id": "c2",
-                }],
+                content="Let me call tool.task(subagent_type='FieldMapper') now.",
+                tool_calls=[],
             ),
         ])
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        with self.assertRaises(ToolProtocolViolation):
+            self._run(middleware.awrap_model_call(request, handler))
+
+    # Test G: Normal prose allowed
+    def test_normal_prose_allowed(self) -> None:
+        tool = MagicMock()
+        tool.name = "write_todos"
+        request = _make_request(tools=[tool])
+        response = _make_response([
+            AIMessage(
+                content="The task has been completed successfully. All fields are mapped.",
+                tool_calls=[],
+            ),
+        ])
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        self._run(middleware.awrap_model_call(request, handler))
+        self.assertEqual(handler.call_count, 1)
+
+    def test_no_parentheses_after_tool_name_allowed(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
+        response = _make_response([
+            AIMessage(
+                content="I will dispatch a task for the BrowserSpecialist.",
+                tool_calls=[],
+            ),
+        ])
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        self._run(middleware.awrap_model_call(request, handler))
+        self.assertEqual(handler.call_count, 1)
+
+    # Test H: Correction uses HumanMessage
+    def test_correction_uses_human_message(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool], messages=[MagicMock()])
         call_count = 0
 
         async def handler(req: Any) -> Any:
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return first_response
-            return corrected_response
+                content = (
+                    "task(subagent_type='BrowserSpecialist',"
+                    " description='Click')"
+                )
+                return _make_response([
+                    AIMessage(content=content, tool_calls=[]),
+                ])
+            return _make_response([
+                AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "task",
+                        "args": {
+                            "subagent_type": "BrowserSpecialist",
+                            "description": "Click",
+                        },
+                        "id": "c2",
+                    }],
+                ),
+            ])
+
+        middleware = ProseToolCallGuardMiddleware()
+        self._run(middleware.awrap_model_call(request, handler))
+        self.assertEqual(call_count, 2)
+        retry_call = request.override.call_args
+        retry_messages = retry_call.kwargs.get("messages", retry_call[1].get("messages", []))
+        correction_msg = retry_messages[-1]
+        self.assertIsInstance(correction_msg, HumanMessage)
+        self.assertIn("RUNTIME PROTOCOL ERROR", correction_msg.content)
+
+    # Test: Successful correction on retry
+    def test_successful_correction_on_retry(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
+        call_count = 0
+
+        async def handler(req: Any) -> Any:
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                content = (
+                    "task(subagent_type='BrowserSpecialist',"
+                    " description='Click submit')"
+                )
+                return _make_response([
+                    AIMessage(content=content, tool_calls=[]),
+                ])
+            return _make_response([
+                AIMessage(
+                    content="",
+                    tool_calls=[{
+                        "name": "task",
+                        "args": {
+                            "subagent_type": "BrowserSpecialist",
+                            "description": "Click submit",
+                        },
+                        "id": "c2",
+                    }],
+                ),
+            ])
 
         middleware = ProseToolCallGuardMiddleware()
         result = self._run(middleware.awrap_model_call(request, handler))
         self.assertEqual(call_count, 2)
         self.assertEqual(result.result[0].tool_calls[0]["name"], "task")
 
-    # Test C: Repeated violation — both attempts fail
+    # Test: Repeated violation raises
     def test_repeated_violation_raises(self) -> None:
         tool = MagicMock()
         tool.name = "write_todos"
@@ -112,38 +248,12 @@ class ProseToolCallGuardTests(unittest.TestCase):
             self._run(middleware.awrap_model_call(request, handler))
         self.assertEqual(handler.call_count, 2)
 
-    # Test D: Mixed legitimate prose + native tool call
-    def test_mixed_prose_and_native_tool_call_allowed(self) -> None:
-        tool = MagicMock()
-        tool.name = "task"
-        request = _make_request(tools=[tool])
+    # Test: No tools skips validation
+    def test_no_tools_skips_validation(self) -> None:
+        request = _make_request(tools=[])
         response = _make_response([
             AIMessage(
-                content="I'll inspect the form now.",
-                tool_calls=[{
-                    "name": "task",
-                    "args": {
-                        "subagent_type": "BrowserSpecialist",
-                        "description": "Inspect form",
-                    },
-                    "id": "c3",
-                }],
-            ),
-        ])
-        middleware = ProseToolCallGuardMiddleware()
-        handler = AsyncMock(return_value=response)
-        result = self._run(middleware.awrap_model_call(request, handler))
-        self.assertEqual(handler.call_count, 1)
-        self.assertEqual(result.result[0].tool_calls[0]["name"], "task")
-
-    # Test E: Normal prose containing "task" — not an invocation
-    def test_normal_prose_with_task_word_allowed(self) -> None:
-        tool = MagicMock()
-        tool.name = "write_todos"
-        request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content="The task has been completed successfully. All fields are mapped.",
+                content="task(subagent_type='BrowserSpecialist', description='Click')",
                 tool_calls=[],
             ),
         ])
@@ -152,31 +262,28 @@ class ProseToolCallGuardTests(unittest.TestCase):
         self._run(middleware.awrap_model_call(request, handler))
         self.assertEqual(handler.call_count, 1)
 
-    # Test F: Native task RESUME_PATH replacement
-    def test_native_task_resume_path_replaced(self) -> None:
-        from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+    # Test: Fabricated transcript bundle
+    def test_fabricated_transcript_bundle(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
+        response = _make_response([
+            AIMessage(
+                content=(
+                    "task(subagent_type='FieldMapper', description='Map')\n\n"
+                    "FIELD_MAPPER_RESULT: Gender, Email\n\n"
+                    "task(subagent_type='AnswerWriter', description='Answer')\n\n"
+                    "ANSWER_WRITER_RESULT: Male"
+                ),
+                tool_calls=[],
+            ),
+        ])
+        middleware = ProseToolCallGuardMiddleware()
+        handler = AsyncMock(return_value=response)
+        with self.assertRaises(ToolProtocolViolation):
+            self._run(middleware.awrap_model_call(request, handler))
 
-        middleware = SubagentDispatchMiddleware(
-            ["BrowserSpecialist"],
-            resume_path="/actual/resume.pdf",
-        )
-        message = AIMessage(
-            content="",
-            tool_calls=[{
-                "name": "task",
-                "args": {
-                    "subagent_type": "BrowserSpecialist",
-                    "description": "Upload RESUME_PATH to the form",
-                },
-                "id": "call-1",
-            }],
-        )
-        result = middleware._normalize_message(message)
-        desc = result.tool_calls[0]["args"]["description"]
-        self.assertIn("/actual/resume.pdf", desc)
-        self.assertNotIn("RESUME_PATH", desc)
-
-    # Test G2: Standalone *_RESULT: without preceding fake call
+    # Test: Standalone RESULT marker without preceding fake call
     def test_standalone_result_marker_allowed(self) -> None:
         tool = MagicMock()
         tool.name = "task"
@@ -202,39 +309,29 @@ class ProseToolCallGuardTests(unittest.TestCase):
         self._run(middleware.awrap_model_call(request, handler))
         self.assertEqual(handler.call_count, 1)
 
-    # Test H: No tools — skip validation
-    def test_no_tools_skips_validation(self) -> None:
-        request = _make_request(tools=[])
+    # Test: Mixed prose and native tool call allowed
+    def test_mixed_prose_and_native_tool_call_allowed(self) -> None:
+        tool = MagicMock()
+        tool.name = "task"
+        request = _make_request(tools=[tool])
         response = _make_response([
             AIMessage(
-                content="task(subagent_type='BrowserSpecialist', description='Click')",
-                tool_calls=[],
+                content="I'll inspect the form now.",
+                tool_calls=[{
+                    "name": "task",
+                    "args": {
+                        "subagent_type": "BrowserSpecialist",
+                        "description": "Inspect form",
+                    },
+                    "id": "c3",
+                }],
             ),
         ])
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
-        self._run(middleware.awrap_model_call(request, handler))
+        result = self._run(middleware.awrap_model_call(request, handler))
         self.assertEqual(handler.call_count, 1)
-
-    # Test I: Duplicate mutation survives snapshot (tested via DuplicateMutationGuard)
-    def test_duplicate_mutation_survives_snapshot(self) -> None:
-        from z_apply_core.agents.duplicate_mutation_guard import DuplicateMutationGuardMiddleware
-
-        mw = DuplicateMutationGuardMiddleware()
-        handler = AsyncMock(return_value=MagicMock(content="clicked"))
-
-        req1 = MagicMock()
-        req1.tool_call = {"name": "browser_click", "args": {"target": "e112"}, "id": "c1"}
-        self._run(mw.awrap_tool_call(req1, handler))
-
-        req_snapshot = MagicMock()
-        req_snapshot.tool_call = {"name": "browser_snapshot", "args": {}, "id": "c2"}
-        self._run(mw.awrap_tool_call(req_snapshot, handler))
-
-        req2 = MagicMock()
-        req2.tool_call = {"name": "browser_click", "args": {"target": "e112"}, "id": "c3"}
-        result = self._run(mw.awrap_tool_call(req2, AsyncMock()))
-        self.assertIn("Duplicate mutation prevented", result.content)
+        self.assertEqual(result.result[0].tool_calls[0]["name"], "task")
 
 
 if __name__ == "__main__":

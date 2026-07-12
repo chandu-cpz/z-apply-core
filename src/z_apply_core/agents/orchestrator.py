@@ -34,7 +34,9 @@ from z_apply_core.agents.post_task_verification import (
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware, ToolProtocolViolation
 from z_apply_core.agents.result import OrchestratorRun
+from z_apply_core.agents.retry_policy import should_retry_model_error
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.specialist_contract import SpecialistCompletionContractMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
@@ -142,6 +144,7 @@ async def run_orchestrator(
         progress=progress,
     )
     human_guard = HumanEscalationGuardMiddleware(progress)
+    specialist_contract = SpecialistCompletionContractMiddleware(progress)
     agent = create_deep_agent(
         model=selection.llm,
         tools=list(human_tools),
@@ -157,11 +160,14 @@ async def run_orchestrator(
                 ],
                 resume_path=resume_path,
             ),
-            ModelRetryMiddleware(max_retries=3, on_failure="error"),
+            ModelRetryMiddleware(
+                max_retries=3, retry_on=should_retry_model_error, on_failure="error"
+            ),
             router_middleware,
             ProseToolCallGuardMiddleware(),
             NoProgressGuardMiddleware(),
             human_guard,
+            specialist_contract,
             post_task_verification,
         ],
         subagents=await build_specialists(
@@ -229,8 +235,6 @@ async def run_orchestrator(
                 OutcomeDecision(
                     "needs_revision",
                     f"The previous worker model turn failed technically: {exc}",
-                    "Inspect the current browser state and continue the next safe unfinished "
-                    "application operation through an actual native specialist task.",
                 ),
                 task=task,
                 snapshot=current_snapshot,
@@ -258,10 +262,9 @@ async def run_orchestrator(
         node_info(
             logger,
             "goal_evaluator",
-            "outcome decision: status=%s explanation=%s next_action=%s",
+            "outcome decision: status=%s explanation=%s",
             decision.status,
             decision.explanation[:200],
-            decision.next_action[:200],
         )
 
         if decision.status == "satisfied":

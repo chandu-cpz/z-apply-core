@@ -18,6 +18,7 @@ from z_apply_core.agents.orchestrator import CORE_ROOT, DEEPAGENT_FILESYSTEM_PER
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import AuthOrchestratorRun, AuthStatus
+from z_apply_core.agents.retry_policy import should_retry_model_error
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_auth_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
@@ -102,7 +103,9 @@ async def run_auth_orchestrator(
         system_prompt=load_prompt("auth_orchestrator.md"),
         middleware=[
             SubagentDispatchMiddleware(["BrowserSpecialist", "Verifier"]),
-            ModelRetryMiddleware(max_retries=3, on_failure="error"),
+            ModelRetryMiddleware(
+                max_retries=3, retry_on=should_retry_model_error, on_failure="error"
+            ),
             NimRouterMiddleware(
                 router,
                 role="auth_orchestrator",

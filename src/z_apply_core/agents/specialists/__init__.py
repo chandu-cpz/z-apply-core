@@ -18,6 +18,7 @@ from z_apply_core.agents.application_progress import (
 from z_apply_core.agents.browser_action_verification import BrowserActionVerificationMiddleware
 from z_apply_core.agents.duplicate_mutation_guard import DuplicateMutationGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
+from z_apply_core.agents.retry_policy import should_retry_model_error
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.browser import build_browser_specialist
@@ -41,7 +42,9 @@ def _with_routing(
     enriched["model"] = model
     enriched["middleware"] = [
         *extra_middleware,
-        ModelRetryMiddleware(max_retries=2, on_failure="error"),
+        ModelRetryMiddleware(
+            max_retries=2, retry_on=should_retry_model_error, on_failure="error"
+        ),
         NimRouterMiddleware(router, role=role),
         ProseToolCallGuardMiddleware(),
     ]
