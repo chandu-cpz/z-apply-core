@@ -17,9 +17,10 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
     execution, keeping browser authority inside BrowserSpecialist.
     """
 
-    def __init__(self, subagent_types: Iterable[str]) -> None:
+    def __init__(self, subagent_types: Iterable[str], *, resume_path: str = "") -> None:
         super().__init__()
         self._subagent_types = frozenset(subagent_types)
+        self._resume_path = resume_path
 
     async def awrap_model_call(
         self,
@@ -51,6 +52,8 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
                 f"Complete the one bounded {subagent_type} task requested by the parent. "
                 "Return only evidence relevant to that task."
             )
+        if self._resume_path:
+            description = description.replace("RESUME_PATH", self._resume_path)
         return {
             **call,
             "name": "task",

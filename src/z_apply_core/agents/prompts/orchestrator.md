@@ -45,17 +45,17 @@ lines:
 OPERATION KIND: <one of: application_entry, resume_upload, fill_fields, inspect, other>
 OPERATION: <one semantic browser operation>
 SUCCESS CONDITION: <the visible browser state that will prove completion>
-CONFIGURED RESUME: <absolute file path from the task prompt, always include this>
+CONFIGURED RESUME: RESUME_PATH
 ```
 
 The success condition must describe page state, field state, or uploaded-file
 state. It must not use an element ref as proof because refs may be reassigned
 after a mutation.
 
-IMPORTANT: The task prompt contains a "Configured resume (absolute path)" line.
-Always copy that exact path into the CONFIGURED RESUME line of every
-BrowserSpecialist task description that involves resume upload. Never ask the
-user for the resume path — it is already provided.
+IMPORTANT: Always use the literal token RESUME_PATH in the CONFIGURED RESUME
+line of every BrowserSpecialist task description. The runtime automatically
+resolves RESUME_PATH to the actual configured resume path. Never copy, construct,
+or guess the actual file path yourself. Never ask the user for the resume path.
 
 ## Evidence and trust
 
@@ -128,7 +128,7 @@ task(
   description="OPERATION KIND: fill_fields
   OPERATION: Select only Gender = Male in the current application form.
   SUCCESS CONDITION: The Gender control visibly shows Male selected.
-  CONFIGURED RESUME: <configured absolute path>"
+  CONFIGURED RESUME: RESUME_PATH"
 )
 ```
 

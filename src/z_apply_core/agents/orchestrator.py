@@ -27,39 +27,52 @@ from z_apply_core.agents.application_progress import (
 )
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen, NoProgressGuardMiddleware
 from z_apply_core.agents.post_task_verification import (
     PostTaskVerificationMiddleware,
 )
 from z_apply_core.agents.prompts import load_prompt
+from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware, ToolProtocolViolation
 from z_apply_core.agents.result import OrchestratorRun
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.browser_tools import VERIFIER_BROWSER_TOOLS
+from z_apply_core.human.channel import HumanChannel
+from z_apply_core.human.tools import make_human_tools
 from z_apply_core.log_labels import node_info
 from z_apply_core.memory.applicant_memory import CandidateMemory
-from z_apply_core.stream_events import FrameworkEventSink
+from z_apply_core.stream_events import FrameworkEventSink, SequencedEventSink
 
 logger = logging.getLogger(__name__)
 NO_PROGRESS_MODEL_COOLDOWN_SECONDS = 60.0
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
-ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/browser-artifacts"
+ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/runs"
 CANDIDATE_CONTEXT_VIRTUAL_PATH = "/chandrakanth_v_resume.md"
-DEEPAGENT_FILESYSTEM_PERMISSIONS = [
-    FilesystemPermission(
-        operations=["read"],
-        paths=[ARTIFACTS_VIRTUAL_ROOT, f"{ARTIFACTS_VIRTUAL_ROOT}/**"],
-        mode="allow",
-    ),
-    FilesystemPermission(
-        operations=["read"],
-        paths=[CANDIDATE_CONTEXT_VIRTUAL_PATH],
-        mode="allow",
-    ),
-    FilesystemPermission(operations=["read"], paths=["/**"], mode="deny"),
-    FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
-]
+
+
+def deepagent_filesystem_permissions(run_id: str = "") -> list[FilesystemPermission]:
+    artifact_root = (
+        f"{ARTIFACTS_VIRTUAL_ROOT}/{run_id}/browser-artifacts" if run_id else ARTIFACTS_VIRTUAL_ROOT
+    )
+    return [
+        FilesystemPermission(
+            operations=["read"],
+            paths=[artifact_root, f"{artifact_root}/**"],
+            mode="allow",
+        ),
+        FilesystemPermission(
+            operations=["read"],
+            paths=[CANDIDATE_CONTEXT_VIRTUAL_PATH],
+            mode="allow",
+        ),
+        FilesystemPermission(operations=["read"], paths=["/**"], mode="deny"),
+        FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
+    ]
+
+
+DEEPAGENT_FILESYSTEM_PERMISSIONS = deepagent_filesystem_permissions()
 
 
 async def run_orchestrator(
@@ -74,6 +87,8 @@ async def run_orchestrator(
     router: NimRouter | None = None,
     resume_path: str = "",
     candidate_memory: CandidateMemory | None = None,
+    run_id: str = "",
+    human_channel: HumanChannel | None = None,
 ) -> OrchestratorRun:
     if not isinstance(router, NimRouter):
         return OrchestratorRun(
@@ -100,11 +115,17 @@ async def run_orchestrator(
     )
 
     progress = ApplicationProgress()
-    progress.resume_control_visible = any(
-        kw in snapshot.lower()
-        for kw in ("resume", "upload", "cv", "choose file", "file input", "browse")
+    if human_channel is not None:
+        human_tools = make_human_tools(
+            human_channel,
+            candidate_memory=candidate_memory,
+            on_answer=progress.record_human_answer,
+            on_approval=progress.record_submit_approval,
+        )
+    progress_sink = ApplicationProgressEventSink(
+        progress,
+        SequencedEventSink(sink, run_id=run_id),
     )
-    progress_sink = ApplicationProgressEventSink(progress, sink)
 
     router_middleware = NimRouterMiddleware(
         router,
@@ -115,8 +136,11 @@ async def run_orchestrator(
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
     ]
     post_task_verification = PostTaskVerificationMiddleware(
+        fallback_model=selection.llm,
+        router=router,
         read_only_browser_tools=read_only_browser_tools,
         sink=progress_sink,
+        progress=progress,
     )
     human_guard = HumanEscalationGuardMiddleware(progress)
     agent = create_deep_agent(
@@ -125,10 +149,19 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             SubagentDispatchMiddleware(
-                ["BrowserSpecialist", "FieldMapper", "AnswerWriter", "Verifier", "VisionSpecialist"]
+                [
+                    "BrowserSpecialist",
+                    "FieldMapper",
+                    "AnswerWriter",
+                    "Verifier",
+                    "VisionSpecialist",
+                ],
+                resume_path=resume_path,
             ),
             ModelRetryMiddleware(max_retries=3, on_failure="error"),
             router_middleware,
+            ProseToolCallGuardMiddleware(),
+            NoProgressGuardMiddleware(),
             human_guard,
             post_task_verification,
         ],
@@ -142,7 +175,7 @@ async def run_orchestrator(
             progress=progress,
         ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
-        permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
+        permissions=deepagent_filesystem_permissions(run_id),
     )
 
     run_config = cast(RunnableConfig, config.copy() if config else {})
@@ -162,6 +195,7 @@ async def run_orchestrator(
     }
     tool_journal: list[dict[str, Any]] = []
     current_snapshot = snapshot
+    guarded_recoveries = 0
 
     for iteration in range(MAX_OUTCOME_ITERATIONS):
         node_info(logger, "goal_evaluator", "starting outcome iteration %s", iteration + 1)
@@ -182,9 +216,21 @@ async def run_orchestrator(
             node_info(
                 logger,
                 "orchestrator",
-                "worker iteration failed technically; continuing from fresh evidence: %s",
+                "worker turn stopped without executable progress; "
+                "continuing from fresh evidence: %s",
                 exc,
             )
+            if isinstance(exc, (ToolProtocolViolation, NoProgressCircuitOpen)):
+                guarded_recoveries += 1
+                if guarded_recoveries > 1:
+                    return OrchestratorRun(
+                        summary=(
+                            "The active model repeatedly violated the tool protocol or made "
+                            "no executable progress after a clean recovery turn."
+                        ),
+                        model_id=model_id,
+                        status="failed",
+                    )
             current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
             attempt_input = resume_input(
                 {},
@@ -209,6 +255,7 @@ async def run_orchestrator(
             output=stream_result.output,
             tool_journal=tool_journal,
             snapshot=current_snapshot,
+            application_state=progress.state,
             router=router,
             sink=progress_sink,
         )

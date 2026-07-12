@@ -39,20 +39,15 @@ When a browser-changing tool (`browser_click`, `browser_type`,
 returns a result like:
 
 ```text
-- [Snapshot](.z-apply/browser-artifacts/page-2026-07-11T04-44-05-848Z.yml)
+- [Snapshot](.z-apply/runs/<run_id>/browser-artifacts/page-....yml)
 ```
 
 this means the mutation already executed successfully and the post-action
 browser state was saved to that file. Do NOT repeat the mutation.
 
-Instead, do one of:
-
-1. Call `browser_snapshot` without `filename` to get a fresh inline snapshot
-   of the current page state, OR
-2. Read the artifact file using `read_file`. The path in the link is relative;
-   prepend `/` to make it absolute for `read_file`. For example:
-   `.z-apply/browser-artifacts/page-...yml` →
-   `/.z-apply/browser-artifacts/page-...yml`
+Instead, call `browser_snapshot` without `filename` to get fresh inline
+evidence of the current page state. Never list, search, or choose among
+artifact directories, and never use an artifact from another run.
 
 Then inspect the post-action evidence to decide whether the success condition
 is met. Only after inspecting fresh evidence may you claim success or failure.
@@ -111,7 +106,7 @@ Resume upload is one semantic operation made of multiple tool calls:
    Documents, Add attachment, or another optional upload.
 2. Click that primary file control once to open the native file chooser.
 3. **Immediately call `browser_file_upload` with
-   `paths=["<absolute configured resume path>"]` while the chooser is open.**
+   `paths=["RESUME_PATH"]` while the chooser is open.**
    Do NOT call `browser_click` again. Do NOT call `browser_snapshot`.
    Do NOT inspect or reason about the native chooser between those two calls.
 
@@ -128,7 +123,7 @@ tool error prevents completion.
 If this task begins while the native file chooser is already open, or another
 browser tool reports that it cannot handle the modal state, do not snapshot,
 click, press Escape, or reopen the control. Immediately call
-`browser_file_upload` with the configured absolute resume path, then inspect
+`browser_file_upload` with RESUME_PATH, then inspect
 the resulting page state.
 
 `browser_file_upload` has no target, ref, selector, or `file_path` argument. Do
