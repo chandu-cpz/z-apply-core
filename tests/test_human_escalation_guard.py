@@ -5,9 +5,12 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from langchain_core.messages import ToolMessage
+
 from z_apply_core.agents.application_progress import (
     ApplicationProgress,
     ApplicationProgressEventSink,
+    BrowserUploadProgressMiddleware,
 )
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.stream_events import FrameworkTraceEvent
@@ -278,6 +281,28 @@ class ApplicationProgressTests(unittest.TestCase):
         )
 
         self.assertTrue(p.fields_mapped)
+
+    def test_nested_upload_middleware_marks_successful_tool_result(self) -> None:
+        progress = ApplicationProgress()
+        middleware = BrowserUploadProgressMiddleware(progress)
+        request = _make_guard_request("browser_file_upload", {"paths": ["/resume.pdf"]})
+        handler = AsyncMock(return_value=ToolMessage(content="uploaded", tool_call_id="c1"))
+
+        _run(middleware.awrap_tool_call(request, handler))
+
+        self.assertTrue(progress.resume_uploaded_verified)
+
+    def test_nested_upload_middleware_does_not_mark_error_result(self) -> None:
+        progress = ApplicationProgress()
+        middleware = BrowserUploadProgressMiddleware(progress)
+        request = _make_guard_request("browser_file_upload", {"paths": ["/resume.pdf"]})
+        handler = AsyncMock(
+            return_value=ToolMessage(content="failed", tool_call_id="c1", status="error")
+        )
+
+        _run(middleware.awrap_tool_call(request, handler))
+
+        self.assertFalse(progress.resume_uploaded_verified)
 
 
 # ── Fix 3: Operation kind extraction tests ───────────────────────────────

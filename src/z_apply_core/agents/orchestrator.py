@@ -139,6 +139,7 @@ async def run_orchestrator(
             candidate_memory=candidate_memory,
             answer_writer_human_tools=[tool for tool in human_tools if tool.name == "ask_human"],
             answer_writer_middleware=[human_guard],
+            progress=progress,
         ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,

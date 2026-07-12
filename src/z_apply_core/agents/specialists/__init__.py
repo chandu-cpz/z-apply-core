@@ -10,6 +10,10 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 
+from z_apply_core.agents.application_progress import (
+    ApplicationProgress,
+    BrowserUploadProgressMiddleware,
+)
 from z_apply_core.agents.browser_action_verification import BrowserActionVerificationMiddleware
 from z_apply_core.agents.duplicate_mutation_guard import DuplicateMutationGuardMiddleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
@@ -49,6 +53,7 @@ async def build_specialists(
     candidate_memory: CandidateMemory | None = None,
     answer_writer_human_tools: Sequence[BaseTool] = (),
     answer_writer_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
+    progress: ApplicationProgress | None = None,
 ) -> list[SubAgent]:
     read_only_browser_tools = [
         tool for tool in browser_tools if tool.name in VERIFIER_BROWSER_TOOLS
@@ -59,7 +64,10 @@ async def build_specialists(
             router=router,
             role="BrowserSpecialist",
             model=fallback_model,
-            extra_middleware=[DuplicateMutationGuardMiddleware()],
+            extra_middleware=[
+                DuplicateMutationGuardMiddleware(),
+                *([BrowserUploadProgressMiddleware(progress)] if progress is not None else []),
+            ],
         ),
         _with_routing(
             build_vision_specialist(browser_tools),

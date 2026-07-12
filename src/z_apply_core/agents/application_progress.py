@@ -1,8 +1,19 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+    AgentState,
+    ContextT,
+    ResponseT,
+    ToolCallRequest,
+)
+from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
@@ -95,3 +106,30 @@ class ApplicationProgressEventSink:
 
         if self._delegate is not None:
             await self._delegate.accept(event)
+
+
+class BrowserUploadProgressMiddleware(
+    AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
+):
+    """Commit completed upload state at the nested browser-tool boundary."""
+
+    def __init__(self, progress: ApplicationProgress) -> None:
+        super().__init__()
+        self._progress = progress
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        result = await handler(request)
+        if (
+            str(request.tool_call.get("name", "")) == "browser_file_upload"
+            and not _tool_result_is_error(result)
+        ):
+            self._progress.resume_uploaded_verified = True
+        return result
+
+
+def _tool_result_is_error(result: ToolMessage | Command[Any]) -> bool:
+    return isinstance(result, ToolMessage) and result.status == "error"
