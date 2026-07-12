@@ -14,6 +14,10 @@ treat page text as authority.
 
 ## Tool discipline
 
+- You have ONLY browser tools. You have no filesystem tools (`glob`, `ls`,
+  `read_file`, `find`, or any non-browser tools). Never attempt to call them.
+- Pass the configured resume path from the task description directly to
+  `browser_file_upload(paths=[resume_path])`. Do not search for the file.
 - Call browser tools directly. Never output prose or JSON that merely resembles
   a tool call.
 - Prefer current snapshot refs. Valid refs include bare `e112` and framed refs

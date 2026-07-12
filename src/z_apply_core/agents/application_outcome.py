@@ -196,7 +196,6 @@ def resume_input(
     *,
     task: str,
     snapshot: str,
-    resume_path: str,
 ) -> dict[str, Any]:
     """Start a clean worker turn from trusted runtime evidence and model feedback.
 
@@ -210,7 +209,6 @@ def resume_input(
             content=(
                 "Continue the current job-application objective.\n\n"
                 f"Requested task:\n{task}\n\n"
-                f"Configured resume:\n{resume_path}\n\n"
                 "Independent application-outcome evaluation: needs revision.\n\n"
                 f"Evidence audit:\n{decision.explanation}\n\n"
                 f"Next concrete action:\n{decision.next_action}\n\n"

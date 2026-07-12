@@ -188,7 +188,6 @@ async def run_orchestrator(
                     job_url=job_url,
                     task=task,
                     snapshot=snapshot,
-                    resume_path=resume_path,
                 ),
             }
         ]
@@ -242,14 +241,18 @@ async def run_orchestrator(
                 ),
                 task=task,
                 snapshot=current_snapshot,
-                resume_path=resume_path,
             )
+            # Stream was truncated (max_iterations, guard, or protocol violation).
+            # The model was mid-execution; give it another turn before evaluating.
             continue
         append_tool_journal(tool_journal, stream_result)
 
         current_snapshot = await fresh_snapshot(browser_tools, current_snapshot)
         progress.update_from_tool_journal(tool_journal, current_snapshot)
 
+        # Stream completed normally — the model stopped making tool calls and
+        # produced a final response. Now run the evaluator to decide whether
+        # the application outcome is satisfied, needs revision, or is blocked.
         decision = await evaluate_application_outcome(
             task=task,
             output=stream_result.output,
@@ -302,7 +305,6 @@ async def run_orchestrator(
             decision,
             task=task,
             snapshot=current_snapshot,
-            resume_path=resume_path,
         )
 
     return OrchestratorRun(
@@ -315,8 +317,7 @@ async def run_orchestrator(
     )
 
 
-def _task_prompt(*, job_url: str, task: str, snapshot: str, resume_path: str = "") -> str:
-    resume_hint = f"\nConfigured resume (absolute path):\n{resume_path}" if resume_path else ""
+def _task_prompt(*, job_url: str, task: str, snapshot: str) -> str:
     return f"""Run the requested orchestration task using the browser's current state.
 
 Job URL:
@@ -327,7 +328,6 @@ or navigate back to it merely to begin.
 
 Requested task:
 {task}
-{resume_hint}
 
 BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE
 {snapshot}
