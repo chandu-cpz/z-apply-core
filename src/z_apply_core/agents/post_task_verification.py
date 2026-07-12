@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, Literal
 
+from deepagents import create_deep_agent
 from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
@@ -12,15 +13,43 @@ from langchain.agents.middleware.types import (
     ResponseT,
     ToolCallRequest,
 )
-from langchain_core.messages import ToolCall, ToolMessage
-from langchain_core.tools import BaseTool
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool, tool
 from langgraph.types import Command
+from nim_router import NimRouter
 
+from z_apply_core.agents.application_progress import ApplicationProgress
+from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
+from z_apply_core.agents.prompts import load_prompt
+from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
+from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.terminal_guard import (
+    TerminalDecisionGuardMiddleware,
+    TerminalDecisionRecorded,
+)
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 _log = logging.getLogger(__name__)
-
 VERIFIER_SOURCE = "PostTaskVerifier"
+
+
+@dataclass(frozen=True, slots=True)
+class VerificationDecision:
+    operation: Literal[
+        "form_open",
+        "resume_control",
+        "resume_upload",
+        "field_fill",
+        "review_ready",
+        "other",
+    ]
+    status: Literal["verified", "not_verified", "blocked"]
+    evidence: str
+
+
+class _VerdictState:
+    decision: VerificationDecision | None = None
 
 
 @dataclass(frozen=True)
@@ -30,29 +59,27 @@ class SnapshotEvidence:
 
 
 class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
-    """Pair each native BrowserSpecialist task with a native Verifier task.
-
-    DeepAgents' built-in ``task`` handler runs both subagents. The browser task
-    completes first, then the verifier receives its result and a fresh browser
-    snapshot. Both reports are returned in the original task result so the
-    orchestrator remains responsible for the next application-flow decision.
-    """
+    """Verify every BrowserSpecialist operation through a separate typed verifier."""
 
     def __init__(
         self,
         *,
+        fallback_model: BaseChatModel,
+        router: NimRouter,
         read_only_browser_tools: Sequence[BaseTool],
+        progress: ApplicationProgress,
         target_subagent: str = "BrowserSpecialist",
-        verifier_subagent: str = "Verifier",
         sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
-        self._target_subagent = target_subagent
-        self._verifier_subagent = verifier_subagent
+        self._fallback_model = fallback_model
+        self._router = router
+        self._tools = list(read_only_browser_tools)
         self._snapshot_tool = next(
-            (tool for tool in read_only_browser_tools if tool.name == "browser_snapshot"),
-            None,
+            (item for item in self._tools if item.name == "browser_snapshot"), None
         )
+        self._progress = progress
+        self._target_subagent = target_subagent
         self._sink = sink
 
     async def awrap_tool_call(
@@ -62,236 +89,166 @@ class PostTaskVerificationMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
     ) -> ToolMessage | Command[Any]:
         if str(request.tool_call.get("name", "")) != "task":
             return await handler(request)
-
-        arguments = request.tool_call.get("args", {})
-        if not isinstance(arguments, dict):
+        args = request.tool_call.get("args", {})
+        if not isinstance(args, dict):
             return await handler(request)
-        subagent_type = str(arguments.get("subagent_type", "specialist"))
+
+        subagent_type = args.get("subagent_type", "")
+        description = str(args.get("description", ""))
+
         if subagent_type != self._target_subagent:
             try:
                 return await handler(request)
-            except Exception as exc:  # noqa: BLE001 - orchestrator owns recovery
-                _log.warning("Native %s task failed technically: %s", subagent_type, exc)
-                return _technical_failure_message(request, subagent_type, exc)
+            except Exception as exc:  # noqa: BLE001
+                return _technical_failure(request, subagent_type, exc)
 
-        description = str(arguments.get("description", ""))
-        _log.info("PostTaskVerification: running native %s task", self._target_subagent)
         try:
             browser_result = await handler(request)
-        except Exception as exc:  # noqa: BLE001 - return control to the orchestrator
-            _log.warning(
-                "PostTaskVerification: native %s task failed technically: %s",
-                self._target_subagent,
-                exc,
-            )
-            recovered_result = await self._continue_after_browser_failure(
-                request=request,
-                handler=handler,
-                description=description,
-                failure=exc,
-            )
-            if recovered_result is None:
-                return _technical_failure_message(request, self._target_subagent, exc)
-            browser_result = recovered_result
+        except Exception as exc:  # noqa: BLE001
+            return _technical_failure(request, self._target_subagent, exc)
         browser_message = _command_tool_message(browser_result)
         if browser_message is None:
-            _log.warning(
-                "PostTaskVerification: browser task returned no ToolMessage; verifier skipped"
-            )
             return browser_result
 
         snapshot = await self._fresh_snapshot()
         if not snapshot.collected:
-            recovery_description = (
-                f"{description}\n\n"
-                "CONTINUE THE SAME BROWSER OPERATION:\n"
-                "The previous BrowserSpecialist returned before independent evidence "
-                "could be collected. The read-only browser evidence tool produced this "
-                f"actual result:\n{snapshot.content}\n\n"
-                "Use that tool result and the current browser state to continue the "
-                "original semantic operation. Do not restart it, repeat a completed "
-                "mutation, or merely describe the next tool call. Call the browser tool "
-                "needed to finish the operation, then inspect evidence and return."
-            )
-            recovery_call = cast(
-                ToolCall,
-                {
-                    **request.tool_call,
-                    "args": {
-                        "description": recovery_description,
-                        "subagent_type": self._target_subagent,
-                    },
-                },
-            )
-            _log.info(
-                "PostTaskVerification: evidence unavailable; continuing native %s task",
-                self._target_subagent,
-            )
-            try:
-                browser_result = await handler(request.override(tool_call=recovery_call))
-            except Exception as exc:  # noqa: BLE001 - orchestrator owns retry decisions
-                _log.warning(
-                    "PostTaskVerification: continued %s task failed technically: %s",
-                    self._target_subagent,
-                    exc,
-                )
-                return _technical_failure_message(request, self._target_subagent, exc)
-            browser_message = _command_tool_message(browser_result)
-            if browser_message is None:
-                _log.warning(
-                    "PostTaskVerification: continued browser task returned no ToolMessage; "
-                    "verifier skipped"
-                )
-                return browser_result
-            snapshot = await self._fresh_snapshot()
-
-        verifier_description = (
-            "Independently verify the completed BrowserSpecialist task using current "
-            "read-only browser evidence. Do not change browser state. Return your "
-            "assessment and concrete evidence to the orchestrator, which owns the next "
-            "decision.\n\n"
-            f"ORIGINAL BROWSER TASK:\n{description}\n\n"
-            f"BROWSER SPECIALIST RESULT:\n{browser_message.content}\n\n"
-            f"FRESH POST-TASK SNAPSHOT:\n{snapshot.content}"
+            return _technical_failure(request, "PostTaskVerifier", RuntimeError(snapshot.content))
+        decision = await self._verify(
+            description=description,
+            browser_result=str(browser_message.content),
+            snapshot=snapshot.content,
         )
-        verifier_call = cast(
-            ToolCall,
-            {
-                **request.tool_call,
-                "args": {
-                    "description": verifier_description,
-                    "subagent_type": self._verifier_subagent,
-                },
-            },
+        if decision is None:
+            return _technical_failure(request, "PostTaskVerifier", RuntimeError("no typed verdict"))
+        self._progress.record_verification(
+            operation=decision.operation,
+            status=decision.status,
+            evidence=decision.evidence,
         )
-
-        _log.info("PostTaskVerification: running native %s task", self._verifier_subagent)
-        try:
-            verifier_result = await handler(request.override(tool_call=verifier_call))
-        except Exception as exc:  # noqa: BLE001 - browser result remains authoritative evidence
-            _log.warning("PostTaskVerification: native verifier task failed: %s", exc)
-            verifier_content = f"VERIFIER_ERROR: {exc}"
-        else:
-            verifier_message = _command_tool_message(verifier_result)
-            verifier_content = (
-                str(verifier_message.content)
-                if verifier_message is not None
-                else "VERIFIER_ERROR: native Verifier task returned no ToolMessage."
-            )
-
-        combined = browser_message.model_copy(
-            update={
-                "content": (
-                    f"BROWSER_SPECIALIST_RESULT:\n{browser_message.content}\n\n"
-                    f"VERIFIER_RESULT:\n{verifier_content}"
-                )
-            }
+        combined_content = (
+            f"BROWSER_SPECIALIST_RESULT:\n{browser_message.content}\n\n"
+            "VERIFIER_RESULT:\n"
+            f"operation={decision.operation}; status={decision.status}; "
+            f"evidence={decision.evidence}"
         )
-        base: dict[str, Any] = {}
-        if isinstance(browser_result, Command) and isinstance(browser_result.update, dict):
-            base = dict(browser_result.update)
-        _log.info("PostTaskVerification: paired native task results returned")
+        combined = ToolMessage(
+            content=combined_content,
+            tool_call_id=browser_message.tool_call_id,
+        )
+        base = (
+            dict(browser_result.update)
+            if isinstance(browser_result, Command) and isinstance(browser_result.update, dict)
+            else {}
+        )
         return Command(update={**base, "messages": [combined]})
 
-    async def _continue_after_browser_failure(
+    async def _verify(
         self,
         *,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
         description: str,
-        failure: Exception,
-    ) -> ToolMessage | Command[Any] | None:
-        recovery_description = (
-            f"{description}\n\n"
-            "CONTINUE THE SAME BROWSER OPERATION:\n"
-            "The previous BrowserSpecialist turn ended with this actual typed browser "
-            f"tool failure:\n{failure}\n\n"
-            "Inspect the current browser state only when the tool is available. If a "
-            "native file chooser or modal is already open, do not snapshot it, re-click "
-            "the triggering control, or restart the operation. Continue with the browser "
-            "tool that completes the original semantic operation."
-        )
-        recovery_call = cast(
-            ToolCall,
-            {
-                **request.tool_call,
-                "args": {
-                    "description": recovery_description,
-                    "subagent_type": self._target_subagent,
-                },
-            },
-        )
-        _log.info(
-            "PostTaskVerification: continuing native %s after typed tool failure",
-            self._target_subagent,
+        browser_result: str,
+        snapshot: str,
+    ) -> VerificationDecision | None:
+        state = _VerdictState()
+
+        @tool
+        async def record_verification(
+            operation: Literal[
+                "form_open",
+                "resume_control",
+                "resume_upload",
+                "field_fill",
+                "review_ready",
+                "other",
+            ],
+            status: Literal["verified", "not_verified", "blocked"],
+            evidence: str,
+        ) -> str:
+            """Record the sole evidence-backed result for this browser operation."""
+            if state.decision is None:
+                state.decision = VerificationDecision(operation, status, evidence)
+            return "Typed verification recorded."
+
+        verifier = create_deep_agent(
+            model=self._fallback_model,
+            tools=[record_verification, *self._tools],
+            system_prompt=load_prompt("verifier.md"),
+            middleware=[
+                NimRouterMiddleware(self._router, role="Verifier"),
+                ProseToolCallGuardMiddleware(),
+                TerminalDecisionGuardMiddleware(lambda: state.decision is not None),
+            ],
         )
         try:
-            return await handler(request.override(tool_call=recovery_call))
-        except Exception as exc:  # noqa: BLE001 - the orchestrator owns later recovery
-            _log.warning(
-                "PostTaskVerification: continued %s task failed technically: %s",
-                self._target_subagent,
-                exc,
+            await consume_deepagent_stream(
+                verifier.astream_events(
+                    {
+                        "messages": [
+                            {
+                                "role": "user",
+                                "content": (
+                                    "Verify this completed browser operation using fresh evidence. "
+                                    "Call record_verification exactly once; do not return a prose "
+                                    "verdict.\n\n"
+                                    f"ORIGINAL OPERATION:\n{description}\n\n"
+                                    f"BROWSER RESULT:\n{browser_result}\n\n"
+                                    f"FRESH SNAPSHOT:\n{snapshot}"
+                                ),
+                            }
+                        ]
+                    },
+                    version="v3",
+                ),
+                sink=self._sink,
+                root_source=VERIFIER_SOURCE,
             )
-            return None
+        except TerminalDecisionRecorded:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("Post-task verifier failed: %s", exc)
+        return state.decision
 
     async def _fresh_snapshot(self) -> SnapshotEvidence:
         if self._snapshot_tool is None:
             return SnapshotEvidence(
-                "Snapshot unavailable: no browser_snapshot tool was configured.",
-                collected=False,
+                "Snapshot unavailable: no browser_snapshot tool was configured.", False
             )
-        await self._emit_snapshot_event("agent_tool_start", {"input": {}})
+        await self._emit_snapshot("agent_tool_start", {"input": {}})
         try:
-            snapshot = str(await self._snapshot_tool.ainvoke({}))
-        except Exception as exc:  # noqa: BLE001 - verifier receives the evidence failure
+            content = str(await self._snapshot_tool.ainvoke({}))
+        except Exception as exc:  # noqa: BLE001
             message = f"Snapshot unavailable: {exc}"
-            await self._emit_snapshot_event(
-                "agent_tool_end",
-                {"output": "", "error": message, "completed": False},
+            await self._emit_snapshot(
+                "agent_tool_end", {"output": "", "error": message, "completed": False}
             )
-            return SnapshotEvidence(message, collected=False)
-        await self._emit_snapshot_event(
-            "agent_tool_end",
-            {"output": snapshot, "error": "", "completed": True},
+            return SnapshotEvidence(message, False)
+        await self._emit_snapshot(
+            "agent_tool_end", {"output": content, "error": "", "completed": True}
         )
-        return SnapshotEvidence(snapshot, collected=True)
+        return SnapshotEvidence(content, True)
 
-    async def _emit_snapshot_event(self, event: str, data: dict[str, Any]) -> None:
-        if self._sink is None:
-            return
-        await self._sink.accept(
-            FrameworkTraceEvent(
-                event=event,
-                name=VERIFIER_SOURCE,
-                data={"tool_name": "browser_snapshot", **data},
-                raw={},
+    async def _emit_snapshot(self, event: str, data: dict[str, Any]) -> None:
+        if self._sink is not None:
+            await self._sink.accept(
+                FrameworkTraceEvent(
+                    event, VERIFIER_SOURCE, {"tool_name": "browser_snapshot", **data}, {}
+                )
             )
-        )
 
 
 def _command_tool_message(result: ToolMessage | Command[Any]) -> ToolMessage | None:
     if isinstance(result, ToolMessage):
         return result
-    if not isinstance(result, Command) or not isinstance(result.update, dict):
-        return None
-    messages = result.update.get("messages")
-    if not isinstance(messages, list):
-        return None
-    return next((message for message in messages if isinstance(message, ToolMessage)), None)
+    if isinstance(result, Command) and isinstance(result.update, dict):
+        messages = result.update.get("messages")
+        if isinstance(messages, list):
+            return next((message for message in messages if isinstance(message, ToolMessage)), None)
+    return None
 
 
-def _technical_failure_message(
-    request: ToolCallRequest,
-    subagent_type: str,
-    error: Exception,
-) -> ToolMessage:
+def _technical_failure(request: ToolCallRequest, name: str, error: Exception) -> ToolMessage:
     return ToolMessage(
-        content=(
-            f"{subagent_type} task failed technically before its semantic operation could "
-            f"be verified: {error}. Obtain current browser evidence and decide whether to "
-            "retry the same operation or choose another safe recovery action."
-        ),
+        content=f"{name} failed before an evidence-backed operation verdict: {error}",
         name="task",
         tool_call_id=str(request.tool_call.get("id", "")),
         status="error",
