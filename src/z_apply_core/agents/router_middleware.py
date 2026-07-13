@@ -47,31 +47,47 @@ def _detect_vision(messages: Sequence[AnyMessage]) -> bool:
     return False
 
 
-def _restore_empty_content_from_reasoning(response: Any) -> Any:
-    """Preserve a provider's final answer when it only populated reasoning_content."""
+def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
+    """Keep provider reasoning out of assistant content and detect missing finals."""
     messages = getattr(response, "result", None)
     if not isinstance(messages, list):
-        return response
+        return response, False
 
     changed = False
+    missing_final = False
     normalized: list[Any] = []
     for message in messages:
-        if not isinstance(message, AIMessage) or message.tool_calls or message.text.strip():
+        if not isinstance(message, AIMessage):
             normalized.append(message)
             continue
+
+        content = message.content
+        if isinstance(content, str) and "</think>" in content:
+            final_content = content.rpartition("</think>")[2].strip()
+            normalized.append(message.model_copy(update={"content": final_content}))
+            changed = True
+            if not final_content and not message.tool_calls:
+                missing_final = True
+            continue
+
+        if message.tool_calls or message.text.strip():
+            normalized.append(message)
+            continue
+
         reasoning = message.additional_kwargs.get("reasoning_content")
-        if not isinstance(reasoning, str) or not reasoning.strip():
-            normalized.append(message)
-            continue
-        normalized.append(message.model_copy(update={"content": reasoning.strip()}))
-        changed = True
+        normalized.append(message)
+        if isinstance(reasoning, str) and reasoning.strip():
+            missing_final = True
 
     if not changed:
-        return response
-    logger.info("Recovered empty assistant content from provider reasoning_content")
-    return ModelResponse(
-        result=normalized,
-        structured_response=response.structured_response,
+        return response, missing_final
+    logger.info("Removed provider reasoning tags from assistant content")
+    return (
+        ModelResponse(
+            result=normalized,
+            structured_response=response.structured_response,
+        ),
+        missing_final,
     )
 
 
@@ -192,13 +208,30 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             raise
         else:
             latency = time.monotonic() - start
+            result, missing_final = _normalize_provider_reasoning(result)
+            if missing_final:
+                failure = ToolProtocolViolation(
+                    "tool_protocol_failure: provider returned reasoning without a "
+                    "native tool call or final assistant answer"
+                )
+                self._router.record_failure(
+                    selection.info.id,
+                    error=failure,
+                    kind=ErrorKind.TOOL_CALL_FAILURE,
+                    tools=tools,
+                    structured=structured,
+                    vision=vision,
+                )
+                self._router.cooldown_model(selection.info.id, 20.0)
+                self._active_selection = None
+                raise failure
             logger.info(
                 "router %s model %s succeeded in %.2fs",
                 self._role,
                 selection.info.id,
                 latency,
             )
-            return _restore_empty_content_from_reasoning(result)
+            return result
 
 
 def _attach_tracking_callback(selection: ModelSelection) -> None:

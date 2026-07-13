@@ -10,11 +10,12 @@ from langchain_core.messages import AIMessage
 from nim_router import NimRouter
 from nim_router.schemas import ModelSelection
 
+from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
-    async def test_recovers_final_answer_emitted_only_as_reasoning_content(self) -> None:
+    async def test_rejects_reasoning_without_a_final_answer(self) -> None:
         router = MagicMock(spec=NimRouter)
         model = MagicMock()
         router.lease = AsyncMock(
@@ -36,11 +37,46 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-        result = await NimRouterMiddleware(router, role="BrowserSpecialist").awrap_model_call(
-            request, handler
+        with self.assertRaises(ToolProtocolViolation):
+            await NimRouterMiddleware(router, role="AnswerWriter").awrap_model_call(
+                request, handler
+            )
+
+        router.record_failure.assert_called_once()
+        router.cooldown_model.assert_called_once_with("step/model", 20.0)
+
+    async def test_removes_think_block_from_final_answer(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        model = MagicMock()
+        selection = cast(
+            Any,
+            SimpleNamespace(info=SimpleNamespace(id="step/model"), llm=model),
+        )
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        request.override.return_value = sentinel.overridden_request
+        handler = AsyncMock(
+            return_value=ModelResponse(
+                result=[
+                    AIMessage(
+                        content=(
+                            "<think>Memory lookup was exact.</think>\n"
+                            "Gender = Male"
+                        ),
+                        additional_kwargs={
+                            "reasoning_content": "Memory lookup was exact."
+                        },
+                    )
+                ]
+            )
         )
 
-        self.assertEqual(result.result[0].content, "Form is open.")
+        result = await NimRouterMiddleware(
+            router,
+            role="AnswerWriter",
+            initial_selection=selection,
+        ).awrap_model_call(request, handler)
+
+        self.assertEqual(result.result[0].content, "Gender = Male")
 
     async def test_executes_initial_exploration_selection_before_leasing_again(self) -> None:
         router = MagicMock(spec=NimRouter)

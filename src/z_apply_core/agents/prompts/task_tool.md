@@ -9,7 +9,7 @@ field. This is intentional even though it is a small task: AnswerWriter alone
 has candidate memory, resume evidence, and Telegram access. Include only the
 field's exact label/question, current value, type, units/constraints, visible
 options, and validation evidence. Independent fields may be launched together,
-up to eight. The parent must consume all returned `FIELD` / `VALUE` results with
+up to eight. The parent must consume all returned `<field> = <value>` results with
 browser mutations before launching any more tasks.
 
 Use `subagent_type="VisionSpecialist"` only for one visual question that current

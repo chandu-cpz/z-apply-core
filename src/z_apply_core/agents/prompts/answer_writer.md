@@ -24,12 +24,11 @@ current field evidence, and every visible option. Ask one question about this
 field only. Supply options when the page provides choices so Telegram can render
 buttons. Do not ask for a second fact in the same task.
 
-Return only these two lines as the normal final task message; do not call a
-reporting or return-values tool:
+Return one short line as the normal final task message; do not call a reporting
+or return-values tool:
 
-`FIELD: <exact field label>`
-`VALUE: <exact supported value or exact visible option label>`
+`<exact field label> = <exact supported value or exact visible option label>`
 
 If a required tool is unavailable or the field remains unresolved, return
-`VALUE: UNRESOLVED - <short concrete reason>`. Do not include analysis, browser
-actions, or any other field.
+`<exact field label> = UNRESOLVED - <short concrete reason>`. Do not include
+analysis, browser actions, or any other field.

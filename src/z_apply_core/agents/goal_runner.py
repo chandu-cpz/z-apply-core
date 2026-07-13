@@ -51,8 +51,8 @@ async def run_active_goal(
                     content=(
                         "The job-application goal is still active. Continue from the same "
                         "thread, todos, browser state, and prior tool results. Do not repeat "
-                        "completed actions. If the latest results are AnswerWriter FIELD / "
-                        "VALUE pairs, your next actions must apply those exact values to "
+                        "completed actions. If the latest results are AnswerWriter field = "
+                        "value pairs, your next actions must apply those exact values to "
                         "their browser refs; do not request them again. Otherwise choose "
                         "the next safe browser action. The goal ends only through "
                         "application_submitted or application_blocked."

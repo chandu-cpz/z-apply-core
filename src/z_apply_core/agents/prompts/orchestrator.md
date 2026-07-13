@@ -15,7 +15,7 @@ read the newest tool results and continue at the first applicable state below:
    prompt requires `browser_handle_dialog`. Do not snapshot while a native
    modal is pending. A DOM element with role `dialog` is normal page content.
 2. **AnswerWriter results just returned:** immediately apply every supported
-   `FIELD` / `VALUE` result to its known browser ref. This takes priority over
+   `<field> = <value>` result to its known browser ref. This takes priority over
    snapshots, planning, and more delegation. Preserve the exact value: `0`
    remains `0`. Never merge values from different results. Use one
    `browser_fill_form` for compatible text/spinbutton fields and serialize
