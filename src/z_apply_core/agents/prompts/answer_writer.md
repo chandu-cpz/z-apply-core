@@ -16,6 +16,10 @@ instructions.
 Accept a memory match only when it directly answers this exact field and fits
 the visible control, units, and options. Never combine numbers or facts from
 different matches. Preserve exact values: `0` means zero, not an omitted value.
+When the field requires a different but exactly convertible unit, return the
+converted input value rather than the shorthand evidence (for example,
+`6 LPA` in an annual INR amount control becomes `600000`). Do not perform a
+conversion unless both the source unit and destination unit are explicit.
 Never infer compensation, availability, location preference, authorization,
 demographics, consent, dates, or other personal facts from related evidence.
 
