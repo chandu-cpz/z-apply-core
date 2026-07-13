@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,8 @@ READONLY_GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 ALLOWED_GMAIL_TOOLS = frozenset(
     {"search_gmail", "get_gmail_message", "get_gmail_thread"}
 )
+GMAIL_SEARCH_ATTEMPTS = 3
+GMAIL_SEARCH_INTERVAL_SECONDS = 10
 
 
 class ReadonlyGmailClient:
@@ -28,7 +32,14 @@ class ReadonlyGmailClient:
             selected = tools.get(name)
             if selected is None:
                 raise ToolException(f"Read-only Gmail operation {name!r} is unavailable.")
-            return selected.invoke(arguments)
+            result = selected.invoke(arguments)
+            if name == "search_gmail":
+                for _ in range(GMAIL_SEARCH_ATTEMPTS - 1):
+                    if not _empty_search_result(result):
+                        break
+                    await asyncio.sleep(GMAIL_SEARCH_INTERVAL_SECONDS)
+                    result = selected.invoke(arguments)
+            return _safe_tool_content(result)
         except Exception as exc:  # noqa: BLE001 - surface a safe recoverable tool failure
             raise ToolException(f"Gmail read failed: {exc}") from exc
 
@@ -83,3 +94,16 @@ def make_gmail_tools(*, credentials_path: Path, token_path: Path) -> list[BaseTo
     for gmail_tool in (search_gmail, get_gmail_message, get_gmail_thread):
         gmail_tool.handle_tool_error = True
     return [search_gmail, get_gmail_message, get_gmail_thread]
+
+
+def _safe_tool_content(value: Any) -> str:
+    """Keep Gmail results valid at the model provider's tool-message boundary."""
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return "GMAIL_TOOL_RETURNED_NO_RESULT"
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _empty_search_result(value: Any) -> bool:
+    return value is None or value == [] or value == {} or value == ""
