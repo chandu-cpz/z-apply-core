@@ -156,9 +156,20 @@ class BrowserSession:
         locator = (await tab.resolve_target(target=target)).locator
         is_auth_submit = await locator.evaluate(
             """element => {
-                const control = element.closest(
-                    'button, input[type="submit"], input[type="image"]'
-                );
+                const selector = 'button, input[type="submit"], input[type="image"]';
+                let control = element.closest(selector);
+                if (!control) {
+                    const clickLayer = element.closest('[role="button"]');
+                    if (clickLayer) {
+                        const box = clickLayer.getBoundingClientRect();
+                        const x = box.left + box.width / 2;
+                        const y = box.top + box.height / 2;
+                        control = clickLayer.ownerDocument
+                            .elementsFromPoint(x, y)
+                            .find(candidate => candidate !== clickLayer &&
+                                candidate.matches(selector)) || null;
+                    }
+                }
                 if (!(control instanceof HTMLButtonElement ||
                       control instanceof HTMLInputElement)) return false;
                 if (control instanceof HTMLInputElement &&
@@ -215,9 +226,21 @@ class BrowserSession:
             return bool(
                 await locator.evaluate(
                     """element => {
-                        const control = element.closest(
-                            'button, input[type="submit"], input[type="image"]'
-                        );
+                        const selector =
+                            'button, input[type="submit"], input[type="image"]';
+                        let control = element.closest(selector);
+                        if (!control) {
+                            const clickLayer = element.closest('[role="button"]');
+                            if (clickLayer) {
+                                const box = clickLayer.getBoundingClientRect();
+                                const x = box.left + box.width / 2;
+                                const y = box.top + box.height / 2;
+                                control = clickLayer.ownerDocument
+                                    .elementsFromPoint(x, y)
+                                    .find(candidate => candidate !== clickLayer &&
+                                        candidate.matches(selector)) || null;
+                            }
+                        }
                         if (control instanceof HTMLInputElement) {
                             return control.type === 'submit' || control.type === 'image';
                         }
