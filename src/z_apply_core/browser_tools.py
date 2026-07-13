@@ -66,23 +66,49 @@ def normalize_browser_arguments(
 ) -> dict[str, Any]:
     """Translate agent-facing ARIA reference notation at the browser boundary."""
     normalized = dict(arguments or {})
-    target = normalized.get("target")
-    reference = _canonical_reference(target)
-    if reference is None:
-        reference = _explicit_reference(normalized.get("element"))
-    if reference is not None:
-        normalized["target"] = reference
+    normalized["target"] = _normalize_target(
+        normalized.get("target"),
+        element=normalized.get("element"),
+    )
+    if normalized.get("target") is None:
+        normalized.pop("target", None)
+
+    fields = normalized.get("fields")
+    if isinstance(fields, list):
+        normalized["fields"] = [
+            {
+                **field,
+                "target": _normalize_target(
+                    field.get("target"),
+                    element=field.get("name"),
+                ),
+            }
+            if isinstance(field, Mapping)
+            else field
+            for field in fields
+        ]
     return normalized
+
+
+def _normalize_target(value: Any, *, element: Any = None) -> Any:
+    reference = _canonical_reference(value)
+    if reference is None:
+        reference = _explicit_reference(value)
+    if reference is None:
+        reference = _explicit_reference(element)
+    return reference if reference is not None else value
 
 
 def _canonical_reference(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
-    candidate = value
+    candidate = value.strip()
     if candidate.startswith("[ref=") and candidate.endswith("]"):
         candidate = candidate[5:-1]
     elif candidate.startswith("ref="):
         candidate = candidate[4:]
+    elif candidate.startswith("[") and candidate.endswith("]"):
+        candidate = candidate[1:-1]
     if len(candidate) > 1 and candidate[0] == "e" and candidate[1:].isdigit():
         return candidate
     return None
@@ -113,7 +139,7 @@ def make_click_upload_tool(caller: TextToolCaller) -> BaseTool:
         """Click a file control and upload paths through its native chooser atomically."""
         if not paths or any(not isinstance(path, str) or not path for path in paths):
             raise ValueError("browser_click_upload requires at least one non-empty path.")
-        click_arguments = {"target": target}
+        click_arguments = normalize_browser_arguments({"target": target})
         if element:
             click_arguments["element"] = element
         await caller("browser_click", click_arguments)
@@ -163,7 +189,7 @@ class BrowserToolRegistry:
         if name not in self._specs:
             available = ", ".join(self.names)
             raise ValueError(f"Unknown browser tool {name!r}. Available tools: {available}")
-        return await self._caller(name, arguments or {})
+        return await self._caller(name, normalize_browser_arguments(arguments))
 
     def langchain_tools(self, names: Iterable[str] | None = None) -> list[BaseTool]:
         selected = self.names if names is None else tuple(names)
@@ -175,7 +201,7 @@ class BrowserToolRegistry:
         async def call_tool(**kwargs: Any) -> Any:
             caller = self._langchain_callers.get(spec.name, self._caller)
             arguments = {k: v for k, v in kwargs.items() if v is not None and v != ""}
-            return await caller(spec.name, arguments)
+            return await caller(spec.name, normalize_browser_arguments(arguments))
 
         return StructuredTool.from_function(
             coroutine=call_tool,

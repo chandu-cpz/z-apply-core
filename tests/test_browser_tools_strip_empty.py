@@ -106,6 +106,54 @@ class StripEmptyArgsTests(unittest.TestCase):
         self.assertEqual(self.captured["target"], "#btn")
         self.assertEqual(self.captured["filename"], "out.png")
 
+    def test_aria_reference_variants_are_canonicalized(self) -> None:
+        tools = self.registry.langchain_tools(["browser_snapshot"])
+
+        for supplied in (
+            "e125",
+            "[e125]",
+            "ref=e125",
+            "[ref=e125]",
+            'textbox "Current Salary *" [ref=e125]:',
+        ):
+            self._run(tools[0].coroutine(target=supplied))
+            self.assertEqual(self.captured["target"], "e125")
+
+    def test_fill_form_nested_targets_are_canonicalized(self) -> None:
+        spec = SimpleSpec(
+            name="browser_fill_form",
+            title="Fill form",
+            description="Fill several form controls",
+            parameters=[SimpleParam("fields", list[dict[str, Any]], None, "Fields", False)],
+        )
+        registry = BrowserToolRegistry(specs=[spec], caller=self.registry._caller)
+
+        self._run(
+            registry.langchain_tools()[0].ainvoke(
+                {
+                    "fields": [
+                        {
+                            "name": "Current Salary *",
+                            "target": 'textbox "Current Salary *" [ref=e125]:',
+                            "type": "textbox",
+                            "value": "600000",
+                        },
+                        {
+                            "name": "Available To Join",
+                            "target": "[e138]",
+                            "type": "textbox",
+                            "value": "0",
+                        },
+                    ]
+                }
+            )
+        )
+
+        self.assertEqual(
+            [field["target"] for field in self.captured["fields"]],
+            ["e125", "e138"],
+        )
+
     def test_tool_model_coerces_provider_stringified_scalars(self) -> None:
         tool = self.registry.langchain_tools(["browser_snapshot"])[0]
 
