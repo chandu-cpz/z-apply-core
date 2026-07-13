@@ -5,13 +5,14 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
 from typing import Annotated, Any, Protocol, cast, get_origin
 
-from langchain_core.tools import BaseTool, StructuredTool, tool
+from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 FileUploader = Callable[[str, list[str]], Awaitable[str]]
 AuthSubmitter = Callable[[str], Awaitable[str]]
+VerificationLinkOpener = Callable[[str], Awaitable[str]]
 _AGENT_TOOL_DESCRIPTIONS = {
     "browser_file_upload": (
         "Upload files into the currently open native file chooser. This tool has no "
@@ -170,9 +171,9 @@ def make_click_upload_tool(uploader: FileUploader) -> BaseTool:
         """Attach paths directly to a file control without a native chooser round trip."""
         if not paths or any(not isinstance(path, str) or not path for path in paths):
             raise ValueError("browser_click_upload requires at least one non-empty path.")
-        normalized_target = normalize_browser_arguments(
-            {"target": target, "element": element}
-        ).get("target")
+        normalized_target = normalize_browser_arguments({"target": target, "element": element}).get(
+            "target"
+        )
         if not isinstance(normalized_target, str) or not normalized_target:
             raise ValueError("browser_click_upload requires a resolvable target.")
         return await uploader(normalized_target, paths)
@@ -195,15 +196,51 @@ def make_auth_submit_tool(submitter: AuthSubmitter) -> BaseTool:
         username, password, or one-time-code input. This tool never authorizes
         final job-application submission.
         """
-        normalized_target = normalize_browser_arguments(
-            {"target": target, "element": element}
-        ).get("target")
-        if not isinstance(normalized_target, str) or not normalized_target:
-            raise ValueError("browser_auth_submit requires a resolvable target.")
-        return await submitter(normalized_target)
+        try:
+            normalized_target = normalize_browser_arguments(
+                {"target": target, "element": element}
+            ).get("target")
+            if not isinstance(normalized_target, str) or not normalized_target:
+                raise ToolException("browser_auth_submit requires a resolvable target.")
+            return await submitter(normalized_target)
+        except ToolException:
+            raise
+        except Exception as exc:
+            raise ToolException(
+                "Authentication control is no longer current. Inspect fresh browser "
+                "evidence and continue from the resulting page; do not replay the stale ref."
+            ) from exc
 
     browser_auth_submit.handle_tool_error = True
     return browser_auth_submit
+
+
+def make_verification_link_tool(opener: VerificationLinkOpener) -> BaseTool:
+    """Build one temporary-tab lifecycle for an email verification link."""
+
+    @tool
+    async def browser_verify_link(url: str) -> str:
+        """Open an email verification URL in a temporary tab and restore the app tab.
+
+        The executor preserves the original application tab, opens the URL in a new
+        tab, captures verification evidence, closes the temporary tab, selects the
+        original tab, and returns evidence from both states. Do not use browser_navigate
+        or browser_tabs for email verification.
+        """
+        if not url.startswith(("https://", "http://")):
+            raise ToolException("browser_verify_link requires an absolute HTTP(S) URL.")
+        try:
+            return await opener(url)
+        except ToolException:
+            raise
+        except Exception as exc:
+            raise ToolException(
+                "Temporary verification tab failed but cleanup was attempted. Inspect "
+                "the current application tab before choosing the next action."
+            ) from exc
+
+    browser_verify_link.handle_tool_error = True
+    return browser_verify_link
 
 
 class BrowserToolParameter(Protocol):

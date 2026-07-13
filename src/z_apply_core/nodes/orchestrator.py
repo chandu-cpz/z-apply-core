@@ -12,6 +12,7 @@ from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_tools import (
     AUTHENTICATION_SPECIALIST_BROWSER_TOOLS,
     make_auth_submit_tool,
+    make_verification_link_tool,
 )
 from z_apply_core.config import load_settings
 from z_apply_core.gmail_tools import make_gmail_tools
@@ -132,6 +133,7 @@ def _authentication_tools(
     if runtime is None:
         return []
     allowed = set(AUTHENTICATION_SPECIALIST_BROWSER_TOOLS)
+    allowed.discard("browser_tabs")
     browser_tools = [
         browser_tool
         for browser_tool in state.get("browser_tools", ())
@@ -141,6 +143,7 @@ def _authentication_tools(
     return [
         *browser_tools,
         make_auth_submit_tool(runtime.browser.submit_auth_form),
+        make_verification_link_tool(runtime.browser.open_verification_link),
         *make_gmail_tools(
             credentials_path=settings.gmail_credentials_path,
             token_path=settings.gmail_token_path,

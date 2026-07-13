@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock
 
 from langchain_core.tools import ToolException
 
-from z_apply_core.browser_tools import BrowserToolRegistry, make_click_upload_tool
+from z_apply_core.browser_tools import (
+    BrowserToolRegistry,
+    make_auth_submit_tool,
+    make_click_upload_tool,
+    make_verification_link_tool,
+)
 
 
 class SimpleParam:
@@ -207,6 +212,23 @@ class StripEmptyArgsTests(unittest.TestCase):
         uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
         self.assertIn("resume attached", result)
         self.assertIn("current form snapshot", result)
+
+    def test_auth_submit_adapter_returns_stale_ref_failure_to_agent(self) -> None:
+        submitter = AsyncMock(side_effect=ValueError("stale ref"))
+        tool = make_auth_submit_tool(submitter)
+
+        result = self._run(tool.ainvoke({"target": "e341"}))
+
+        self.assertIn("no longer current", result)
+
+    def test_verification_link_tool_uses_atomic_lifecycle(self) -> None:
+        opener = AsyncMock(return_value="temporary tab closed; original restored")
+        tool = make_verification_link_tool(opener)
+
+        result = self._run(tool.ainvoke({"url": "https://example.com/verify"}))
+
+        opener.assert_awaited_once_with("https://example.com/verify")
+        self.assertIn("original restored", result)
 
 
 if __name__ == "__main__":

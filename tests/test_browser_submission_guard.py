@@ -109,6 +109,50 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         call_tool.assert_not_awaited()
 
+    async def test_stale_auth_target_becomes_recoverable_browser_error(self) -> None:
+        session, call_tool = self._session(is_submit=True)
+        session._backend._ensure_tab.return_value.resolve_target.side_effect = ValueError(
+            "stale ref"
+        )
+
+        with self.assertRaisesRegex(BrowserToolExecutionError, "stale or unavailable"):
+            await session.submit_auth_form("e510")
+
+        call_tool.assert_not_awaited()
+
+    async def test_temporary_verification_tab_is_closed_and_original_restored(self) -> None:
+        session, _ = self._session(is_submit=True)
+        tabs: list[object] = []
+        context = SimpleNamespace()
+        original = SimpleNamespace(
+            context=context,
+            capture_snapshot=AsyncMock(return_value="original application evidence"),
+        )
+        temporary = SimpleNamespace(
+            check_url_and_navigate=AsyncMock(),
+            page=SimpleNamespace(title=AsyncMock(return_value="Account verified")),
+            capture_snapshot=AsyncMock(return_value="verification succeeded"),
+        )
+        tabs.extend([original, temporary])
+
+        async def close_temporary() -> None:
+            tabs.remove(temporary)
+
+        temporary.close = AsyncMock(side_effect=close_temporary)
+        context.new_tab = AsyncMock(return_value=temporary)
+        context.tabs = lambda: tabs
+        context.select_tab = AsyncMock()
+        session._backend._ensure_tab.return_value = original
+
+        result = await session.open_verification_link("https://example.com/verify")
+
+        temporary.check_url_and_navigate.assert_awaited_once()
+        temporary.close.assert_awaited_once()
+        context.select_tab.assert_awaited_once_with(0)
+        self.assertEqual(tabs, [original])
+        self.assertIn("VERIFICATION_TAB_COMPLETED_AND_CLOSED", result)
+        self.assertIn("original application evidence", result)
+
 
 if __name__ == "__main__":
     unittest.main()

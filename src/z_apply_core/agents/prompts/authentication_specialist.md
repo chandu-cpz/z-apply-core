@@ -69,13 +69,14 @@ path failed or is unavailable:
 - Fill an OTP only into visibly identified OTP controls. Never spread a code
   across arbitrary inputs and never guess a control.
 - For a verification link, extract the complete signed URL only from the full
-  `get_gmail_message` result. Preserve the application tab. Use `browser_tabs`
-  to open the URL in a new tab; never use `browser_navigate` on the application
-  tab. Inspect the verification result in the new tab, close that tab with
-  `browser_tabs`, select the original application tab, and retry email login once
-  with `browser_auth_submit`. The original tab may still show stale pre-verify
-  text until that login retry. Do not call `request_manual_auth` merely because
-  stale text remains.
+  `get_gmail_message` result. Pass it once to `browser_verify_link`. That atomic
+  operation preserves the application tab, opens and inspects a temporary tab,
+  closes it, and restores the original application tab. Never use
+  `browser_navigate` or `browser_tabs` for email verification. Read the returned
+  verification and original-tab evidence, then retry email login once with
+  `browser_auth_submit`. The original tab may still show stale pre-verify text
+  until that login retry. Do not call `request_manual_auth` merely because stale
+  text remains.
 - A `Final-form submission is locked` result means an auth form was attempted
   through ordinary `browser_click`. Retry the exact auth control with
   `browser_auth_submit`; this runtime safety message is not a CAPTCHA, security

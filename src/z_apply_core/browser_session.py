@@ -15,9 +15,7 @@ from z_apply_core.browser_tools import (
     normalize_browser_arguments,
 )
 
-INLINE_CAPTURE_TOOLS = frozenset(
-    {"browser_snapshot", "browser_take_screenshot", "browser_pdf"}
-)
+INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot", "browser_pdf"})
 
 
 class BrowserToolExecutionError(ToolException):
@@ -34,6 +32,8 @@ class BrowserSession:
         self._last_snapshot = ""
         self._last_mutation_signature = ""
         self._last_mutation_made_progress = True
+        self._last_auth_submit_target = ""
+        self._last_auth_submit_snapshot = ""
         self._capture_workspace = Path.cwd() / ".z-apply" / "runs" / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(server.backend_pool.tools),
@@ -109,10 +109,7 @@ class BrowserSession:
             sort_keys=True,
             default=str,
         )
-        if (
-            signature == self._last_mutation_signature
-            and not self._last_mutation_made_progress
-        ):
+        if signature == self._last_mutation_signature and not self._last_mutation_made_progress:
             raise BrowserToolExecutionError(
                 "Duplicate mutation prevented: the identical previous action left the "
                 "browser snapshot unchanged. Choose a different action."
@@ -152,10 +149,18 @@ class BrowserSession:
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""
-        tab = await self._backend._ensure_tab()
-        locator = (await tab.resolve_target(target=target)).locator
-        is_auth_submit = await locator.evaluate(
-            """element => {
+        if target == getattr(self, "_last_auth_submit_target", "") and getattr(
+            self, "_last_snapshot", ""
+        ) == getattr(self, "_last_auth_submit_snapshot", ""):
+            raise BrowserToolExecutionError(
+                "This authentication submit was already executed against the current "
+                "page state. Use its post-action evidence; do not repeat it."
+            )
+        try:
+            tab = await self._backend._ensure_tab()
+            locator = (await tab.resolve_target(target=target)).locator
+            is_auth_submit = await locator.evaluate(
+                """element => {
                 const selector = 'button, input[type="submit"], input[type="image"]';
                 let control = element.closest(selector);
                 if (!control) {
@@ -190,7 +195,14 @@ class BrowserSession:
                          'one-time-code'].includes(autocomplete);
                 });
             }"""
-        )
+            )
+        except BrowserToolExecutionError:
+            raise
+        except Exception as exc:
+            raise BrowserToolExecutionError(
+                "Authentication control is stale or unavailable. Capture a fresh "
+                "snapshot and continue from current page evidence."
+            ) from exc
         if not is_auth_submit:
             raise BrowserToolExecutionError(
                 "Authentication submit rejected: the target is not a submit control in "
@@ -203,9 +215,46 @@ class BrowserSession:
         )
         _raise_for_tool_error("browser_click", result)
         try:
-            return await self.call_tool("browser_snapshot")
+            evidence = await self.call_tool("browser_snapshot")
         except BrowserToolExecutionError as exc:
             return f"Authentication form submitted. Post-action snapshot unavailable: {exc}"
+        self._last_auth_submit_target = target
+        self._last_auth_submit_snapshot = evidence
+        return (
+            "AUTHENTICATION_FORM_SUBMITTED_ONCE. Do not replay this submit. Continue "
+            "from the post-action evidence below.\n" + evidence
+        )
+
+    async def open_verification_link(self, url: str) -> str:
+        """Resolve an email link in a temporary tab and always restore the app tab."""
+        original = await self._backend._ensure_tab()
+        context = original.context
+        temporary = await context.new_tab()
+        verification_evidence = ""
+        verification_title = ""
+        try:
+            await temporary.check_url_and_navigate(url)
+            verification_title = await temporary.page.title()
+            verification_evidence = await temporary.capture_snapshot(target="html")
+        finally:
+            if temporary in context.tabs():
+                await temporary.close()
+            if original in context.tabs():
+                await context.select_tab(context.tabs().index(original))
+
+        if original not in context.tabs():
+            raise BrowserToolExecutionError(
+                "The original application tab closed during email verification."
+            )
+        original_evidence = await original.capture_snapshot(target="html")
+        self._last_snapshot = original_evidence
+        return (
+            "VERIFICATION_TAB_COMPLETED_AND_CLOSED. The original application tab is "
+            "selected again.\n"
+            f"Verification tab title: {verification_title or '(empty)'}\n"
+            f"Verification evidence:\n{verification_evidence}\n"
+            f"Original application evidence after restore:\n{original_evidence}"
+        )
 
     def activate_submission_guard(self) -> None:
         """Require a one-use human capability before application form submission."""
