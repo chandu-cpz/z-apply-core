@@ -22,6 +22,9 @@ _log = logging.getLogger(__name__)
 async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str]:
     sink = _sink_from_config(config)
     router = _router_from_config(config)
+    runtime = _runtime(state)
+    if runtime is not None:
+        runtime.browser.activate_submission_guard()
     run = await run_orchestrator(
         job_url=str(state["job_url"]),
         task=str(state["task"]),
@@ -35,6 +38,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         candidate_memory=runtime_candidate_memory(state),
         run_id=_run_id(state),
         artifact_publisher=_artifact_publisher(state),
+        on_submit_approval=(runtime.browser.set_submit_approval if runtime is not None else None),
     )
     snapshot = await _fresh_snapshot(state)
     return {
@@ -81,27 +85,32 @@ async def _fresh_snapshot(state: RunState) -> str:
 
 
 def _human_channel(state: RunState) -> HumanChannel | None:
-    runtime = state.get("runtime")
-    if not isinstance(runtime, RunRuntime) or runtime.human_channel is None:
+    runtime = _runtime(state)
+    if runtime is None or runtime.human_channel is None:
         return None
     return runtime.human_channel
 
 
 def runtime_candidate_memory(state: RunState) -> CandidateMemory | None:
-    runtime = state.get("runtime")
-    return runtime.candidate_memory if isinstance(runtime, RunRuntime) else None
+    runtime = _runtime(state)
+    return runtime.candidate_memory if runtime is not None else None
 
 
 def _run_id(state: RunState) -> str:
-    runtime = state.get("runtime")
-    return runtime.run_id if isinstance(runtime, RunRuntime) else ""
+    runtime = _runtime(state)
+    return runtime.run_id if runtime is not None else ""
 
 
 def _artifact_publisher(state: RunState) -> ApplicationArtifactPublisher | None:
-    runtime = state.get("runtime")
-    if not isinstance(runtime, RunRuntime) or runtime.human_channel is None:
+    runtime = _runtime(state)
+    if runtime is None or runtime.human_channel is None:
         return None
     return ApplicationArtifactPublisher(
         browser=runtime.browser,
         channel=runtime.human_channel,
     )
+
+
+def _runtime(state: RunState) -> RunRuntime | None:
+    runtime = state.get("runtime")
+    return runtime if isinstance(runtime, RunRuntime) else None

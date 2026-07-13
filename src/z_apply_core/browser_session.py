@@ -28,6 +28,8 @@ class BrowserSession:
         self._server = server
         self._backend = server.backend
         self.run_id = run_id
+        self._submission_guard_active = False
+        self._approved_submissions = 0
         self._capture_workspace = Path.cwd() / ".z-apply" / "runs" / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(server.backend_pool.tools),
@@ -53,12 +55,25 @@ class BrowserSession:
         normalized = normalize_browser_arguments(arguments)
         if name == "browser_snapshot" and "target" not in normalized:
             normalized["target"] = "html"
+        guarded_submit = False
+        if self._submission_guard_active:
+            if name == "browser_click":
+                guarded_submit = await self._is_form_submit(normalized)
+            elif name == "browser_type" and normalized.get("submit") is True:
+                guarded_submit = True
+            if guarded_submit and self._approved_submissions < 1:
+                raise BrowserToolExecutionError(
+                    "Final-form submission is locked. Call request_submit_approval and "
+                    "wait for an approved result before clicking this submit control."
+                )
         result = await self._backend.call_tool(
             name,
             normalized,
             meta=self._call_meta(name),
         )
         _raise_for_tool_error(name, result)
+        if guarded_submit:
+            self._approved_submissions -= 1
         return _text_content(result)
 
     async def call_tool_content(
@@ -107,6 +122,37 @@ class BrowserSession:
         await locator.set_input_files(paths)
         evidence = await self.call_tool("browser_snapshot")
         return "Files attached directly to the resolved upload control.\n" + evidence
+
+    def activate_submission_guard(self) -> None:
+        """Require a one-use human capability before application form submission."""
+        self._submission_guard_active = True
+        self._approved_submissions = 0
+
+    def set_submit_approval(self, approved: bool) -> None:
+        """Grant or revoke the one-use form-submit capability."""
+        self._approved_submissions = 1 if approved else 0
+
+    async def _is_form_submit(self, arguments: dict[str, Any]) -> bool:
+        target = arguments.get("target")
+        if not isinstance(target, str) or not target:
+            return False
+        tab = await self._backend._ensure_tab()
+        locator = (await tab.resolve_target(target=target)).locator
+        return bool(
+            await locator.evaluate(
+                """element => {
+                    const control = element.closest(
+                        'button, input[type="submit"], input[type="image"]'
+                    );
+                    if (control instanceof HTMLInputElement) {
+                        return control.type === 'submit' || control.type === 'image';
+                    }
+                    if (!(control instanceof HTMLButtonElement)) return false;
+                    const type = control.getAttribute('type');
+                    return type === 'submit' || (type === null && control.form !== null);
+                }"""
+            )
+        )
 
     async def close(self) -> None:
         await self._backend.close()

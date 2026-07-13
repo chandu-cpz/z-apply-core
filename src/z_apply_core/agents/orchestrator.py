@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import cast
 
@@ -76,6 +76,7 @@ async def run_orchestrator(
     run_id: str = "",
     human_channel: HumanChannel | None = None,
     artifact_publisher: ApplicationArtifactPublisher | None = None,
+    on_submit_approval: Callable[[bool], None] | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
     configure_z_apply_harness_profile()
@@ -98,6 +99,8 @@ async def run_orchestrator(
     def record_approval(value: bool) -> None:
         nonlocal approval
         approval = value
+        if on_submit_approval is not None:
+            on_submit_approval(value)
 
     if human_channel is not None:
         human_tools = make_human_tools(
