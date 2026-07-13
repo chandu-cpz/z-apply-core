@@ -13,7 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
-from z_apply_core.agents.goal_runner import run_active_goal
+from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_active_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
@@ -129,6 +129,10 @@ async def run_orchestrator(
         role="orchestrator",
         initial_selection=selection,
     )
+    active_goal_middleware = ActiveGoalMiddleware(
+        is_terminal=lambda: terminal is not None,
+        on_no_progress=router_middleware.reject_active_response,
+    )
     orchestrator_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"human_challenge"})
     )
@@ -151,6 +155,7 @@ async def run_orchestrator(
             router_middleware,
             ProseToolCallGuardMiddleware(),
             orchestrator_human_guard,
+            active_goal_middleware,
         ],
         subagents=await build_specialists(
             router,
@@ -182,7 +187,6 @@ async def run_orchestrator(
             initial_message=prompt,
             config=run_config,
             sink=event_sink,
-            is_terminal=lambda: terminal is not None,
         )
     except Exception as exc:  # noqa: BLE001 - return a clear infrastructure status
         logger.exception("Persistent job-application agent failed")

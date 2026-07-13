@@ -124,6 +124,27 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
     def last_model_id(self) -> str:
         return self._last_model_id
 
+    def reject_active_response(self, error: ToolProtocolViolation) -> None:
+        """Record a semantically unusable response and rotate the sticky lease."""
+        selection = self._active_selection
+        if selection is None:
+            return
+        self._router.record_failure(
+            selection.info.id,
+            error=error,
+            kind=ErrorKind.TOOL_CALL_FAILURE,
+            tools=True,
+            structured=False,
+            vision=bool(self._policy.get("force_vision")),
+        )
+        self._router.cooldown_model(selection.info.id, 20.0)
+        logger.warning(
+            "router %s rejected no-progress response from %s and released sticky lease",
+            self._role,
+            selection.info.id,
+        )
+        self._active_selection = None
+
     async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
