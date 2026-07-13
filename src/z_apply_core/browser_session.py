@@ -209,23 +209,30 @@ class BrowserSession:
         target = arguments.get("target")
         if not isinstance(target, str) or not target:
             return False
-        tab = await self._backend._ensure_tab()
-        locator = (await tab.resolve_target(target=target)).locator
-        return bool(
-            await locator.evaluate(
-                """element => {
-                    const control = element.closest(
-                        'button, input[type="submit"], input[type="image"]'
-                    );
-                    if (control instanceof HTMLInputElement) {
-                        return control.type === 'submit' || control.type === 'image';
-                    }
-                    if (!(control instanceof HTMLButtonElement)) return false;
-                    const type = control.getAttribute('type');
-                    return type === 'submit' || (type === null && control.form !== null);
-                }"""
+        try:
+            tab = await self._backend._ensure_tab()
+            locator = (await tab.resolve_target(target=target)).locator
+            return bool(
+                await locator.evaluate(
+                    """element => {
+                        const control = element.closest(
+                            'button, input[type="submit"], input[type="image"]'
+                        );
+                        if (control instanceof HTMLInputElement) {
+                            return control.type === 'submit' || control.type === 'image';
+                        }
+                        if (!(control instanceof HTMLButtonElement)) return false;
+                        const type = control.getAttribute('type');
+                        return type === 'submit' || (type === null && control.form !== null);
+                    }"""
+                )
             )
-        )
+        except BrowserToolExecutionError:
+            raise
+        except Exception as exc:
+            raise BrowserToolExecutionError(
+                f"Cannot inspect browser target {target!r}; capture a fresh snapshot and retry."
+            ) from exc
 
     async def close(self) -> None:
         await self._backend.close()

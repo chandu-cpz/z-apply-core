@@ -94,6 +94,21 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         call_tool.assert_not_awaited()
 
+    async def test_stale_submit_target_becomes_recoverable_browser_error(self) -> None:
+        session, call_tool = self._session(is_submit=False)
+        session.activate_submission_guard()
+        session._backend._ensure_tab.return_value.resolve_target.side_effect = ValueError(
+            "stale ref"
+        )
+
+        with self.assertRaisesRegex(
+            BrowserToolExecutionError,
+            "capture a fresh snapshot",
+        ):
+            await session.call_tool("browser_click", {"target": "e510"})
+
+        call_tool.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()
