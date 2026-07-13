@@ -3,19 +3,24 @@ from __future__ import annotations
 import logging
 from typing import Any, cast
 
+from langchain_core.runnables.config import RunnableConfig
+
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS, make_click_upload_tool
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.live_view import LiveView
 from z_apply_core.memory.applicant_memory import CandidateMemory
-from z_apply_core.runtime import RunRuntime
+from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.state import RunState
 from z_apply_core.virtual_display import VirtualDisplaySession
 
 logger = logging.getLogger(__name__)
 
 
-async def setup_browser(state: RunState) -> dict[str, object]:
+async def setup_browser(
+    state: RunState,
+    config: RunnableConfig | None = None,
+) -> dict[str, object]:
     display = VirtualDisplaySession(enabled=True)
     live_view = LiveView()
     browser: BrowserSession | None = None
@@ -46,6 +51,10 @@ async def setup_browser(state: RunState) -> dict[str, object]:
             candidate_memory=CandidateMemory(),
             run_id=browser.run_id,
         )
+        configurable = (config or {}).get("configurable", {})
+        resources = configurable.get("run_resources")
+        if isinstance(resources, RunResources):
+            resources.runtime = runtime
         return {
             "snapshot": snapshot,
             "runtime": runtime,

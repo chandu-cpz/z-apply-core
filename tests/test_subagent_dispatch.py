@@ -77,3 +77,26 @@ class SubagentDispatchTests(unittest.TestCase):
         self.assertEqual(result.tool_calls[0]["name"], "task")
         desc = result.tool_calls[0]["args"]["description"]
         self.assertIn("RESUME_PATH", desc)
+
+    def test_executes_only_one_delegated_task_per_model_turn(self) -> None:
+        middleware = SubagentDispatchMiddleware(["AnswerWriter"])
+        message = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "task",
+                    "args": {"subagent_type": "AnswerWriter", "description": "Gender"},
+                    "id": "call-1",
+                },
+                {
+                    "name": "task",
+                    "args": {"subagent_type": "AnswerWriter", "description": "Salary"},
+                    "id": "call-2",
+                },
+            ],
+        )
+
+        result = middleware._normalize_message(message)
+
+        self.assertEqual(len(result.tool_calls), 1)
+        self.assertEqual(result.tool_calls[0]["args"]["description"], "Gender")

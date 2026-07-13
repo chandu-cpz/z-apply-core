@@ -12,6 +12,13 @@ from z_apply_core.virtual_display import VirtualDisplaySession
 
 
 @dataclass(slots=True)
+class RunResources:
+    """Own resources as soon as setup creates them, including during cancellation."""
+
+    runtime: RunRuntime | None = None
+
+
+@dataclass(slots=True)
 class RunRuntime:
     display: VirtualDisplaySession
     live_view: LiveView

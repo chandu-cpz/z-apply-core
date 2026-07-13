@@ -9,6 +9,7 @@ from nim_router.config import RouterConfig
 
 from z_apply_core.model_policy import BANNED_MODEL_IDS_UNDER_30B
 from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
+from z_apply_core.runtime import RunResources
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
 
@@ -37,7 +38,7 @@ async def run_job(
     sink: FrameworkEventSink | None = None,
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
-    runtime = None
+    resources = RunResources()
     router_config = RouterConfig.from_env()
     router_config.excluded_models = list(
         dict.fromkeys([*router_config.excluded_models, *BANNED_MODEL_IDS_UNDER_30B])
@@ -52,12 +53,17 @@ async def run_job(
     try:
         stream = graph.astream_events(
             initial_state(job_url, task=task, live_view=live_view),
-            config={"configurable": {"sink": sink, "nim_router": router}},
+            config={
+                "configurable": {
+                    "sink": sink,
+                    "nim_router": router,
+                    "run_resources": resources,
+                }
+            },
             version="v3",
         )
         result = await consume_v3_events(stream, sink=sink)
-        runtime = result.output.get("runtime")
         return cast(RunState, result.output), result
     finally:
-        if runtime is not None:
-            await runtime.close()
+        if resources.runtime is not None:
+            await resources.runtime.close()

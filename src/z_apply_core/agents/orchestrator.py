@@ -23,6 +23,10 @@ from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+from z_apply_core.agents.terminal_guard import (
+    TerminalDecisionGuardMiddleware,
+    TerminalDecisionRecorded,
+)
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.tools import make_human_tools
 from z_apply_core.log_labels import node_info
@@ -144,6 +148,7 @@ async def run_orchestrator(
             router_middleware,
             ProseToolCallGuardMiddleware(),
             orchestrator_human_guard,
+            TerminalDecisionGuardMiddleware(lambda: terminal is not None),
         ],
         subagents=await build_specialists(
             router,
@@ -179,6 +184,11 @@ async def run_orchestrator(
                 ),
                 sink=event_sink,
             )
+        except TerminalDecisionRecorded:
+            if terminal is None:
+                raise
+            status, summary = terminal
+            return OrchestratorRun(summary, router_middleware.last_model_id, status)
         except Exception as exc:  # noqa: BLE001 - one clean agent recovery turn
             technical_recoveries += 1
             logger.warning(

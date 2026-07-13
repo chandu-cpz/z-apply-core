@@ -45,6 +45,9 @@ def run_command(args: argparse.Namespace) -> int:
             run_job(args.job_url, task=args.task, live_view=not args.no_vnc, sink=renderer)
         )
         renderer.print_result(result, state)
+    except KeyboardInterrupt:
+        renderer.console.print("[yellow]Run interrupted; resources closed.[/yellow]")
+        return 130
     finally:
         renderer.close()
     return 0 if state.get("run_status") == "completed" else 2

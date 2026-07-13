@@ -19,6 +19,10 @@ from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import AuthOrchestratorRun, AuthStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.terminal_guard import (
+    TerminalDecisionGuardMiddleware,
+    TerminalDecisionRecorded,
+)
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -88,6 +92,7 @@ async def run_auth_orchestrator(
             model_retry_middleware(),
             router_middleware,
             ProseToolCallGuardMiddleware(),
+            TerminalDecisionGuardMiddleware(lambda: verdict is not None),
         ],
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
@@ -98,15 +103,21 @@ async def run_auth_orchestrator(
         "messages": [{"role": "user", "content": _task_prompt(snapshot=snapshot)}]
     }
     for _attempt in range(MAX_AUTH_ATTEMPTS):
-        result = await consume_deepagent_stream(
-            agent.astream_events(
-                cast(Any, attempt_input),
-                config=run_config,
-                version="v3",
-            ),
-            sink=sink,
-            root_source="authenticate_default_account",
-        )
+        try:
+            result = await consume_deepagent_stream(
+                agent.astream_events(
+                    cast(Any, attempt_input),
+                    config=run_config,
+                    version="v3",
+                ),
+                sink=sink,
+                root_source="authenticate_default_account",
+            )
+        except TerminalDecisionRecorded:
+            if verdict is None:
+                raise
+            status, summary = verdict
+            return AuthOrchestratorRun(summary, router_middleware.last_model_id, status)
         if verdict is not None:
             status, summary = verdict
             return AuthOrchestratorRun(summary, router_middleware.last_model_id, status)
