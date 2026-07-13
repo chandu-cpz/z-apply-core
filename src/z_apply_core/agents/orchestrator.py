@@ -166,10 +166,13 @@ async def run_orchestrator(
     answer_writer_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"})
     )
+    orchestrator_browser_tools = [
+        tool for tool in browser_tools if tool.name != "browser_take_screenshot"
+    ]
     agent = create_deep_agent(
         model=selection.llm,
         tools=[
-            *browser_tools,
+            *orchestrator_browser_tools,
             *human_tools,
             application_submitted,
             application_blocked,

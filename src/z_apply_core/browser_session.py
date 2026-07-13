@@ -370,12 +370,12 @@ def _raise_for_tool_error(name: str, result: Any) -> None:
         raise BrowserToolExecutionError(f"{name} failed: {_text_content(result)}")
 
 
-def _content_blocks(result: Any) -> list[dict[str, str]]:
+def _content_blocks(result: Any) -> list[dict[str, Any]]:
     content = getattr(result, "content", result)
     if not isinstance(content, list):
         return [{"type": "text", "text": _text_content(result)}]
 
-    blocks: list[dict[str, str]] = []
+    blocks: list[dict[str, Any]] = []
     for item in content:
         item_type = getattr(item, "type", None)
         if item_type == "text":
@@ -388,9 +388,10 @@ def _content_blocks(result: Any) -> list[dict[str, str]]:
             if isinstance(data, str) and isinstance(mime_type, str):
                 blocks.append(
                     {
-                        "type": "image",
-                        "base64": data,
-                        "mime_type": mime_type,
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{data}",
+                        },
                     }
                 )
     return blocks or [{"type": "text", "text": _text_content(result)}]

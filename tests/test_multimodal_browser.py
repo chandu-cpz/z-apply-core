@@ -199,9 +199,8 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
             [
                 {"type": "text", "text": "Screenshot of current viewport"},
                 {
-                    "type": "image",
-                    "base64": "cG5n",
-                    "mime_type": "image/png",
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,cG5n"},
                 },
             ],
         )
@@ -216,9 +215,14 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
         async def multimodal_caller(
             name: str,
             _arguments: dict[str, Any],
-        ) -> list[dict[str, str]]:
+        ) -> list[dict[str, Any]]:
             calls.append(f"multimodal:{name}")
-            return [{"type": "image", "base64": "cG5n", "mime_type": "image/png"}]
+            return [
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,cG5n"},
+                }
+            ]
 
         spec = SimpleNamespace(
             name="browser_take_screenshot",
@@ -235,7 +239,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
         result = await registry.langchain_tools().pop().ainvoke({})
 
         self.assertEqual(calls, ["multimodal:browser_take_screenshot"])
-        self.assertEqual(result[0]["type"], "image")
+        self.assertEqual(result[0]["type"], "image_url")
 
     def test_vision_specialist_receives_only_screenshot_tool(self) -> None:
         screenshot = cast(BaseTool, SimpleNamespace(name="browser_take_screenshot"))
