@@ -35,16 +35,10 @@ class GmailToolTests(unittest.IsolatedAsyncioTestCase):
                 """Fake Gmail message read."""
                 return {"id": message_id}
 
-            @tool
-            def get_gmail_thread(thread_id: str) -> dict[str, str]:
-                """Fake Gmail thread read."""
-                return {"id": thread_id}
-
             toolkit = MagicMock()
             toolkit.get_tools.return_value = [
                 search_gmail,
                 get_gmail_message,
-                get_gmail_thread,
                 SimpleNamespace(name="send_gmail_message"),
             ]
             with (
@@ -64,7 +58,7 @@ class GmailToolTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(
                     [gmail_tool.name for gmail_tool in gmail_tools],
-                    ["search_gmail", "get_gmail_message", "get_gmail_thread"],
+                    ["search_gmail", "get_gmail_message"],
                 )
                 get_credentials.assert_not_called()
 

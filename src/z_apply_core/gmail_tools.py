@@ -12,7 +12,7 @@ from langchain_google_community.gmail.utils import build_resource_service
 
 READONLY_GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 ALLOWED_GMAIL_TOOLS = frozenset(
-    {"search_gmail", "get_gmail_message", "get_gmail_thread"}
+    {"search_gmail", "get_gmail_message"}
 )
 GMAIL_SEARCH_ATTEMPTS = 3
 GMAIL_SEARCH_INTERVAL_SECONDS = 10
@@ -86,14 +86,9 @@ def make_gmail_tools(*, credentials_path: Path, token_path: Path) -> list[BaseTo
         """Read one Gmail message previously identified by search_gmail."""
         return await client.invoke("get_gmail_message", {"message_id": message_id})
 
-    @tool
-    async def get_gmail_thread(thread_id: str) -> Any:
-        """Read one Gmail thread previously identified by search_gmail."""
-        return await client.invoke("get_gmail_thread", {"thread_id": thread_id})
-
-    for gmail_tool in (search_gmail, get_gmail_message, get_gmail_thread):
+    for gmail_tool in (search_gmail, get_gmail_message):
         gmail_tool.handle_tool_error = True
-    return [search_gmail, get_gmail_message, get_gmail_thread]
+    return [search_gmail, get_gmail_message]
 
 
 def _safe_tool_content(value: Any) -> str:
