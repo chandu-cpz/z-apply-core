@@ -63,7 +63,7 @@ async def setup_browser(
             "runtime": runtime,
             "browser_tools": [
                 *browser.tools.langchain_tools(INITIAL_AGENT_BROWSER_TOOLS),
-                make_click_upload_tool(browser.call_tool),
+                make_click_upload_tool(browser.upload_files),
             ],
         }
     except Exception:

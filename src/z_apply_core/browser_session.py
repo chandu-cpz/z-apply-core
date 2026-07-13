@@ -87,6 +87,27 @@ class BrowserSession:
         except BrowserToolExecutionError as exc:
             return f"{mutation}\nPost-action inline snapshot unavailable: {exc}"
 
+    async def upload_files(self, target: str, paths: list[str]) -> str:
+        """Resolve a current ARIA target and attach files without native chooser state."""
+        tab = await self._backend._ensure_tab()
+        resolved = await tab.resolve_target(target=target)
+        locator = resolved.locator
+        is_file_input = await locator.evaluate(
+            "element => element instanceof HTMLInputElement && element.type === 'file'"
+        )
+        if not is_file_input:
+            file_inputs = locator.locator("input[type=file]")
+            count = await file_inputs.count()
+            if count != 1:
+                raise BrowserToolExecutionError(
+                    f"Upload target {target!r} is not a file input and contains "
+                    f"{count} file inputs."
+                )
+            locator = file_inputs
+        await locator.set_input_files(paths)
+        evidence = await self.call_tool("browser_snapshot")
+        return "Files attached directly to the resolved upload control.\n" + evidence
+
     async def close(self) -> None:
         await self._backend.close()
 

@@ -187,33 +187,24 @@ class StripEmptyArgsTests(unittest.TestCase):
         self.assertIn('paths=["/absolute/resume.pdf"]', tool.description)
         self.assertIn("no target or selector", tool.description)
 
-    def test_atomic_click_upload_completes_both_browser_steps_in_order(self) -> None:
-        caller = AsyncMock(
-            side_effect=["chooser opened", "resume attached", "current form snapshot"]
-        )
-        tool = make_click_upload_tool(caller)
+        self._run(tool.ainvoke({"paths": '["/resume.pdf"]'}))
+        self.assertEqual(registry._caller.await_args.args[1]["paths"], ["/resume.pdf"])
+
+    def test_atomic_click_upload_passes_typed_paths_to_direct_uploader(self) -> None:
+        uploader = AsyncMock(return_value="resume attached with current form snapshot")
+        tool = make_click_upload_tool(uploader)
 
         result = self._run(
             tool.ainvoke(
                 {
                     "target": "e40",
-                    "paths": ["/resume.pdf"],
+                    "paths": '["/resume.pdf"]',
                     "element": "primary resume",
                 }
             )
         )
 
-        self.assertEqual(
-            caller.await_args_list,
-            [
-                unittest.mock.call(
-                    "browser_click",
-                    {"target": "e40", "element": "primary resume"},
-                ),
-                unittest.mock.call("browser_file_upload", {"paths": ["/resume.pdf"]}),
-                unittest.mock.call("browser_snapshot", {}),
-            ],
-        )
+        uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
         self.assertIn("resume attached", result)
         self.assertIn("current form snapshot", result)
 

@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
-from typing import Any, Protocol, cast
+from typing import Annotated, Any, Protocol, cast, get_origin
 
-from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
-from pydantic import BaseModel, ConfigDict, Field, create_model
+from langchain_core.tools import BaseTool, StructuredTool, tool
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
+FileUploader = Callable[[str, list[str]], Awaitable[str]]
 _AGENT_TOOL_DESCRIPTIONS = {
     "browser_file_upload": (
         "Upload files into the currently open native file chooser. This tool has no "
@@ -127,28 +129,39 @@ def _explicit_reference(value: Any) -> str | None:
     return _canonical_reference(value[start : end + 1])
 
 
-def make_click_upload_tool(caller: TextToolCaller) -> BaseTool:
-    """Build a core-only atomic click-to-file-upload operation."""
+def _decode_json_container(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def _provider_compatible_annotation(annotation: Any) -> Any:
+    if get_origin(annotation) not in {list, dict}:
+        return annotation
+    return Annotated[annotation, BeforeValidator(_decode_json_container)]
+
+
+def make_click_upload_tool(uploader: FileUploader) -> BaseTool:
+    """Build a core-only direct file-input upload operation."""
 
     @tool
     async def browser_click_upload(
         target: str,
-        paths: list[str],
+        paths: Annotated[list[str], BeforeValidator(_decode_json_container)],
         element: str = "file upload control",
     ) -> str:
-        """Click a file control and upload paths through its native chooser atomically."""
+        """Attach paths directly to a file control without a native chooser round trip."""
         if not paths or any(not isinstance(path, str) or not path for path in paths):
             raise ValueError("browser_click_upload requires at least one non-empty path.")
-        click_arguments = normalize_browser_arguments({"target": target})
-        if element:
-            click_arguments["element"] = element
-        await caller("browser_click", click_arguments)
-        uploaded = await caller("browser_file_upload", {"paths": paths})
-        try:
-            evidence = await caller("browser_snapshot", {})
-        except ToolException as exc:
-            evidence = f"Post-upload inline snapshot unavailable: {exc}"
-        return "Atomic file-control click and upload completed.\n" + uploaded + "\n" + evidence
+        normalized_target = normalize_browser_arguments(
+            {"target": target, "element": element}
+        ).get("target")
+        if not isinstance(normalized_target, str) or not normalized_target:
+            raise ValueError("browser_click_upload requires a resolvable target.")
+        return await uploader(normalized_target, paths)
 
     browser_click_upload.handle_tool_error = True
     return browser_click_upload
@@ -225,7 +238,7 @@ def _tool_model(spec: BrowserToolSpec) -> type[BaseModel]:
             continue
         default = ... if parameter.default is Parameter.empty else parameter.default
         fields[parameter.name] = (
-            parameter.annotation,
+            _provider_compatible_annotation(parameter.annotation),
             Field(default=default, description=parameter.description),
         )
     model_name = "".join(part.title() for part in spec.name.split("_")) + "Arguments"
