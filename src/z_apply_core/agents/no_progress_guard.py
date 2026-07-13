@@ -13,6 +13,8 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
+from z_apply_core.agents.protocol_guard import ToolProtocolViolation
+
 
 class NoProgressCircuitOpen(RuntimeError):
     """The active agent repeatedly attempted calls that cannot make progress."""
@@ -21,13 +23,20 @@ class NoProgressCircuitOpen(RuntimeError):
 class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """End one agent turn after repeated denied or duplicate non-progress calls."""
 
-    def __init__(self, *, max_identical_denials: int = 2, max_non_progress: int = 3) -> None:
+    def __init__(
+        self,
+        *,
+        max_identical_denials: int = 2,
+        max_non_progress: int = 3,
+        on_no_progress: Callable[[ToolProtocolViolation], None] | None = None,
+    ) -> None:
         super().__init__()
         self._max_identical_denials = max_identical_denials
         self._max_non_progress = max_non_progress
         self._last_denial = ""
         self._same_denials = 0
         self._non_progress = 0
+        self._on_no_progress = on_no_progress
 
     async def awrap_tool_call(
         self,
@@ -44,8 +53,24 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 self._same_denials >= self._max_identical_denials
                 or self._non_progress >= self._max_non_progress
             ):
-                raise NoProgressCircuitOpen(
-                    "no_progress: repeated denied or non-progress tool calls ended this agent turn"
+                failure = ToolProtocolViolation(
+                    "no_progress: repeated denied or non-progress tool calls require a "
+                    "different model and action"
+                )
+                if self._on_no_progress is not None:
+                    self._on_no_progress(failure)
+                self._last_denial = ""
+                self._same_denials = 0
+                self._non_progress = 0
+                return ToolMessage(
+                    content=(
+                        "RUNTIME NO-PROGRESS RECOVERY: the repeated action was denied and "
+                        "the active model was rotated. Do not retry it. Use the newest "
+                        "browser evidence and choose a different authorized tool action."
+                    ),
+                    name=str(request.tool_call.get("name", "runtime")),
+                    tool_call_id=str(request.tool_call.get("id", "")),
+                    status="error",
                 )
         else:
             self._last_denial = ""

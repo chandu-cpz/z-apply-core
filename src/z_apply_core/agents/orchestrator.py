@@ -177,7 +177,9 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             SafeToolBatchMiddleware(),
-            NoProgressGuardMiddleware(),
+            NoProgressGuardMiddleware(
+                on_no_progress=router_middleware.reject_active_response
+            ),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"]
             ),

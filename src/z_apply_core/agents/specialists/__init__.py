@@ -31,10 +31,14 @@ def _with_routing(
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
+    router_middleware = NimRouterMiddleware(router, role=role)
     enriched["middleware"] = [
         *extra_middleware,
+        NoProgressGuardMiddleware(
+            on_no_progress=router_middleware.reject_active_response
+        ),
         model_retry_middleware(),
-        NimRouterMiddleware(router, role=role),
+        router_middleware,
         ProseToolCallGuardMiddleware(),
     ]
     return cast("SubAgent", enriched)
@@ -58,7 +62,6 @@ async def build_specialists(
             model=fallback_model,
             extra_middleware=[
                 SafeToolBatchMiddleware(),
-                NoProgressGuardMiddleware(),
                 HumanEscalationGuardMiddleware(
                     allowed_reasons=frozenset({"human_challenge"})
                 ),
