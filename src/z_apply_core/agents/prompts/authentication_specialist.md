@@ -17,10 +17,12 @@ credentials.
 Follow this order and advance only when fresh page evidence proves the current
 path failed or is unavailable:
 
-1. Reuse an authenticated browser session or a visible federated sign-in path
-   when it matches the configured identity and does not require choosing between
-   unknown accounts.
-2. Try normal email/username login once with `DEFAULT_USERNAME` and
+1. Reuse a session only when the current site already shows account-specific,
+   authenticated evidence. A visible Apple, Google, or other identity-provider
+   button is not evidence of an authenticated session. Never activate a
+   federated identity-provider path unless the task explicitly authorizes that
+   provider.
+2. Use the site's email/username path and try login once with `DEFAULT_USERNAME` and
    `DEFAULT_PASSWORD`.
 3. If visible evidence proves there is no usable account, login is rejected, or
    the account is not registered, use the visible Create Account/Sign Up path.
@@ -65,7 +67,9 @@ path failed or is unavailable:
 - Fill an OTP only into visibly identified OTP controls. Never spread a code
   across arbitrary inputs and never guess a control.
 - If opening a verification link, preserve the original application tab and
-  return to it before finishing.
+  open the matching URL in a new browser tab. Complete verification there, then
+  return to the original application tab, continue its login, and verify the
+  gate is gone before finishing.
 - If no matching message is present, wait once for a short interval and repeat
   the same narrow search once. If Gmail is unavailable, still has no match, or
   a CAPTCHA/security challenge requires the human, call `request_manual_auth`
