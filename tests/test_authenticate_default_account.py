@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
@@ -70,6 +71,8 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
             has_default_credentials=True,
             default_username="user@example.test",
             default_password="secret",
+            gmail_credentials_path=Path("/missing/credentials.json"),
+            gmail_token_path=Path("/missing/token.json"),
         )
         captured: dict[str, Any] = {}
 
@@ -115,26 +118,47 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("browser_take_screenshot", AUTH_AGENT_BROWSER_TOOLS)
         self.assertEqual(len(captured["human_tools"]), 2)
 
-    async def test_auth_node_skips_when_default_credentials_are_missing(self) -> None:
-        tools = FakeTools({})
+    async def test_auth_node_still_checks_persistent_session_without_credentials(self) -> None:
+        tools = FakeTools(
+            {
+                "browser_navigate": ["- heading Welcome", "- heading Job details"],
+                "browser_snapshot": ["- heading Welcome", "- heading Job details"],
+            }
+        )
         runtime = make_runtime(tools)
         settings = SimpleNamespace(
             has_default_credentials=False,
             default_username="",
             default_password="",
+            gmail_credentials_path=Path("/missing/credentials.json"),
+            gmail_token_path=Path("/missing/token.json"),
         )
 
-        with patch(
-            "z_apply_core.nodes.authenticate_default_account.load_settings",
-            return_value=settings,
+        async def fake_run_auth_orchestrator(**kwargs: Any) -> AuthOrchestratorRun:
+            self.assertFalse(kwargs["default_credentials_available"])
+            return AuthOrchestratorRun(
+                summary="Saved Simplify session is authenticated.",
+                model_id="test/model",
+                status="authenticated",
+            )
+
+        with (
+            patch(
+                "z_apply_core.nodes.authenticate_default_account.load_settings",
+                return_value=settings,
+            ),
+            patch(
+                "z_apply_core.nodes.authenticate_default_account.run_auth_orchestrator",
+                side_effect=fake_run_auth_orchestrator,
+            ),
         ):
             result = await authenticate_default_account(
                 {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
-                {},
+                {"configurable": {"nim_router": NimRouter()}},
             )
 
-        self.assertEqual(result["auth_status"], "skipped")
-        self.assertEqual(tools.calls, [])
+        self.assertEqual(result["auth_status"], "authenticated")
+        self.assertEqual(tools.calls[0][0], "browser_navigate")
 
 
 if __name__ == "__main__":

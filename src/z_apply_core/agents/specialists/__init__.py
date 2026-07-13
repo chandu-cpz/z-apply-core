@@ -13,6 +13,7 @@ from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
+from z_apply_core.agents.specialists.authentication import build_authentication_specialist
 from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.memory.applicant_memory import CandidateMemory, build_answer_writer_memory_tools
 
@@ -44,8 +45,15 @@ async def build_specialists(
     candidate_memory: CandidateMemory | None = None,
     answer_writer_human_tools: Sequence[BaseTool] = (),
     answer_writer_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
+    authentication_tools: Sequence[BaseTool] = (),
 ) -> list[SubAgent]:
     return [
+        _with_routing(
+            build_authentication_specialist(authentication_tools),
+            router=router,
+            role="AuthenticationSpecialist",
+            model=fallback_model,
+        ),
         _with_routing(
             build_vision_specialist(browser_tools),
             router=router,

@@ -15,6 +15,11 @@ browser mutations before launching any more tasks.
 Use `subagent_type="VisionSpecialist"` only for one visual question that current
 DOM/ARIA evidence cannot answer.
 
+Use `subagent_type="AuthenticationSpecialist"` for one currently visible login,
+email-verification, OTP, or identity gate. Include the current URL and exact
+visible gate evidence. It may mutate only that auth flow and must return fresh
+browser evidence.
+
 Specialists do not navigate, mutate the form, handle challenges, approve, or
 submit. Do not request a reporting tool or a second handoff: the task's normal
 final message is its result.

@@ -4,6 +4,8 @@
 !.env.example
 .z-apply/
 /chandrakanth_v_resume.md
+/credentials.json
+/token.json
 __pycache__/
 .mypy_cache/
 .ruff_cache/

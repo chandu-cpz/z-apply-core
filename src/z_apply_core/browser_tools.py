@@ -11,6 +11,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 FileUploader = Callable[[str, list[str]], Awaitable[str]]
+AuthSubmitter = Callable[[str], Awaitable[str]]
 _AGENT_TOOL_DESCRIPTIONS = {
     "browser_file_upload": (
         "Upload files into the currently open native file chooser. This tool has no "
@@ -40,6 +41,19 @@ AUTH_AGENT_BROWSER_TOOLS = (
     "browser_take_screenshot",
     "browser_click",
     "browser_type",
+    "browser_wait_for",
+    "browser_handle_dialog",
+    "browser_tabs",
+)
+
+AUTHENTICATION_SPECIALIST_BROWSER_TOOLS = (
+    "browser_snapshot",
+    "browser_find",
+    "browser_take_screenshot",
+    "browser_click",
+    "browser_type",
+    "browser_fill_form",
+    "browser_select_option",
     "browser_wait_for",
     "browser_handle_dialog",
     "browser_tabs",
@@ -165,6 +179,31 @@ def make_click_upload_tool(uploader: FileUploader) -> BaseTool:
 
     browser_click_upload.handle_tool_error = True
     return browser_click_upload
+
+
+def make_auth_submit_tool(submitter: AuthSubmitter) -> BaseTool:
+    """Build the only submit operation available to AuthenticationSpecialist."""
+
+    @tool
+    async def browser_auth_submit(
+        target: str,
+        element: str = "authentication form submit control",
+    ) -> str:
+        """Submit a structurally verified login or verification form.
+
+        The executor rejects controls outside a form containing an email,
+        username, password, or one-time-code input. This tool never authorizes
+        final job-application submission.
+        """
+        normalized_target = normalize_browser_arguments(
+            {"target": target, "element": element}
+        ).get("target")
+        if not isinstance(normalized_target, str) or not normalized_target:
+            raise ValueError("browser_auth_submit requires a resolvable target.")
+        return await submitter(normalized_target)
+
+    browser_auth_submit.handle_tool_error = True
+    return browser_auth_submit
 
 
 class BrowserToolParameter(Protocol):

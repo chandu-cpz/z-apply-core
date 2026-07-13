@@ -8,6 +8,7 @@ from nim_router import NimRouter
 from z_apply_core.agents.auth_orchestrator import run_auth_orchestrator
 from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
 from z_apply_core.config import load_settings
+from z_apply_core.gmail_tools import make_gmail_tools
 from z_apply_core.human.tools import make_human_tools
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
@@ -25,12 +26,6 @@ async def authenticate_default_account(
         return {"auth_status": "skipped", "auth_summary": "No live browser runtime is available."}
 
     settings = load_settings()
-    if not settings.has_default_credentials:
-        return {
-            "auth_status": "skipped",
-            "auth_summary": "Default credentials are not configured.",
-        }
-
     original_url = str(state["job_url"])
     sink = SequencedEventSink(_sink_from_config(config), run_id=runtime.run_id)
     await _emit(sink, "started", "Opening Simplify auth check.")
@@ -49,9 +44,14 @@ async def authenticate_default_account(
             snapshot=snapshot,
             browser_tools=runtime.browser.tools.langchain_tools(AUTH_AGENT_BROWSER_TOOLS),
             human_tools=human_tools,
+            verification_tools=make_gmail_tools(
+                credentials_path=settings.gmail_credentials_path,
+                token_path=settings.gmail_token_path,
+            ),
             config=config,
             sink=sink,
             router=router,
+            default_credentials_available=settings.has_default_credentials,
         )
 
         restored_snapshot = await _restore_job_page(runtime, original_url)

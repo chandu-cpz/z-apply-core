@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 ROLE_POLICY: dict[str, dict[str, Any]] = {
     "orchestrator": {"priority": "balanced", "reasoning": False},
     "auth_orchestrator": {"priority": "balanced", "reasoning": False},
+    "AuthenticationSpecialist": {"priority": "balanced", "reasoning": False},
     "BrowserSpecialist": {"priority": "balanced", "reasoning": False},
     "AnswerWriter": {"priority": "quality", "reasoning": False},
     "VisionSpecialist": {"priority": "balanced", "reasoning": False, "force_vision": True},

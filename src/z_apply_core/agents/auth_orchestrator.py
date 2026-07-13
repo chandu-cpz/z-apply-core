@@ -31,9 +31,11 @@ async def run_auth_orchestrator(
     snapshot: str,
     browser_tools: Sequence[BaseTool],
     human_tools: Sequence[BaseTool],
+    verification_tools: Sequence[BaseTool] = (),
     config: RunnableConfig,
     sink: FrameworkEventSink | None = None,
     router: NimRouter | None = None,
+    default_credentials_available: bool = False,
 ) -> AuthOrchestratorRun:
     configure_z_apply_harness_profile()
     if not isinstance(router, NimRouter):
@@ -80,6 +82,7 @@ async def run_auth_orchestrator(
         tools=[
             *browser_tools,
             *human_tools,
+            *verification_tools,
             authentication_verified,
             authentication_blocked,
             authentication_not_verified,
@@ -100,7 +103,17 @@ async def run_auth_orchestrator(
         agent.astream_events(
             cast(
                 Any,
-                {"messages": [{"role": "user", "content": _task_prompt(snapshot=snapshot)}]},
+                {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": _task_prompt(
+                                snapshot=snapshot,
+                                default_credentials_available=default_credentials_available,
+                            ),
+                        }
+                    ]
+                },
             ),
             config=run_config,
             version="v3",
@@ -117,8 +130,15 @@ async def run_auth_orchestrator(
         router_middleware.last_model_id,
         "not_verified",
     )
-def _task_prompt(*, snapshot: str) -> str:
+def _task_prompt(*, snapshot: str, default_credentials_available: bool) -> str:
+    credential_status = (
+        "DEFAULT_USERNAME and DEFAULT_PASSWORD are configured."
+        if default_credentials_available
+        else "No default credential secret keys are configured."
+    )
     return f"""Verify or restore the default Simplify authentication.
+
+Credential status: {credential_status}
 
 BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE
 {snapshot}

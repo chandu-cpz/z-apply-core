@@ -70,6 +70,30 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         call_tool.assert_not_awaited()
 
+    async def test_structurally_verified_auth_submit_bypasses_application_lock(self) -> None:
+        session, call_tool = self._session(is_submit=True)
+        session.activate_submission_guard()
+
+        evidence = await session.submit_auth_form("e10")
+
+        self.assertEqual(call_tool.await_count, 2)
+        self.assertEqual(call_tool.await_args_list[0].args[0], "browser_click")
+        self.assertEqual(call_tool.await_args_list[1].args[0], "browser_snapshot")
+        self.assertIn("clicked", evidence)
+        self.assertEqual(session._approved_submissions, 0)
+
+    async def test_non_auth_form_cannot_use_auth_submit_path(self) -> None:
+        session, call_tool = self._session(is_submit=False)
+        session.activate_submission_guard()
+
+        with self.assertRaisesRegex(
+            BrowserToolExecutionError,
+            "structurally identifiable login",
+        ):
+            await session.submit_auth_form("e10")
+
+        call_tool.assert_not_awaited()
+
 
 if __name__ == "__main__":
     unittest.main()

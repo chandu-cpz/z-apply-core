@@ -123,6 +123,52 @@ class BrowserSession:
         evidence = await self.call_tool("browser_snapshot")
         return "Files attached directly to the resolved upload control.\n" + evidence
 
+    async def submit_auth_form(self, target: str) -> str:
+        """Submit only a form whose live DOM structure proves an auth purpose."""
+        tab = await self._backend._ensure_tab()
+        locator = (await tab.resolve_target(target=target)).locator
+        is_auth_submit = await locator.evaluate(
+            """element => {
+                const control = element.closest(
+                    'button, input[type="submit"], input[type="image"]'
+                );
+                if (!(control instanceof HTMLButtonElement ||
+                      control instanceof HTMLInputElement)) return false;
+                if (control instanceof HTMLInputElement &&
+                    control.type !== 'submit' && control.type !== 'image') return false;
+                if (control instanceof HTMLButtonElement) {
+                    const type = control.getAttribute('type');
+                    if (type !== 'submit' && !(type === null && control.form)) return false;
+                }
+                const form = control.form || control.closest('form');
+                if (!(form instanceof HTMLFormElement)) return false;
+                const authInputs = form.querySelectorAll('input');
+                return Array.from(authInputs).some(input => {
+                    const type = (input.getAttribute('type') || 'text').toLowerCase();
+                    const autocomplete = (input.getAttribute('autocomplete') || '')
+                        .toLowerCase();
+                    return type === 'email' || type === 'password' ||
+                        ['username', 'email', 'current-password', 'new-password',
+                         'one-time-code'].includes(autocomplete);
+                });
+            }"""
+        )
+        if not is_auth_submit:
+            raise BrowserToolExecutionError(
+                "Authentication submit rejected: the target is not a submit control in "
+                "a structurally identifiable login or verification form."
+            )
+        result = await self._backend.call_tool(
+            "browser_click",
+            {"target": target},
+            meta=self._call_meta("browser_click"),
+        )
+        _raise_for_tool_error("browser_click", result)
+        try:
+            return await self.call_tool("browser_snapshot")
+        except BrowserToolExecutionError as exc:
+            return f"Authentication form submitted. Post-action snapshot unavailable: {exc}"
+
     def activate_submission_guard(self) -> None:
         """Require a one-use human capability before application form submission."""
         self._submission_guard_active = True

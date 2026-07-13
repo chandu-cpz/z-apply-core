@@ -69,6 +69,7 @@ async def run_orchestrator(
     browser_tools: Sequence[BaseTool],
     config: RunnableConfig,
     human_tools: Sequence[BaseTool] = (),
+    authentication_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
     router: NimRouter | None = None,
     resume_path: str = "",
@@ -165,7 +166,9 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             SafeToolBatchMiddleware(),
-            SubagentDispatchMiddleware(["AnswerWriter", "VisionSpecialist"]),
+            SubagentDispatchMiddleware(
+                ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"]
+            ),
             model_retry_middleware(),
             router_middleware,
             ProseToolCallGuardMiddleware(),
@@ -179,6 +182,10 @@ async def run_orchestrator(
             candidate_memory=candidate_memory,
             answer_writer_human_tools=[tool for tool in human_tools if tool.name == "ask_human"],
             answer_writer_middleware=[answer_writer_human_guard],
+            authentication_tools=[
+                *authentication_tools,
+                *[tool for tool in human_tools if tool.name == "ask_human"],
+            ],
         ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=deepagent_filesystem_permissions(run_id),

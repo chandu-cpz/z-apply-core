@@ -4,10 +4,17 @@ import logging
 from pathlib import Path
 
 from langchain_core.runnables.config import RunnableConfig
+from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
+from z_apply_core.browser_tools import (
+    AUTHENTICATION_SPECIALIST_BROWSER_TOOLS,
+    make_auth_submit_tool,
+)
+from z_apply_core.config import load_settings
+from z_apply_core.gmail_tools import make_gmail_tools
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunRuntime
@@ -25,11 +32,13 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
     runtime = _runtime(state)
     if runtime is not None:
         runtime.browser.activate_submission_guard()
+    authentication_tools = _authentication_tools(state, runtime)
     run = await run_orchestrator(
         job_url=str(state["job_url"]),
         task=str(state["task"]),
         snapshot=str(state.get("snapshot", "")),
         browser_tools=state.get("browser_tools", ()),
+        authentication_tools=authentication_tools,
         config=config,
         human_channel=_human_channel(state),
         sink=sink,
@@ -114,3 +123,26 @@ def _artifact_publisher(state: RunState) -> ApplicationArtifactPublisher | None:
 def _runtime(state: RunState) -> RunRuntime | None:
     runtime = state.get("runtime")
     return runtime if isinstance(runtime, RunRuntime) else None
+
+
+def _authentication_tools(
+    state: RunState,
+    runtime: RunRuntime | None,
+) -> list[BaseTool]:
+    if runtime is None:
+        return []
+    allowed = set(AUTHENTICATION_SPECIALIST_BROWSER_TOOLS)
+    browser_tools = [
+        browser_tool
+        for browser_tool in state.get("browser_tools", ())
+        if getattr(browser_tool, "name", "") in allowed
+    ]
+    settings = load_settings()
+    return [
+        *browser_tools,
+        make_auth_submit_tool(runtime.browser.submit_auth_form),
+        *make_gmail_tools(
+            credentials_path=settings.gmail_credentials_path,
+            token_path=settings.gmail_token_path,
+        ),
+    ]

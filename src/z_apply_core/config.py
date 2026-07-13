@@ -16,6 +16,14 @@ class Settings(BaseSettings):
     default_password: str = Field(default="", alias="DEFAULT_PASSWORD")
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_group_chat_id: str = Field(default="", alias="TELEGRAM_GROUP_CHAT_ID")
+    gmail_credentials_path: Path = Field(
+        default=CORE_ROOT / "credentials.json",
+        alias="GMAIL_CREDENTIALS_PATH",
+    )
+    gmail_token_path: Path = Field(
+        default=CORE_ROOT / "token.json",
+        alias="GMAIL_TOKEN_PATH",
+    )
     camoufox_browser: str = Field(
         default=DEFAULT_CAMOUFOX_BROWSER,
         alias="CAMOUFOX_BROWSER",
@@ -38,6 +46,10 @@ class Settings(BaseSettings):
     @property
     def has_telegram(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_group_chat_id)
+
+    @property
+    def has_gmail(self) -> bool:
+        return self.gmail_credentials_path.is_file() and self.gmail_token_path.is_file()
 
 
 @lru_cache
