@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import Mock
 
 import pytest
+from langchain_core.messages import AIMessage
 
 from z_apply_core.agents.goal_runner import (
     ACTIVE_OBJECTIVE_SOURCE,
@@ -51,3 +52,37 @@ async def test_active_goal_has_bounded_recovery() -> None:
     await middleware.aafter_agent({}, None)
     with pytest.raises(ActiveGoalExhausted):
         await middleware.aafter_agent({}, None)
+
+
+@pytest.mark.asyncio
+async def test_native_tool_action_resets_consecutive_recovery_budget() -> None:
+    middleware = ActiveGoalMiddleware(
+        is_terminal=lambda: False,
+        on_no_progress=lambda error: None,
+        max_recoveries=1,
+    )
+
+    await middleware.aafter_agent({}, None)
+    await middleware.aafter_model(
+        {
+            "messages": [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "browser_snapshot",
+                            "args": {},
+                            "id": "tool-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        },
+        None,
+    )
+
+    update = await middleware.aafter_agent({}, None)
+
+    assert update is not None
+    assert update["jump_to"] == "model"

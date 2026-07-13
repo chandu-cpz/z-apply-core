@@ -11,7 +11,7 @@ from langchain.agents.middleware.types import (
     ResponseT,
     hook_config,
 )
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables.config import RunnableConfig
 
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
@@ -66,6 +66,27 @@ class ActiveGoalMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Resp
     ) -> dict[str, Any] | None:
         del state, runtime
         return self._continue_or_finish()
+
+    def after_model(
+        self,
+        state: AgentState[ResponseT],
+        runtime: Any,
+    ) -> None:
+        del runtime
+        self._reset_after_native_action(state)
+
+    async def aafter_model(
+        self,
+        state: AgentState[ResponseT],
+        runtime: Any,
+    ) -> None:
+        del runtime
+        self._reset_after_native_action(state)
+
+    def _reset_after_native_action(self, state: AgentState[ResponseT]) -> None:
+        messages = state.get("messages", ())
+        if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
+            self._recoveries = 0
 
     def _continue_or_finish(self) -> dict[str, Any] | None:
         if self._is_terminal():
