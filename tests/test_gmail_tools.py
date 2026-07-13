@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 import unittest
+from email.message import EmailMessage
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -47,7 +49,7 @@ class GmailToolTests(unittest.IsolatedAsyncioTestCase):
                     return_value=SimpleNamespace(),
                 ) as get_credentials,
                 patch(
-                    "z_apply_core.gmail_tools.build_resource_service",
+                    "z_apply_core.gmail_tools.build_gmail_service",
                     return_value=SimpleNamespace(),
                 ),
                 patch("z_apply_core.gmail_tools.GmailToolkit", return_value=toolkit),
@@ -62,9 +64,7 @@ class GmailToolTests(unittest.IsolatedAsyncioTestCase):
                 )
                 get_credentials.assert_not_called()
 
-                result = await gmail_tools[0].ainvoke(
-                    {"query": "newer_than:1d", "max_results": 3}
-                )
+                result = await gmail_tools[0].ainvoke({"query": "newer_than:1d", "max_results": 3})
 
             get_credentials.assert_called_once_with(
                 scopes=[READONLY_GMAIL_SCOPE],
@@ -97,7 +97,7 @@ class GmailToolTests(unittest.IsolatedAsyncioTestCase):
                     return_value=SimpleNamespace(),
                 ),
                 patch(
-                    "z_apply_core.gmail_tools.build_resource_service",
+                    "z_apply_core.gmail_tools.build_gmail_service",
                     return_value=SimpleNamespace(),
                 ),
                 patch("z_apply_core.gmail_tools.GmailToolkit", return_value=toolkit),
@@ -114,6 +114,76 @@ class GmailToolTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(result, "[]")
             self.assertEqual(sleep.await_count, 2)
+
+    async def test_html_only_message_returns_complete_verification_link(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            credentials_path = root / "credentials.json"
+            token_path = root / "token.json"
+            credentials_path.write_text("{}", encoding="utf-8")
+            token_path.write_text("{}", encoding="utf-8")
+
+            message = EmailMessage()
+            message["Subject"] = "Verify your candidate account"
+            message["From"] = "workday@example.com"
+            message.set_content(
+                "<p>Complete setup.</p><br>"
+                "https://example.com/activate/signed-\n token?x=1&amp;y=2<br>"
+                '<a href="https://example.com/help">Help</a>',
+                subtype="html",
+            )
+            encoded = base64.urlsafe_b64encode(message.as_bytes()).decode("ascii")
+
+            resource = MagicMock()
+            get_message = resource.users.return_value.messages.return_value.get
+            get_message.return_value.execute.return_value = {
+                "id": "message-1",
+                "threadId": "thread-1",
+                "snippet": "Click https://example.com/activate/",
+                "raw": encoded,
+            }
+
+            @tool
+            def search_gmail(query: str, resource: str, max_results: int) -> list[object]:
+                """Fake Gmail search."""
+                return []
+
+            @tool
+            def get_gmail_message(message_id: str) -> dict[str, str]:
+                """The toolkit reader intentionally is not used."""
+                return {"id": message_id, "body": ""}
+
+            toolkit = MagicMock()
+            toolkit.get_tools.return_value = [search_gmail, get_gmail_message]
+            with (
+                patch(
+                    "z_apply_core.gmail_tools.get_google_credentials",
+                    return_value=SimpleNamespace(),
+                ),
+                patch(
+                    "z_apply_core.gmail_tools.build_gmail_service",
+                    return_value=resource,
+                ),
+                patch("z_apply_core.gmail_tools.GmailToolkit", return_value=toolkit),
+            ):
+                gmail_tools = make_gmail_tools(
+                    credentials_path=credentials_path,
+                    token_path=token_path,
+                )
+                result = await gmail_tools[1].ainvoke({"message_id": "message-1"})
+
+            parsed = json.loads(result)
+            self.assertEqual(
+                parsed["body"],
+                "Complete setup.\nhttps://example.com/activate/signed-token?x=1&y=2\nHelp",
+            )
+            self.assertEqual(
+                parsed["links"],
+                [
+                    "https://example.com/activate/signed-token?x=1&y=2",
+                    "https://example.com/help",
+                ],
+            )
 
     async def test_missing_oauth_files_return_recoverable_tool_error(self) -> None:
         gmail_tools = make_gmail_tools(
