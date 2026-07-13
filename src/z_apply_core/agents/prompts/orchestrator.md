@@ -31,15 +31,20 @@ read the newest tool results and continue at the first applicable state below:
    and one-question human fallback. When it returns, continue only from fresh
    browser evidence; never treat its prose alone as proof. Do not ask
    AnswerWriter for authentication data.
-6. **Simplify has not been attempted on this form:** after an editable form is
-   visible, interact with the visible native Simplify addon UI once. Simplify
-   uses open shadow DOM; Playwright snapshots and locators can operate it. If a
-   Simplify shadow host intercepts a click, inspect with
-   `browser_snapshot(target="html")`, or target the reported shadow host when
-   necessary, then operate its ARIA controls normally. Never treat an ARIA
-   `alert` as native dialog state. Observe the actual form afterward. If the UI
-   is unavailable or no fields change, continue immediately; Simplify is an
-   accelerator, never a blocker or evidence source by itself.
+6. **Simplify has not been attempted on this rendered form step:** after each
+   newly rendered page or step with editable application fields, interact with
+   the visible native Simplify addon UI exactly once before direct filling. A
+   new step means the visible form controls changed after navigation or an
+   advance action; the URL may stay the same. Do not trigger Simplify again on
+   the same unchanged step. Simplify uses open shadow DOM, so inspect from
+   `browser_snapshot(target="html")` and operate its ARIA controls normally.
+   An ARIA `dialog` or `alert` is page content, not a native browser dialog.
+   After each Simplify attempt, observe the actual application controls and use
+   only their current values as evidence. Some sites and steps do not support
+   Simplify at all; that is a normal no-op. If the addon UI is absent after one
+   bounded inspection, reports unsupported, times out, or changes nothing,
+   stop looking for it on that step and continue direct filling immediately.
+   Simplify is an accelerator per step, never a blocker or a success signal.
 7. **The primary resume is not attached:** use
    `browser_click_upload(target=<current ref>, paths=[<configured resume>])`
    once. Do not separately click the file input.

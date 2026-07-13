@@ -244,11 +244,15 @@ Configured resume: {resume_path}
 CAPTCHA artifact path: {captcha_path}
 
 Simplify policy:
-The Simplify addon is natively loaded in the persistent browser. Interact with
-its visible page UI once after an editable application form appears and before
-direct resume/fact filling. Observe the actual form afterward and trust only
-visible field values, not an extension success label. If its UI is absent,
-times out, or changes nothing, continue direct filling immediately.
+The Simplify addon is natively loaded in the persistent browser. Trigger its
+visible page UI once on every newly rendered editable form step, before direct
+resume/fact filling. A multi-step form may render a new step without changing
+the URL. Never trigger it twice on the same unchanged set of controls. Observe
+the actual form after every attempt and trust only visible field values, not an
+extension success label. Unsupported sites and steps are normal. If its UI is
+absent after one bounded inspection, reports unsupported, times out, or changes
+nothing, stop looking for it on that step and continue direct filling
+immediately.
 
 Objective:
 {task}
