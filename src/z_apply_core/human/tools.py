@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from langchain_core.tools import BaseTool, tool
 
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.memory.applicant_memory import CandidateMemory
+
+logger = logging.getLogger(__name__)
 
 
 def make_human_tools(
@@ -15,6 +18,7 @@ def make_human_tools(
     candidate_memory: CandidateMemory | None = None,
     on_answer: Callable[[str], None] | None = None,
     on_approval: Callable[[bool], None] | None = None,
+    before_submit_approval: Callable[[], Awaitable[None]] | None = None,
     human_challenge_image_path: str = "",
 ) -> list[BaseTool]:
     @tool
@@ -69,6 +73,11 @@ def make_human_tools(
         role_name: str = "Application",
     ) -> dict[str, str]:
         """Ask the human to approve or reject a review-ready application."""
+        if before_submit_approval is not None:
+            try:
+                await before_submit_approval()
+            except Exception:
+                logger.exception("Pre-submit application artifact could not be published")
         approved = await channel.confirm(
             question="Submit this application?",
             context=final_review,

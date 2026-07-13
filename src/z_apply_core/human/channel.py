@@ -4,6 +4,13 @@ from typing import Protocol
 
 
 class HumanChannel(Protocol):
+    async def send_artifact(
+        self,
+        *,
+        path: str,
+        caption: str,
+    ) -> None: ...
+
     async def ask(
         self,
         *,

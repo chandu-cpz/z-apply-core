@@ -106,6 +106,39 @@ class TelegramHumanChannel:
                 image_path=image_path,
             )
 
+    async def send_artifact(self, *, path: str, caption: str) -> None:
+        """Post a run-owned image or PDF into the bound application topic."""
+        if self._app is None:
+            await self.start()
+        topic_id = await self._get_or_create_topic(
+            url="",
+            company="Z-Apply",
+            role="Job application",
+        )
+        artifact = self._safe_artifact_path(path)
+        if artifact is None:
+            logger.warning("Ignoring unsafe or missing Telegram artifact: %s", path)
+            return
+
+        try:
+            with artifact.open("rb") as content:
+                if artifact.suffix.casefold() == ".pdf":
+                    await self.bot.send_document(
+                        chat_id=self.chat_id,
+                        message_thread_id=topic_id,
+                        document=content,
+                        caption=caption,
+                    )
+                else:
+                    await self.bot.send_photo(
+                        chat_id=self.chat_id,
+                        message_thread_id=topic_id,
+                        photo=content,
+                        caption=caption,
+                    )
+        except Exception:
+            logger.exception("Failed to send Telegram artifact: %s", artifact)
+
     async def _ask_once(
         self,
         *,
@@ -265,9 +298,8 @@ class TelegramHumanChannel:
         topic_id: int | None,
         reply_to_message_id: int,
     ) -> None:
-        path = Path(image_path).expanduser().resolve()
-        artifact_root = (Path.cwd() / ".z-apply" / "runs").resolve()
-        if not path.is_file() or not path.is_relative_to(artifact_root):
+        path = self._safe_artifact_path(image_path)
+        if path is None:
             logger.warning("Ignoring unsafe or missing Telegram image path: %s", image_path)
             return
         try:
@@ -280,6 +312,16 @@ class TelegramHumanChannel:
                 )
         except Exception:
             logger.exception("Failed to send Telegram request image: %s", path)
+
+    @staticmethod
+    def _safe_artifact_path(path: str) -> Path | None:
+        artifact = Path(path).expanduser().resolve()
+        artifact_root = (Path.cwd() / ".z-apply" / "runs").resolve()
+        if not artifact.is_file() or not artifact.is_relative_to(artifact_root):
+            return None
+        if artifact.suffix.casefold() not in {".png", ".jpg", ".jpeg", ".webp", ".pdf"}:
+            return None
+        return artifact
 
     async def _close_created_topics(self) -> None:
         for topic_id in tuple(self._created_topic_ids):

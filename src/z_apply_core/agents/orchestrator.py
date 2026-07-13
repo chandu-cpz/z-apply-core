@@ -24,6 +24,7 @@ from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.tools import make_human_tools
 from z_apply_core.log_labels import node_info
@@ -74,6 +75,7 @@ async def run_orchestrator(
     candidate_memory: CandidateMemory | None = None,
     run_id: str = "",
     human_channel: HumanChannel | None = None,
+    artifact_publisher: ApplicationArtifactPublisher | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
     configure_z_apply_harness_profile()
@@ -102,6 +104,11 @@ async def run_orchestrator(
             human_channel,
             candidate_memory=candidate_memory,
             on_approval=record_approval,
+            before_submit_approval=(
+                artifact_publisher.publish_review_pdf
+                if artifact_publisher is not None
+                else None
+            ),
             human_challenge_image_path=str(_captcha_path(run_id)),
         )
 
@@ -113,6 +120,11 @@ async def run_orchestrator(
             raise ToolException(
                 "Submission cannot finish until request_submit_approval returns approved."
             )
+        if artifact_publisher is not None:
+            try:
+                await artifact_publisher.publish_submission_screenshot()
+            except Exception:
+                logger.exception("Submission confirmation screenshot could not be published")
         terminal = ("completed", confirmation)
         return "Application submission recorded."
 

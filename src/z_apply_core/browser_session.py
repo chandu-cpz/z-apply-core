@@ -14,7 +14,9 @@ from z_apply_core.browser_tools import (
     normalize_browser_arguments,
 )
 
-INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
+INLINE_CAPTURE_TOOLS = frozenset(
+    {"browser_snapshot", "browser_take_screenshot", "browser_pdf"}
+)
 
 
 class BrowserToolExecutionError(ToolException):
@@ -84,6 +86,10 @@ class BrowserSession:
 
     async def close(self) -> None:
         await self._backend.close()
+
+    def artifact_path(self, filename: str) -> Path:
+        """Return the run-owned path used by browser capture tools."""
+        return (self._capture_workspace / filename).resolve()
 
     def _call_meta(self, name: str) -> dict[str, object]:
         meta: dict[str, object] = {"raw": True}

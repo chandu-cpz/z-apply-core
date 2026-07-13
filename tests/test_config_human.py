@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from z_apply_core.config import Settings, load_settings
 from z_apply_core.human.factory import make_configured_human_channel
@@ -16,6 +16,9 @@ from z_apply_core.human.tools import make_human_tools
 
 
 class FakeHumanChannel:
+    async def send_artifact(self, *, path: str, caption: str) -> None:
+        del path, caption
+
     async def ask(
         self,
         *,
@@ -52,6 +55,7 @@ class FakeBot:
     def __init__(self) -> None:
         self.messages: list[dict[str, Any]] = []
         self.photos: list[dict[str, Any]] = []
+        self.documents: list[dict[str, Any]] = []
         self.closed_topics: list[int] = []
         self.created_topics: list[dict[str, Any]] = []
 
@@ -61,6 +65,9 @@ class FakeBot:
 
     async def send_photo(self, **kwargs: Any) -> None:
         self.photos.append(kwargs)
+
+    async def send_document(self, **kwargs: Any) -> None:
+        self.documents.append(kwargs)
 
     async def edit_message_reply_markup(self, **_kwargs: Any) -> None:
         return None
@@ -158,8 +165,45 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(answer["human_answer"].endswith(":/runtime/captcha.png"))
 
+    async def test_review_artifact_is_published_before_submit_approval(self) -> None:
+        before_approval = AsyncMock()
+        _, request_submit_approval = make_human_tools(
+            FakeHumanChannel(),
+            before_submit_approval=before_approval,
+        )
+
+        result = await request_submit_approval.ainvoke(
+            {"final_review": "Ready", "url": "https://example.test"}
+        )
+
+        before_approval.assert_awaited_once()
+        self.assertEqual(result, {"submit_approval": "approved"})
+
 
 class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_run_artifacts_are_sent_in_the_bound_topic(self) -> None:
+        channel = TelegramHumanChannel(token="token", chat_id="-100")
+        bot = FakeBot()
+        channel.bot = bot  # type: ignore[assignment]
+        channel._app = SimpleNamespace()
+        channel.bind_run(run_id="run-artifacts", url="https://jobs.example.test/123")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact_root = root / ".z-apply" / "runs" / "run-artifacts"
+            artifact_root.mkdir(parents=True)
+            pdf = artifact_root / "application-review.pdf"
+            png = artifact_root / "submission-confirmation.png"
+            pdf.write_bytes(b"pdf")
+            png.write_bytes(b"png")
+            with patch("z_apply_core.human.telegram.Path.cwd", return_value=root):
+                await channel.send_artifact(path=str(pdf), caption="Review")
+                await channel.send_artifact(path=str(png), caption="Submitted")
+
+        self.assertEqual(len(bot.created_topics), 1)
+        self.assertEqual(bot.documents[0]["message_thread_id"], 777)
+        self.assertEqual(bot.photos[0]["message_thread_id"], 777)
+
     async def test_bound_run_reuses_one_topic_across_different_question_metadata(
         self,
     ) -> None:

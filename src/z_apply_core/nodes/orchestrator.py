@@ -7,6 +7,7 @@ from langchain_core.runnables.config import RunnableConfig
 from nim_router import NimRouter
 
 from z_apply_core.agents.orchestrator import run_orchestrator
+from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunRuntime
@@ -33,6 +34,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         resume_path=str(DEFAULT_RESUME_PATH),
         candidate_memory=runtime_candidate_memory(state),
         run_id=_run_id(state),
+        artifact_publisher=_artifact_publisher(state),
     )
     snapshot = await _fresh_snapshot(state)
     return {
@@ -93,3 +95,13 @@ def runtime_candidate_memory(state: RunState) -> CandidateMemory | None:
 def _run_id(state: RunState) -> str:
     runtime = state.get("runtime")
     return runtime.run_id if isinstance(runtime, RunRuntime) else ""
+
+
+def _artifact_publisher(state: RunState) -> ApplicationArtifactPublisher | None:
+    runtime = state.get("runtime")
+    if not isinstance(runtime, RunRuntime) or runtime.human_channel is None:
+        return None
+    return ApplicationArtifactPublisher(
+        browser=runtime.browser,
+        channel=runtime.human_channel,
+    )
