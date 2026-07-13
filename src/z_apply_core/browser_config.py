@@ -23,6 +23,7 @@ def build_browser_config(run_id: str = "manual") -> dict[str, Any]:
             "browserName": "firefox",
             "userDataDir": str(profile_dir),
             "camoufoxOptions": {
+                "browser": settings.camoufox_browser,
                 "no_viewport": True,
                 "addons": [str(addon_path)],
             },

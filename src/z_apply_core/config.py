@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CORE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SIMPLIFY_ADDON_PATH = Path.home() / "Downloads" / "simplify_jobs-2.3.0"
+DEFAULT_CAMOUFOX_BROWSER = "official/150.0.2-alpha.26"
 
 
 class Settings(BaseSettings):
@@ -15,6 +16,10 @@ class Settings(BaseSettings):
     default_password: str = Field(default="", alias="DEFAULT_PASSWORD")
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_group_chat_id: str = Field(default="", alias="TELEGRAM_GROUP_CHAT_ID")
+    camoufox_browser: str = Field(
+        default=DEFAULT_CAMOUFOX_BROWSER,
+        alias="CAMOUFOX_BROWSER",
+    )
     simplify_addon_path: Path = Field(
         default=DEFAULT_SIMPLIFY_ADDON_PATH,
         alias="SIMPLIFY_ADDON_PATH",

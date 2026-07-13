@@ -15,6 +15,7 @@ class BrowserConfigTests(unittest.TestCase):
             settings = SimpleNamespace(
                 default_username="user@example.test",
                 default_password="secret",
+                camoufox_browser="official/150.0.2-alpha.26",
                 simplify_addon_path=Path(directory),
             )
 
@@ -36,6 +37,7 @@ class BrowserConfigTests(unittest.TestCase):
             settings = SimpleNamespace(
                 default_username="",
                 default_password="",
+                camoufox_browser="official/150.0.2-alpha.26",
                 simplify_addon_path=addon,
             )
             with patch("z_apply_core.browser_config.load_settings", return_value=settings):
@@ -44,6 +46,10 @@ class BrowserConfigTests(unittest.TestCase):
         self.assertEqual(
             config["browser"]["camoufoxOptions"]["addons"],
             [str(addon.resolve())],
+        )
+        self.assertEqual(
+            config["browser"]["camoufoxOptions"]["browser"],
+            "official/150.0.2-alpha.26",
         )
 
 
