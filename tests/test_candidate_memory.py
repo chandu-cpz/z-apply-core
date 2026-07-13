@@ -48,12 +48,23 @@ class CandidateMemoryTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(stored)
-        self.assertEqual(result["memory_status"], "ready")
+        self.assertEqual(result["memory_status"], "exact")
         matches = result["matches"]
         self.assertIsInstance(matches, list)
         self.assertEqual(matches[0]["field_label"], "Expected Salary")
         self.assertEqual(matches[0]["answer"], "18 LPA")
         self.assertEqual(matches[0]["source"], "human_answer")
+
+        await self.memory.remember_human_answer(
+            field_label="Expected Salary",
+            question="What is your current expected annual salary?",
+            answer="20 LPA",
+        )
+        updated = await self.memory.lookup(
+            field_label="Expected Salary",
+            question="What compensation do you expect?",
+        )
+        self.assertEqual(updated["matches"][0]["answer"], "20 LPA")
 
     async def test_empty_collection_does_not_claim_candidate_fact(self) -> None:
         result = await self.memory.lookup(

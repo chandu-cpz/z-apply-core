@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -203,8 +203,12 @@ def _tool_model(spec: BrowserToolSpec) -> type[BaseModel]:
             Field(default=default, description=parameter.description),
         )
     model_name = "".join(part.title() for part in spec.name.split("_")) + "Arguments"
-    return create_model(
-        model_name,
-        __config__=ConfigDict(extra="forbid"),
-        **fields,
+    model_factory = cast(Any, create_model)
+    return cast(
+        type[BaseModel],
+        model_factory(
+            model_name,
+            __config__=ConfigDict(extra="forbid"),
+            **fields,
+        ),
     )

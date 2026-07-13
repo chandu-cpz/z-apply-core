@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 async def setup_browser(
     state: RunState,
-    config: RunnableConfig | None = None,
+    config: RunnableConfig,
 ) -> dict[str, object]:
     display = VirtualDisplaySession(enabled=True)
     live_view = LiveView()
@@ -33,6 +33,9 @@ async def setup_browser(
             snapshot = await browser.tools.call("browser_snapshot")
         human_channel = make_configured_human_channel()
         if human_channel is not None:
+            bind_run = cast(Any, getattr(human_channel, "bind_run", None))
+            if callable(bind_run):
+                bind_run(run_id=browser.run_id, url=state["job_url"])
             start = cast(Any, getattr(human_channel, "start", None))
             if callable(start):
                 try:
@@ -51,7 +54,7 @@ async def setup_browser(
             candidate_memory=CandidateMemory(),
             run_id=browser.run_id,
         )
-        configurable = (config or {}).get("configurable", {})
+        configurable = config.get("configurable", {})
         resources = configurable.get("run_resources")
         if isinstance(resources, RunResources):
             resources.runtime = runtime

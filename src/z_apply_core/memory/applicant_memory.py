@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from collections.abc import Sequence
 from pathlib import Path
@@ -16,6 +17,11 @@ logger = logging.getLogger(__name__)
 CORE_ROOT = Path(__file__).resolve().parents[3]
 MEMORY_PATH = CORE_ROOT / ".z-apply" / "qdrant"
 MEMORY_COLLECTION = "z_apply_core_applicant_memory_v1"
+MEMORY_NAMESPACE = uuid.UUID("f0e95a1d-6811-4fe6-a938-fb1153f3b8a9")
+
+
+def _field_key(field_label: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", field_label.casefold())
 
 
 class EmbeddingClient(Protocol):
@@ -111,14 +117,16 @@ class CandidateMemory:
         document = f"Field: {field_label}\nQuestion: {question}\nAnswer: {answer}"
         vector = self._embeddings.embed_documents([document])[0]
         self._ensure_collection(vector_size=len(vector))
+        field_key = _field_key(field_label)
         self._client.upsert(
             collection_name=self._collection_name,
             points=[
                 models.PointStruct(
-                    id=str(uuid.uuid4()),
+                    id=str(uuid.uuid5(MEMORY_NAMESPACE, field_key)),
                     vector=vector,
                     payload={
                         "field_label": field_label,
+                        "field_key": field_key,
                         "question": question,
                         "answer": answer,
                         "source": "human_answer",
@@ -137,6 +145,29 @@ class CandidateMemory:
                 "matches": [],
             }
 
+        exact_points, _ = self._client.scroll(
+            collection_name=self._collection_name,
+            scroll_filter=models.Filter(
+                must=[
+                    models.FieldCondition(
+                        key="field_key",
+                        match=models.MatchValue(value=_field_key(field_label)),
+                    )
+                ]
+            ),
+            limit=1,
+            with_payload=True,
+            with_vectors=False,
+        )
+        if exact_points:
+            payload = cast(dict[str, Any], exact_points[0].payload or {})
+            return {
+                "memory_status": "exact",
+                "field_label": field_label,
+                "question": question,
+                "matches": [self._match_from_payload(payload, similarity=1.0)],
+            }
+
         query = self._embeddings.embed_query(f"Field: {field_label}\nQuestion: {question}")
         result = self._client.query_points(
             collection_name=self._collection_name,
@@ -147,20 +178,26 @@ class CandidateMemory:
         matches: list[dict[str, object]] = []
         for point in result.points:
             payload = cast(dict[str, Any], point.payload or {})
-            matches.append(
-                {
-                    "field_label": str(payload.get("field_label", "")),
-                    "question": str(payload.get("question", "")),
-                    "answer": str(payload.get("answer", "")),
-                    "source": str(payload.get("source", "human_answer")),
-                    "similarity": float(point.score),
-                }
-            )
+            matches.append(self._match_from_payload(payload, similarity=float(point.score)))
         return {
             "memory_status": "ready",
             "field_label": field_label,
             "question": question,
             "matches": matches,
+        }
+
+    @staticmethod
+    def _match_from_payload(
+        payload: dict[str, Any],
+        *,
+        similarity: float,
+    ) -> dict[str, object]:
+        return {
+            "field_label": str(payload.get("field_label", "")),
+            "question": str(payload.get("question", "")),
+            "answer": str(payload.get("answer", "")),
+            "source": str(payload.get("source", "human_answer")),
+            "similarity": similarity,
         }
 
     def _ensure_collection(self, *, vector_size: int) -> None:

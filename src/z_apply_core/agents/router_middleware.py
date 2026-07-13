@@ -12,6 +12,7 @@ from langchain.agents.middleware.types import (
     ModelResponse,
     ResponseT,
 )
+from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage
 from nim_router import NimRouter
@@ -155,7 +156,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             structured,
             vision,
             reasoning,
-            len(self._router._candidates) if hasattr(self._router, "_candidates") else 0,
+            len(cast(Sequence[Any], getattr(self._router, "_candidates", ()))),
             bool(self._router._exploring) if hasattr(self._router, "_exploring") else False,
         )
 
@@ -205,6 +206,14 @@ def _attach_tracking_callback(selection: ModelSelection) -> None:
     callback = getattr(selection, "callback", None)
     if callback is None:
         return
-    callbacks = list(selection.llm.callbacks or [])
+    callback = cast(BaseCallbackHandler, callback)
+    configured_callbacks = selection.llm.callbacks
+    callbacks: list[BaseCallbackHandler]
+    if isinstance(configured_callbacks, list):
+        callbacks = [cast(BaseCallbackHandler, item) for item in configured_callbacks]
+    else:
+        callbacks = list(
+            cast(Sequence[BaseCallbackHandler], getattr(configured_callbacks, "handlers", ()))
+        )
     if callback not in callbacks:
         selection.llm.callbacks = [*callbacks, callback]

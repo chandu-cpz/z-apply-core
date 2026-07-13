@@ -53,6 +53,7 @@ class FakeBot:
         self.messages: list[dict[str, Any]] = []
         self.photos: list[dict[str, Any]] = []
         self.closed_topics: list[int] = []
+        self.created_topics: list[dict[str, Any]] = []
 
     async def send_message(self, **kwargs: Any) -> FakeSentMessage:
         self.messages.append(kwargs)
@@ -64,7 +65,8 @@ class FakeBot:
     async def edit_message_reply_markup(self, **_kwargs: Any) -> None:
         return None
 
-    async def create_forum_topic(self, **_kwargs: Any) -> Any:
+    async def create_forum_topic(self, **kwargs: Any) -> Any:
+        self.created_topics.append(kwargs)
         return SimpleNamespace(message_thread_id=777)
 
     async def close_forum_topic(self, **kwargs: Any) -> None:
@@ -140,8 +142,66 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(approval, {"submit_approval": "approved"})
 
+    async def test_human_challenge_uses_runtime_owned_image_path(self) -> None:
+        ask_human, _ = make_human_tools(
+            FakeHumanChannel(),
+            human_challenge_image_path="/runtime/captcha.png",
+        )
+
+        answer = await ask_human.ainvoke(
+            {
+                "question": "Enter CAPTCHA",
+                "reason": "human_challenge",
+                "image_path": "captcha.png",
+            }
+        )
+
+        self.assertTrue(answer["human_answer"].endswith(":/runtime/captcha.png"))
+
 
 class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bound_run_reuses_one_topic_across_different_question_metadata(
+        self,
+    ) -> None:
+        channel = TelegramHumanChannel(token="token", chat_id="-100")
+        bot = FakeBot()
+        channel.bot = bot  # type: ignore[assignment]
+        channel._app = SimpleNamespace()
+        channel.bind_run(
+            run_id="run-123456789",
+            url="https://jobs.example.test/123",
+        )
+
+        first = asyncio.create_task(
+            channel.ask(
+                question="CAPTCHA",
+                url="https://jobs.example.test/123/apply",
+                company="Acme",
+                role="Engineer",
+            )
+        )
+        await asyncio.sleep(0)
+        await channel.resolve(next(iter(channel._pending)), "1234")
+        self.assertEqual(await first, "1234")
+
+        second = asyncio.create_task(
+            channel.ask(
+                question="Submit?",
+                url="",
+                company="System",
+                role="Application",
+            )
+        )
+        await asyncio.sleep(0)
+        await channel.resolve(next(iter(channel._pending)), "Approve")
+        self.assertEqual(await second, "Approve")
+
+        self.assertEqual(len(bot.created_topics), 1)
+        self.assertEqual(
+            {message["message_thread_id"] for message in bot.messages},
+            {777},
+        )
+
     async def test_ask_waits_for_pending_future_resolution(self) -> None:
         channel = TelegramHumanChannel(token="token", chat_id="-100")
         bot = FakeBot()

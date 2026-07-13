@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-import logging
 from collections.abc import Iterable, Mapping
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
 from langchain_core.messages import AIMessage
-
-logger = logging.getLogger(__name__)
 
 
 class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -39,13 +36,6 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
             return message
 
         normalized = [self._normalize_call(call) for call in message.tool_calls]
-        task_calls = [call for call in normalized if call.get("name") == "task"]
-        if len(task_calls) > 1:
-            logger.info(
-                "SubagentDispatch: serializing %s delegated tasks; executing the first",
-                len(task_calls),
-            )
-            normalized = [task_calls[0]]
         if normalized == message.tool_calls:
             return message
         return message.model_copy(update={"tool_calls": normalized})

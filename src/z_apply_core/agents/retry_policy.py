@@ -3,8 +3,6 @@ from __future__ import annotations
 from langchain.agents.middleware import ModelRetryMiddleware
 
 from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen
-from z_apply_core.agents.protocol_guard import ToolProtocolViolation
-from z_apply_core.agents.terminal_guard import TerminalDecisionRecorded
 
 
 def should_retry_model_error(exc: Exception) -> bool:
@@ -13,7 +11,7 @@ def should_retry_model_error(exc: Exception) -> bool:
     Returns False for intentional agent or runtime control failures that
     carry their own recovery semantics.
     """
-    blocked = (ToolProtocolViolation, NoProgressCircuitOpen, TerminalDecisionRecorded)
+    blocked = (NoProgressCircuitOpen,)
     return not isinstance(exc, blocked)
 
 

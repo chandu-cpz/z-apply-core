@@ -59,9 +59,28 @@ class TelegramHumanChannel:
         self._pending_by_message: dict[int, str] = {}
         self._active_topics: dict[str, int | None] = {}
         self._created_topic_ids: set[int] = set()
+        self._run_topic_key: str | None = None
+        self._run_topic_name: str | None = None
         self._app: Application[Any, Any, Any, Any, Any, Any] | None = None
         self._start_lock = asyncio.Lock()
         self._ask_lock = asyncio.Lock()
+
+    def bind_run(
+        self,
+        *,
+        run_id: str,
+        url: str,
+        company: str = "Z-Apply",
+        role: str = "Job application",
+    ) -> None:
+        """Bind every human interaction for one runtime to one forum topic."""
+        if self._pending or self._created_topic_ids:
+            raise RuntimeError("Cannot rebind an active Telegram human channel.")
+        identity = run_id or url
+        if not identity:
+            raise ValueError("Telegram run binding requires a run ID or job URL.")
+        self._run_topic_key = f"run:{identity}"
+        self._run_topic_name = f"{company} | {role} | {identity[:8]}"[:128]
 
     async def ask(
         self,
@@ -219,11 +238,11 @@ class TelegramHumanChannel:
             pending.future.set_result(answer)
 
     async def _get_or_create_topic(self, *, url: str, company: str, role: str) -> int | None:
-        topic_key = url or f"{company}:{role}"
+        topic_key = self._run_topic_key or url or f"{company}:{role}"
         if topic_key in self._active_topics:
             return self._active_topics[topic_key]
 
-        topic_name = f"{company} | {role}"[:128]
+        topic_name = self._run_topic_name or f"{company} | {role}"[:128]
         try:
             topic = await self.bot.create_forum_topic(chat_id=self.chat_id, name=topic_name)
         except Exception as exc:

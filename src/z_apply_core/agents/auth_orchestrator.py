@@ -6,28 +6,24 @@ from typing import Any, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
-from langchain_core.messages import HumanMessage
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool, tool
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
+from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.orchestrator import CORE_ROOT, DEEPAGENT_FILESYSTEM_PERMISSIONS
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import AuthOrchestratorRun, AuthStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
-from z_apply_core.agents.terminal_guard import (
-    TerminalDecisionGuardMiddleware,
-    TerminalDecisionRecorded,
-)
+from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
 
 logger = logging.getLogger(__name__)
-MAX_AUTH_ATTEMPTS = 2
 
 
 async def run_auth_orchestrator(
@@ -39,6 +35,7 @@ async def run_auth_orchestrator(
     sink: FrameworkEventSink | None = None,
     router: NimRouter | None = None,
 ) -> AuthOrchestratorRun:
+    configure_z_apply_harness_profile()
     if not isinstance(router, NimRouter):
         return AuthOrchestratorRun(
             "Model routing failed: shared NimRouter was not provided.", "", "failed"
@@ -52,21 +49,21 @@ async def run_auth_orchestrator(
     node_info(logger, "authenticate_default_account", "initial model: %s", selection.info.id)
     verdict: tuple[AuthStatus, str] | None = None
 
-    @tool
+    @tool(return_direct=True)
     async def authentication_verified(evidence: str) -> str:
         """Finish with account-specific evidence that Simplify is authenticated."""
         nonlocal verdict
         verdict = ("authenticated", evidence)
         return "Authentication recorded. Stop now."
 
-    @tool
+    @tool(return_direct=True)
     async def authentication_blocked(reason: str) -> str:
         """Finish with the concrete unresolved human authentication action."""
         nonlocal verdict
         verdict = ("blocked", reason)
         return "Authentication blocker recorded. Stop now."
 
-    @tool
+    @tool(return_direct=True)
     async def authentication_not_verified(reason: str) -> str:
         """Finish when current evidence cannot establish authentication or a blocker."""
         nonlocal verdict
@@ -89,65 +86,37 @@ async def run_auth_orchestrator(
         ],
         system_prompt=load_prompt("auth_orchestrator.md"),
         middleware=[
+            SafeToolBatchMiddleware(),
             model_retry_middleware(),
             router_middleware,
             ProseToolCallGuardMiddleware(),
-            TerminalDecisionGuardMiddleware(lambda: verdict is not None),
         ],
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=DEEPAGENT_FILESYSTEM_PERMISSIONS,
     )
 
     run_config = cast(RunnableConfig, config.copy() if config else {})
-    attempt_input: dict[str, Any] = {
-        "messages": [{"role": "user", "content": _task_prompt(snapshot=snapshot)}]
-    }
-    for _attempt in range(MAX_AUTH_ATTEMPTS):
-        try:
-            result = await consume_deepagent_stream(
-                agent.astream_events(
-                    cast(Any, attempt_input),
-                    config=run_config,
-                    version="v3",
-                ),
-                sink=sink,
-                root_source="authenticate_default_account",
-            )
-        except TerminalDecisionRecorded:
-            if verdict is None:
-                raise
-            status, summary = verdict
-            return AuthOrchestratorRun(summary, router_middleware.last_model_id, status)
-        if verdict is not None:
-            status, summary = verdict
-            return AuthOrchestratorRun(summary, router_middleware.last_model_id, status)
-        attempt_input = _continue_input(result.output, snapshot)
+    await consume_deepagent_stream(
+        agent.astream_events(
+            cast(
+                Any,
+                {"messages": [{"role": "user", "content": _task_prompt(snapshot=snapshot)}]},
+            ),
+            config=run_config,
+            version="v3",
+        ),
+        sink=sink,
+        root_source="authenticate_default_account",
+    )
+    if verdict is not None:
+        status, summary = verdict
+        return AuthOrchestratorRun(summary, router_middleware.last_model_id, status)
 
     return AuthOrchestratorRun(
         "Authentication controller stopped without calling a verdict tool.",
         router_middleware.last_model_id,
         "not_verified",
     )
-
-
-def _continue_input(output: dict[str, Any], snapshot: str) -> dict[str, Any]:
-    state = {key: value for key, value in output.items() if key in {"messages", "todos", "files"}}
-    messages = list(cast(Sequence[Any], state.get("messages", ())))
-    messages.append(
-        HumanMessage(
-            content=(
-                "Finish the authentication check now. Use the completed BrowserSpecialist "
-                "browser evidence already in context and call exactly one authentication "
-                "verdict tool. Do not inspect the same state again.\n\n"
-                "Initial untrusted evidence for context:\n"
-                f"{snapshot}"
-            )
-        )
-    )
-    state["messages"] = messages
-    return state
-
-
 def _task_prompt(*, snapshot: str) -> str:
     return f"""Verify or restore the default Simplify authentication.
 

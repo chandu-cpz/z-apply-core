@@ -15,6 +15,7 @@ def make_human_tools(
     candidate_memory: CandidateMemory | None = None,
     on_answer: Callable[[str], None] | None = None,
     on_approval: Callable[[bool], None] | None = None,
+    human_challenge_image_path: str = "",
 ) -> list[BaseTool]:
     @tool
     async def ask_human(
@@ -35,6 +36,11 @@ def make_human_tools(
         field_label: the specific required field or fields that need human input.
         field_evidence: current browser evidence showing the field is unresolved.
         """
+        resolved_image_path = (
+            human_challenge_image_path
+            if reason == "human_challenge" and human_challenge_image_path
+            else image_path
+        )
         answer = await channel.ask(
             question=question,
             context=context,
@@ -42,7 +48,7 @@ def make_human_tools(
             company=company_name,
             role=role_name,
             options=options or [],
-            image_path=image_path,
+            image_path=resolved_image_path,
         )
         if on_answer is not None:
             on_answer(field_label)
