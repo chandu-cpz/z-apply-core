@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Self
 from uuid import uuid4
@@ -30,6 +31,9 @@ class BrowserSession:
         self.run_id = run_id
         self._submission_guard_active = False
         self._approved_submissions = 0
+        self._last_snapshot = ""
+        self._last_mutation_signature = ""
+        self._last_mutation_made_progress = True
         self._capture_workspace = Path.cwd() / ".z-apply" / "runs" / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(server.backend_pool.tools),
@@ -74,7 +78,10 @@ class BrowserSession:
         _raise_for_tool_error(name, result)
         if guarded_submit:
             self._approved_submissions -= 1
-        return _text_content(result)
+        text = _text_content(result)
+        if name == "browser_snapshot":
+            self._last_snapshot = text
+        return text
 
     async def call_tool_content(
         self,
@@ -96,11 +103,31 @@ class BrowserSession:
         arguments: dict[str, Any] | None = None,
     ) -> str:
         """Execute a mutation and return current inline evidence when available."""
+        normalized = normalize_browser_arguments(arguments)
+        signature = json.dumps(
+            {"name": name, "arguments": normalized},
+            sort_keys=True,
+            default=str,
+        )
+        if (
+            signature == self._last_mutation_signature
+            and not self._last_mutation_made_progress
+        ):
+            raise BrowserToolExecutionError(
+                "Duplicate mutation prevented: the identical previous action left the "
+                "browser snapshot unchanged. Choose a different action."
+            )
+        before_snapshot = self._last_snapshot
         mutation = await self.call_tool(name, arguments)
         try:
-            return await self.call_tool("browser_snapshot")
+            evidence = await self.call_tool("browser_snapshot")
         except BrowserToolExecutionError as exc:
+            self._last_mutation_signature = signature
+            self._last_mutation_made_progress = True
             return f"{mutation}\nPost-action inline snapshot unavailable: {exc}"
+        self._last_mutation_signature = signature
+        self._last_mutation_made_progress = not before_snapshot or evidence != before_snapshot
+        return evidence
 
     async def upload_files(self, target: str, paths: list[str]) -> str:
         """Resolve a current ARIA target and attach files without native chooser state."""

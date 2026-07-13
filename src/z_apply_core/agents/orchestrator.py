@@ -16,6 +16,7 @@ from nim_router.errors import NimRouterError
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_active_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
@@ -166,6 +167,7 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             SafeToolBatchMiddleware(),
+            NoProgressGuardMiddleware(),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"]
             ),
@@ -245,14 +247,15 @@ CAPTCHA artifact path: {captcha_path}
 
 Simplify policy:
 The Simplify addon is natively loaded in the persistent browser. Trigger its
-visible page UI once on every newly rendered editable form step, before direct
-resume/fact filling. A multi-step form may render a new step without changing
-the URL. Never trigger it twice on the same unchanged set of controls. Observe
-the actual form after every attempt and trust only visible field values, not an
-extension success label. Unsupported sites and steps are normal. If its UI is
-absent after one bounded inspection, reports unsupported, times out, or changes
-nothing, stop looking for it on that step and continue direct filling
-immediately.
+explicit Autofill action once on every newly rendered editable application-form
+step, before direct resume/fact filling. A job description, login page, cookie
+banner, landing page, or confirmation page is not a form step; reach visible
+editable application controls first. A multi-step form may render a new step
+without changing the URL. Never click the generic Simplify panel/header,
+Profile, job tracker, referral, tailoring, or keyword controls as Autofill, and
+never trigger twice on the same unchanged controls. Observe the actual form
+after every attempt and trust only visible field values. Unsupported sites and
+steps are normal; after one bounded inspection, continue direct filling.
 
 Objective:
 {task}

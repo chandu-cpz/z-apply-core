@@ -35,8 +35,14 @@ read the newest tool results and continue at the first applicable state below:
    newly rendered page or step with editable application fields, interact with
    the visible native Simplify addon UI exactly once before direct filling. A
    new step means the visible form controls changed after navigation or an
-   advance action; the URL may stay the same. Do not trigger Simplify again on
-   the same unchanged step. Simplify uses open shadow DOM, so inspect from
+   advance action; the URL may stay the same. A job description, login page,
+   cookie banner, landing page, or confirmation page is not an editable form
+   step: reach visible application controls first and do not touch Simplify on
+   those pages. Do not trigger Simplify again on the same unchanged step.
+   Trigger only an explicit addon action whose accessible purpose is autofilling
+   the current page. Never click the generic Simplify panel/header, Profile,
+   job-tracker, referral, resume-tailoring, or keyword controls as an autofill
+   substitute. Simplify uses open shadow DOM, so inspect from
    `browser_snapshot(target="html")` and operate its ARIA controls normally.
    An ARIA `dialog` or `alert` is page content, not a native browser dialog.
    After each Simplify attempt, observe the actual application controls and use
