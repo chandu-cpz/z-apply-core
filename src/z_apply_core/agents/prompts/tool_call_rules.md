@@ -1,21 +1,9 @@
-## Tool calls — critical
+## Tool execution
 
-A tool invocation written inside assistant text is ordinary text and does not
-execute. The runtime only recognizes native tool calls emitted through the
-model's tool-calling interface.
+When an action requires a tool, emit a native tool call through the model's
+tool-call channel. Do not serialize the call into assistant `content`, JSON,
+markdown, a `text` object, XML, or prose. Do not narrate the intended call first.
 
-Never:
-- Print `tool_name(...)` intending it to execute
-- Print JSON representing a tool call
-- Invent a tool result or specialist result
-- Claim execution before receiving an actual tool result
-
-Wrong — this is only prose and nothing executes:
-
-```
-task(subagent_type='AnswerWriter', description='Resolve exactly one field...')
-```
-
-CORRECT: emit the actual native tool call through the model's tool-calling
-interface. Your role-specific instructions describe the exact tools available
-to you and how to invoke them.
+After a native tool result arrives, either make the next required native tool
+call or return the requested agent result as normal text. Never fabricate a tool
+result or claim an action ran without its real result.

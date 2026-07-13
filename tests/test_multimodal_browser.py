@@ -19,6 +19,40 @@ from z_apply_core.browser_tools import BrowserToolRegistry
 
 
 class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_aria_reference_notation_is_normalized_for_backend(self) -> None:
+        backend = SimpleNamespace(
+            call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),
+            close=AsyncMock(),
+        )
+        server = SimpleNamespace(
+            backend=backend,
+            backend_pool=SimpleNamespace(tools=[]),
+        )
+        session = BrowserSession(server, run_id="test-run")
+
+        await session.call_tool("browser_click", {"target": "ref=e112"})
+        await session.call_tool("browser_type", {"target": "[ref=e45]", "text": "Ada"})
+        await session.call_tool(
+            "browser_click",
+            {
+                "target": "Apply for this job",
+                "element": 'button "Apply for this job" [ref=e209]',
+            },
+        )
+
+        self.assertEqual(backend.call_tool.await_args_list[0].args[1], {"target": "e112"})
+        self.assertEqual(
+            backend.call_tool.await_args_list[1].args[1],
+            {"target": "e45", "text": "Ada"},
+        )
+        self.assertEqual(
+            backend.call_tool.await_args_list[2].args[1],
+            {
+                "target": "e209",
+                "element": 'button "Apply for this job" [ref=e209]',
+            },
+        )
+
     async def test_capture_filenames_are_confined_to_artifact_workspace(self) -> None:
         backend = SimpleNamespace(
             call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),

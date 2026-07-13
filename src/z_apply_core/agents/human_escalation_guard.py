@@ -14,8 +14,6 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from z_apply_core.agents.application_progress import ApplicationProgress
-
 _log = logging.getLogger(__name__)
 
 _HUMAN_CHALLENGE_REASONS = frozenset({"human_challenge"})
@@ -29,9 +27,14 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
     request_submit_approval is not affected.
     """
 
-    def __init__(self, progress: ApplicationProgress) -> None:
+    def __init__(
+        self,
+        _legacy_progress: object | None = None,
+        *,
+        allowed_reasons: frozenset[str] | None = None,
+    ) -> None:
         super().__init__()
-        self._progress = progress
+        self._allowed_reasons = allowed_reasons or _VALID_REASONS
 
     async def awrap_tool_call(
         self,
@@ -63,6 +66,22 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                 tool_call_id=str(request.tool_call.get("id", "")),
             )
 
+        if reason not in self._allowed_reasons:
+            allowed = ", ".join(sorted(self._allowed_reasons))
+            _log.info(
+                "HumanEscalationGuard: rejecting ask_human reason=%r for this agent",
+                reason,
+            )
+            return ToolMessage(
+                content=(
+                    "Human escalation denied for this agent. "
+                    f"Allowed reason here: {allowed}. Delegate candidate-field questions "
+                    "to AnswerWriter."
+                ),
+                name="ask_human",
+                tool_call_id=str(request.tool_call.get("id", "")),
+            )
+
         if reason in _HUMAN_CHALLENGE_REASONS:
             return await handler(request)
 
@@ -75,30 +94,6 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                 content=(
                     "Human escalation denied: no specific field identified. "
                     "Provide field_label naming the exact required field(s)."
-                ),
-                name="ask_human",
-                tool_call_id=str(request.tool_call.get("id", "")),
-            )
-
-        if self._progress.resume_control_visible and not self._progress.resume_uploaded_verified:
-            _log.info("HumanEscalationGuard: rejecting ask_human - resume upload pending")
-            return ToolMessage(
-                content=(
-                    "Human escalation denied: independent automation work remains. "
-                    "The configured resume has not been verified as uploaded and a primary "
-                    "resume control is available. Complete and verify resume upload first, "
-                    "then map the resulting fields before asking the human for missing information."
-                ),
-                name="ask_human",
-                tool_call_id=str(request.tool_call.get("id", "")),
-            )
-
-        if not self._progress.fields_mapped:
-            _log.info("HumanEscalationGuard: rejecting ask_human - fields not mapped yet")
-            return ToolMessage(
-                content=(
-                    "Human escalation denied: fields have not been mapped yet. "
-                    "Call FieldMapper to map visible fields before asking for missing information."
                 ),
                 name="ask_human",
                 tool_call_id=str(request.tool_call.get("id", "")),

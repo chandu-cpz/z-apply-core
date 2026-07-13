@@ -7,6 +7,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
@@ -57,8 +58,10 @@ class TelegramHumanChannel:
         self._pending_by_topic: dict[int | None, set[str]] = {}
         self._pending_by_message: dict[int, str] = {}
         self._active_topics: dict[str, int | None] = {}
+        self._created_topic_ids: set[int] = set()
         self._app: Application[Any, Any, Any, Any, Any, Any] | None = None
         self._start_lock = asyncio.Lock()
+        self._ask_lock = asyncio.Lock()
 
     async def ask(
         self,
@@ -70,6 +73,31 @@ class TelegramHumanChannel:
         role: str = "Application",
         options: list[str] | None = None,
         risk: str = "medium",
+        image_path: str = "",
+    ) -> str:
+        async with self._ask_lock:
+            return await self._ask_once(
+                question=question,
+                context=context,
+                url=url,
+                company=company,
+                role=role,
+                options=options,
+                risk=risk,
+                image_path=image_path,
+            )
+
+    async def _ask_once(
+        self,
+        *,
+        question: str,
+        context: str,
+        url: str,
+        company: str,
+        role: str,
+        options: list[str] | None,
+        risk: str,
+        image_path: str,
     ) -> str:
         if self._app is None:
             await self.start()
@@ -106,6 +134,12 @@ class TelegramHumanChannel:
         self._pending[request_id] = pending
         self._pending_by_message[sent.message_id] = request_id
         self._pending_by_topic.setdefault(topic_id, set()).add(request_id)
+        if image_path:
+            await self._send_request_image(
+                image_path=image_path,
+                topic_id=topic_id,
+                reply_to_message_id=sent.message_id,
+            )
         return await future
 
     async def confirm(
@@ -150,6 +184,7 @@ class TelegramHumanChannel:
 
     async def stop(self) -> None:
         async with self._start_lock:
+            await self._close_created_topics()
             app = self._app
             if app is None:
                 return
@@ -201,7 +236,43 @@ class TelegramHumanChannel:
 
         topic_id = topic.message_thread_id
         self._active_topics[topic_key] = topic_id
+        self._created_topic_ids.add(topic_id)
         return topic_id
+
+    async def _send_request_image(
+        self,
+        *,
+        image_path: str,
+        topic_id: int | None,
+        reply_to_message_id: int,
+    ) -> None:
+        path = Path(image_path).expanduser().resolve()
+        artifact_root = (Path.cwd() / ".z-apply" / "runs").resolve()
+        if not path.is_file() or not path.is_relative_to(artifact_root):
+            logger.warning("Ignoring unsafe or missing Telegram image path: %s", image_path)
+            return
+        try:
+            with path.open("rb") as image:
+                await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    message_thread_id=topic_id,
+                    photo=image,
+                    reply_to_message_id=reply_to_message_id,
+                )
+        except Exception:
+            logger.exception("Failed to send Telegram request image: %s", path)
+
+    async def _close_created_topics(self) -> None:
+        for topic_id in tuple(self._created_topic_ids):
+            try:
+                await self.bot.close_forum_topic(
+                    chat_id=self.chat_id,
+                    message_thread_id=topic_id,
+                )
+            except Exception:
+                logger.exception("Failed to close Telegram forum topic %s", topic_id)
+        self._created_topic_ids.clear()
+        self._active_topics.clear()
 
     def _message_text(
         self,

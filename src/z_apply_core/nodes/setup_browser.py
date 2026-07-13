@@ -4,7 +4,7 @@ import logging
 from typing import Any, cast
 
 from z_apply_core.browser_session import BrowserSession
-from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS
+from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS, make_click_upload_tool
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.live_view import LiveView
 from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -49,7 +49,10 @@ async def setup_browser(state: RunState) -> dict[str, object]:
         return {
             "snapshot": snapshot,
             "runtime": runtime,
-            "browser_tools": browser.tools.langchain_tools(INITIAL_AGENT_BROWSER_TOOLS),
+            "browser_tools": [
+                *browser.tools.langchain_tools(INITIAL_AGENT_BROWSER_TOOLS),
+                make_click_upload_tool(browser.call_tool),
+            ],
         }
     except Exception:
         if browser is not None:

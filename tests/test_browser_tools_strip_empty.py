@@ -5,7 +5,9 @@ import unittest
 from typing import Any
 from unittest.mock import AsyncMock
 
-from z_apply_core.browser_tools import BrowserToolRegistry
+from langchain_core.tools import ToolException
+
+from z_apply_core.browser_tools import BrowserToolRegistry, make_click_upload_tool
 
 
 class SimpleParam:
@@ -104,6 +106,24 @@ class StripEmptyArgsTests(unittest.TestCase):
         self.assertEqual(self.captured["target"], "#btn")
         self.assertEqual(self.captured["filename"], "out.png")
 
+    def test_tool_model_coerces_provider_stringified_scalars(self) -> None:
+        tool = self.registry.langchain_tools(["browser_snapshot"])[0]
+
+        self._run(tool.ainvoke({"depth": "10", "boxes": "false"}))
+
+        self.assertEqual(self.captured["depth"], 10)
+        self.assertIs(self.captured["boxes"], False)
+
+    def test_browser_error_is_returned_to_agent_for_in_loop_recovery(self) -> None:
+        async def fail(_name: str, _arguments: dict[str, Any]) -> str:
+            raise ToolException("stale browser ref")
+
+        tool = _make_registry(caller=fail).langchain_tools(["browser_snapshot"])[0]
+
+        result = self._run(tool.ainvoke({}))
+
+        self.assertEqual(result, "stale browser ref")
+
     def test_file_upload_tool_exposes_native_chooser_contract(self) -> None:
         spec = SimpleSpec(
             name="browser_file_upload",
@@ -118,6 +138,36 @@ class StripEmptyArgsTests(unittest.TestCase):
         self.assertIn("currently open native file chooser", tool.description)
         self.assertIn('paths=["/absolute/resume.pdf"]', tool.description)
         self.assertIn("no target or selector", tool.description)
+
+    def test_atomic_click_upload_completes_both_browser_steps_in_order(self) -> None:
+        caller = AsyncMock(
+            side_effect=["chooser opened", "resume attached", "current form snapshot"]
+        )
+        tool = make_click_upload_tool(caller)
+
+        result = self._run(
+            tool.ainvoke(
+                {
+                    "target": "e40",
+                    "paths": ["/resume.pdf"],
+                    "element": "primary resume",
+                }
+            )
+        )
+
+        self.assertEqual(
+            caller.await_args_list,
+            [
+                unittest.mock.call(
+                    "browser_click",
+                    {"target": "e40", "element": "primary resume"},
+                ),
+                unittest.mock.call("browser_file_upload", {"paths": ["/resume.pdf"]}),
+                unittest.mock.call("browser_snapshot", {}),
+            ],
+        )
+        self.assertIn("resume attached", result)
+        self.assertIn("current form snapshot", result)
 
 
 if __name__ == "__main__":

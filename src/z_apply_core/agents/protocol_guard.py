@@ -19,10 +19,8 @@ JSONToolCall = re.compile(
 _TOOLS_ONLY_NAMES = frozenset({"write_todos", "ask_human", "request_submit_approval", "task"})
 
 _SPECIALIST_RESULT_PREFIXES = frozenset({
-    "FIELD_MAPPER",
     "ANSWER_WRITER",
     "BROWSER_SPECIALIST",
-    "VERIFIER",
     "VISION_SPECIALIST",
 })
 
@@ -32,6 +30,7 @@ class ToolProtocolViolationDetail:
     kind: Literal[
         "exact_prose_tool_call",
         "json_tool_call_imitation",
+        "serialized_tool_call",
         "fabricated_transcript",
     ]
     detected_name: str | None
@@ -121,10 +120,31 @@ def _detect_violations(
             continue
         prose_calls = _check_exact_tool_calls(text, tool_names)
         json_calls = _check_json_imitations(text, tool_names)
+        serialized_calls = _check_serialized_tool_calls(text, tool_names)
         violations.extend(prose_calls)
         violations.extend(json_calls)
-        if prose_calls or json_calls:
+        violations.extend(serialized_calls)
+        if prose_calls or json_calls or serialized_calls:
             violations.extend(_check_fabricated_transcripts(text))
+    return violations
+
+
+def _check_serialized_tool_calls(
+    text: str,
+    tool_names: set[str],
+) -> list[ToolProtocolViolationDetail]:
+    violations: list[ToolProtocolViolationDetail] = []
+    for tool_name in tool_names:
+        match = re.search(rf"\b{re.escape(tool_name)}\s*<parameter(?:=|>)", text)
+        if match is None:
+            continue
+        violations.append(
+            ToolProtocolViolationDetail(
+                kind="serialized_tool_call",
+                detected_name=tool_name,
+                content_excerpt=text[max(0, match.start() - 20) : match.end() + 40],
+            )
+        )
     return violations
 
 
@@ -203,25 +223,16 @@ def _correction_message(
     violations: list[ToolProtocolViolationDetail],
     messages: list[Any],
 ) -> list[HumanMessage]:
-    text_parts = [_message_text(m.content) for m in messages if isinstance(m, AIMessage)]
-    raw = "\n".join(text_parts)
-    excerpt = raw[:600]
+    del messages
     detected = {v.detected_name for v in violations if v.detected_name}
-    names_str = ", ".join(sorted(detected)) if detected else "tool invocation syntax"
+    names_str = ", ".join(sorted(detected)) if detected else "a tool"
     return [
         HumanMessage(
             content=(
-                f"RUNTIME PROTOCOL ERROR\n\n"
-                f"Your previous response attempted to represent native tool execution "
-                f"as assistant text ({names_str}). Nothing in that text executed.\n\n"
-                f"Retry the same intended action now using the actual native "
-                f"tool-calling interface.\n\n"
-                f"Do not print tool_name(...).\n"
-                f"Do not print JSON pretending to be a tool call.\n"
-                f"Do not invent specialist or verifier results.\n"
-                f"Do not explain the correction.\n"
-                f"Perform the intended native tool call directly.\n\n"
-                f"Your invalid output (truncated):\n{excerpt}"
+                "RUNTIME PROTOCOL ERROR: your previous response encoded intended "
+                f"tool execution for {names_str} inside assistant content, so nothing "
+                "executed. Discard that response. Retry the same action now through "
+                "the native tool-call channel with no accompanying assistant content."
             ),
         ),
     ]

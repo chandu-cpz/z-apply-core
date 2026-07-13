@@ -27,6 +27,7 @@ def make_human_tools(
         company_name: str = "System",
         role_name: str = "Application",
         options: list[str] | None = None,
+        image_path: str = "",
     ) -> dict[str, str]:
         """Ask the human for missing or ambiguous information and wait for the answer.
 
@@ -41,6 +42,7 @@ def make_human_tools(
             company=company_name,
             role=role_name,
             options=options or [],
+            image_path=image_path,
         )
         if on_answer is not None:
             on_answer(field_label)

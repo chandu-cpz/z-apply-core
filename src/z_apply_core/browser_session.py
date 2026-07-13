@@ -8,7 +8,11 @@ from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
 
 from z_apply_core.browser_config import build_browser_config
-from z_apply_core.browser_tools import BrowserToolRegistry
+from z_apply_core.browser_tools import (
+    BROWSER_CHANGING_TOOL_NAMES,
+    BrowserToolRegistry,
+    normalize_browser_arguments,
+)
 
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
 
@@ -26,7 +30,14 @@ class BrowserSession:
         self.tools = BrowserToolRegistry(
             tuple(server.backend_pool.tools),
             self.call_tool,
-            langchain_callers={"browser_take_screenshot": self.call_tool_content},
+            langchain_callers={
+                **{
+                    name: self.call_tool_with_inline_snapshot
+                    for name in BROWSER_CHANGING_TOOL_NAMES
+                    if name != "browser_click_upload"
+                },
+                "browser_take_screenshot": self.call_tool_content,
+            },
         )
 
     @classmethod
@@ -39,7 +50,7 @@ class BrowserSession:
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         result = await self._backend.call_tool(
             name,
-            arguments or {},
+            normalize_browser_arguments(arguments),
             meta=self._call_meta(name),
         )
         _raise_for_tool_error(name, result)
@@ -53,11 +64,23 @@ class BrowserSession:
         """Return MCP text and image results as LangChain standard content blocks."""
         result = await self._backend.call_tool(
             name,
-            arguments or {},
+            normalize_browser_arguments(arguments),
             meta=self._call_meta(name),
         )
         _raise_for_tool_error(name, result)
         return _content_blocks(result)
+
+    async def call_tool_with_inline_snapshot(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> str:
+        """Execute a mutation and return current inline evidence when available."""
+        mutation = await self.call_tool(name, arguments)
+        try:
+            return await self.call_tool("browser_snapshot")
+        except BrowserToolExecutionError as exc:
+            return f"{mutation}\nPost-action inline snapshot unavailable: {exc}"
 
     async def close(self) -> None:
         await self._backend.close()

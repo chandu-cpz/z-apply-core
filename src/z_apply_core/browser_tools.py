@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
-from typing import Any, Literal, Protocol, Union, get_args, get_origin
+from typing import Any, Protocol
 
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
-
 _AGENT_TOOL_DESCRIPTIONS = {
     "browser_file_upload": (
         "Upload files into the currently open native file chooser. This tool has no "
@@ -51,6 +51,7 @@ VERIFIER_BROWSER_TOOLS = (
 BROWSER_CHANGING_TOOL_NAMES = frozenset(
     {
         "browser_click",
+        "browser_click_upload",
         "browser_type",
         "browser_fill_form",
         "browser_select_option",
@@ -58,6 +59,73 @@ BROWSER_CHANGING_TOOL_NAMES = frozenset(
         "browser_handle_dialog",
     }
 )
+
+
+def normalize_browser_arguments(
+    arguments: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Translate agent-facing ARIA reference notation at the browser boundary."""
+    normalized = dict(arguments or {})
+    target = normalized.get("target")
+    reference = _canonical_reference(target)
+    if reference is None:
+        reference = _explicit_reference(normalized.get("element"))
+    if reference is not None:
+        normalized["target"] = reference
+    return normalized
+
+
+def _canonical_reference(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    candidate = value
+    if candidate.startswith("[ref=") and candidate.endswith("]"):
+        candidate = candidate[5:-1]
+    elif candidate.startswith("ref="):
+        candidate = candidate[4:]
+    if len(candidate) > 1 and candidate[0] == "e" and candidate[1:].isdigit():
+        return candidate
+    return None
+
+
+def _explicit_reference(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    marker = "[ref="
+    start = value.find(marker)
+    if start < 0:
+        return None
+    end = value.find("]", start + len(marker))
+    if end < 0:
+        return None
+    return _canonical_reference(value[start : end + 1])
+
+
+def make_click_upload_tool(caller: TextToolCaller) -> BaseTool:
+    """Build a core-only atomic click-to-file-upload operation."""
+
+    @tool
+    async def browser_click_upload(
+        target: str,
+        paths: list[str],
+        element: str = "file upload control",
+    ) -> str:
+        """Click a file control and upload paths through its native chooser atomically."""
+        if not paths or any(not isinstance(path, str) or not path for path in paths):
+            raise ValueError("browser_click_upload requires at least one non-empty path.")
+        click_arguments = {"target": target}
+        if element:
+            click_arguments["element"] = element
+        await caller("browser_click", click_arguments)
+        uploaded = await caller("browser_file_upload", {"paths": paths})
+        try:
+            evidence = await caller("browser_snapshot", {})
+        except ToolException as exc:
+            evidence = f"Post-upload inline snapshot unavailable: {exc}"
+        return "Atomic file-control click and upload completed.\n" + uploaded + "\n" + evidence
+
+    browser_click_upload.handle_tool_error = True
+    return browser_click_upload
 
 
 class BrowserToolParameter(Protocol):
@@ -118,51 +186,25 @@ class BrowserToolRegistry:
                 or spec.title
                 or spec.name
             ),
-            args_schema=_tool_schema(spec),
+            args_schema=_tool_model(spec),
             infer_schema=False,
+            handle_tool_error=True,
         )
 
 
-def _tool_schema(spec: BrowserToolSpec) -> dict[str, Any]:
-    properties: dict[str, Any] = {}
-    required: list[str] = []
+def _tool_model(spec: BrowserToolSpec) -> type[BaseModel]:
+    fields: dict[str, tuple[Any, Any]] = {}
     for parameter in spec.parameters:
         if parameter.hidden:
             continue
-        schema = _annotation_schema(parameter.annotation)
-        if parameter.description:
-            schema["description"] = parameter.description
-        properties[parameter.name] = schema
-        if parameter.default is Parameter.empty:
-            required.append(parameter.name)
-    return {
-        "type": "object",
-        "properties": properties,
-        "required": required,
-    }
-
-
-def _annotation_schema(annotation: object) -> dict[str, Any]:
-    if annotation is str:
-        return {"type": "string"}
-    if annotation is bool:
-        return {"type": "boolean"}
-    if annotation is int:
-        return {"type": "integer"}
-    if annotation is float:
-        return {"type": "number"}
-    if annotation is None or annotation is type(None):
-        return {"type": "null"}
-
-    origin = get_origin(annotation)
-    args = get_args(annotation)
-    if origin is Literal:
-        return {"enum": list(args)}
-    if origin is list:
-        item_schema = _annotation_schema(args[0]) if args else {}
-        return {"type": "array", "items": item_schema}
-    if origin is dict:
-        return {"type": "object"}
-    if origin in {Union, type(str | None)}:
-        return {"anyOf": [_annotation_schema(option) for option in args]}
-    return {"type": "object"}
+        default = ... if parameter.default is Parameter.empty else parameter.default
+        fields[parameter.name] = (
+            parameter.annotation,
+            Field(default=default, description=parameter.description),
+        )
+    model_name = "".join(part.title() for part in spec.name.split("_")) + "Arguments"
+    return create_model(
+        model_name,
+        __config__=ConfigDict(extra="forbid"),
+        **fields,
+    )

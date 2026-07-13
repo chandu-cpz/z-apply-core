@@ -13,7 +13,7 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AnyMessage
+from langchain_core.messages import AIMessage, AnyMessage
 from nim_router import NimRouter
 from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
@@ -29,12 +29,8 @@ ROLE_POLICY: dict[str, dict[str, Any]] = {
     "orchestrator": {"priority": "balanced", "reasoning": False},
     "auth_orchestrator": {"priority": "balanced", "reasoning": False},
     "BrowserSpecialist": {"priority": "balanced", "reasoning": False},
-    "FieldMapper": {"priority": "balanced", "reasoning": False},
     "AnswerWriter": {"priority": "quality", "reasoning": False},
-    "Verifier": {"priority": "balanced", "reasoning": False},
-    "auth_verifier": {"priority": "quality", "reasoning": True},
     "VisionSpecialist": {"priority": "balanced", "reasoning": False, "force_vision": True},
-    "GoalEvaluator": {"priority": "balanced", "reasoning": False},
 }
 
 
@@ -50,15 +46,43 @@ def _detect_vision(messages: Sequence[AnyMessage]) -> bool:
     return False
 
 
+def _restore_empty_content_from_reasoning(response: Any) -> Any:
+    """Preserve a provider's final answer when it only populated reasoning_content."""
+    messages = getattr(response, "result", None)
+    if not isinstance(messages, list):
+        return response
+
+    changed = False
+    normalized: list[Any] = []
+    for message in messages:
+        if not isinstance(message, AIMessage) or message.tool_calls or message.text.strip():
+            normalized.append(message)
+            continue
+        reasoning = message.additional_kwargs.get("reasoning_content")
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            normalized.append(message)
+            continue
+        normalized.append(message.model_copy(update={"content": reasoning.strip()}))
+        changed = True
+
+    if not changed:
+        return response
+    logger.info("Recovered empty assistant content from provider reasoning_content")
+    return ModelResponse(
+        result=normalized,
+        structured_response=response.structured_response,
+    )
+
+
 class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
-    """Route every individual DeepAgents model call through ``NimRouter``.
+    """Keep one routed model sticky until a model call actually fails.
 
     Inspects the :class:`ModelRequest` to infer capabilities (tools,
     structured output, vision) and applies a role-based policy (priority,
-    reasoning). It leases a model from the router for this single call only,
-    overrides the request model, invokes the handler, then records
-    success/failure back to the router manually (the request does not expose
-    runnable config, so no callback is injected).
+    reasoning). A successful lease is reused through the agent's tool loop.
+    Provider, rate-limit, and protocol failures release it so outer retry
+    middleware can lease another eligible model without switching models
+    during healthy execution.
     """
 
     def __init__(
@@ -72,7 +96,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         self._router = router
         self._role = role
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": False})
-        self._initial_selection = initial_selection
+        self._active_selection = initial_selection
         self._last_model_id = initial_selection.info.id if initial_selection is not None else ""
 
     @property
@@ -108,8 +132,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             priority,
         )
 
-        selection = self._initial_selection
-        self._initial_selection = None
+        selection = self._active_selection
         if selection is None:
             selection = await self._router.lease(
                 tools=tools,
@@ -118,6 +141,8 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 reasoning=reasoning,
                 priority=priority,
             )
+            self._active_selection = selection
+        _attach_tracking_callback(selection)
         self._last_model_id = selection.info.id
 
         logger.info(
@@ -146,14 +171,17 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 exc,
             )
             protocol_failure = isinstance(exc, ToolProtocolViolation)
-            self._router.record_failure(
-                selection.info.id,
-                error=exc,
-                kind=ErrorKind.TOOL_CALL_FAILURE if protocol_failure else None,
-                tools=tools,
-                structured=structured,
-                vision=vision,
-            )
+            if protocol_failure:
+                self._router.record_failure(
+                    selection.info.id,
+                    error=exc,
+                    kind=ErrorKind.TOOL_CALL_FAILURE,
+                    tools=tools,
+                    structured=structured,
+                    vision=vision,
+                )
+                self._router.cooldown_model(selection.info.id, 20.0)
+            self._active_selection = None
             if protocol_failure:
                 logger.warning(
                     "NimRouterMiddleware recorded tool protocol failure for model=%s role=%s",
@@ -169,11 +197,14 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 selection.info.id,
                 latency,
             )
-            self._router.record_success(
-                selection.info.id,
-                latency=latency,
-                tools=tools,
-                structured=structured,
-                vision=vision,
-            )
-            return result
+            return _restore_empty_content_from_reasoning(result)
+
+
+def _attach_tracking_callback(selection: ModelSelection) -> None:
+    """Attach the lease callback once so every sticky invocation is RPM-accounted."""
+    callback = getattr(selection, "callback", None)
+    if callback is None:
+        return
+    callbacks = list(selection.llm.callbacks or [])
+    if callback not in callbacks:
+        selection.llm.callbacks = [*callbacks, callback]

@@ -21,7 +21,7 @@ def build_browser_specialist(
             "description": (
                 "Execute one parent-defined semantic browser operation using as many "
                 "Playwright calls as needed, without choosing the application flow or "
-                "clicking final submit."
+                "clicking final submit unless the parent explicitly confirms approval."
             ),
             "system_prompt": load_prompt(prompt_name),
             "tools": list(browser_tools),

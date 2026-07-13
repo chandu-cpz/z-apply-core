@@ -5,6 +5,8 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, sentinel
 
+from langchain.agents.middleware.types import ModelResponse
+from langchain_core.messages import AIMessage
 from nim_router import NimRouter
 from nim_router.schemas import ModelSelection
 
@@ -12,6 +14,34 @@ from z_apply_core.agents.router_middleware import NimRouterMiddleware
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_recovers_final_answer_emitted_only_as_reasoning_content(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        model = MagicMock()
+        router.lease = AsyncMock(
+            return_value=cast(
+                Any,
+                SimpleNamespace(info=SimpleNamespace(id="step/model"), llm=model),
+            )
+        )
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        request.override.return_value = sentinel.overridden_request
+        handler = AsyncMock(
+            return_value=ModelResponse(
+                result=[
+                    AIMessage(
+                        content="",
+                        additional_kwargs={"reasoning_content": "Form is open."},
+                    )
+                ]
+            )
+        )
+
+        result = await NimRouterMiddleware(router, role="BrowserSpecialist").awrap_model_call(
+            request, handler
+        )
+
+        self.assertEqual(result.result[0].content, "Form is open.")
+
     async def test_executes_initial_exploration_selection_before_leasing_again(self) -> None:
         router = MagicMock(spec=NimRouter)
         router.lease = AsyncMock()
@@ -41,9 +71,9 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         router.lease.assert_not_awaited()
         request.override.assert_called_once_with(model=initial_model)
         handler.assert_awaited_once_with(sentinel.overridden_request)
-        router.record_success.assert_called_once()
+        router.record_success.assert_not_called()
 
-    async def test_leases_normally_after_initial_selection_is_consumed(self) -> None:
+    async def test_reuses_one_healthy_lease_across_model_turns(self) -> None:
         router = MagicMock(spec=NimRouter)
         leased_model = MagicMock()
         router.lease = AsyncMock(
@@ -64,6 +94,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         middleware = NimRouterMiddleware(router, role="orchestrator")
 
         await middleware.awrap_model_call(request, handler)
+        await middleware.awrap_model_call(request, handler)
 
         router.lease.assert_awaited_once_with(
             tools=True,
@@ -72,7 +103,29 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             reasoning=False,
             priority="balanced",
         )
-        request.override.assert_called_once_with(model=leased_model)
+        self.assertEqual(request.override.call_count, 2)
+
+    async def test_releases_failed_lease_before_retry(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        first = SimpleNamespace(info=SimpleNamespace(id="first/model"), llm=MagicMock())
+        second = SimpleNamespace(info=SimpleNamespace(id="second/model"), llm=MagicMock())
+        router.lease = AsyncMock(side_effect=[first, second])
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        request.override.return_value = sentinel.overridden_request
+        middleware = NimRouterMiddleware(router, role="orchestrator")
+
+        with self.assertRaises(RuntimeError):
+            await middleware.awrap_model_call(
+                request,
+                AsyncMock(side_effect=RuntimeError("rate limited")),
+            )
+        await middleware.awrap_model_call(
+            request,
+            AsyncMock(return_value=sentinel.response),
+        )
+
+        self.assertEqual(router.lease.await_count, 2)
+        router.record_failure.assert_not_called()
 
 
 if __name__ == "__main__":

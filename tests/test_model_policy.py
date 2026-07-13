@@ -30,7 +30,7 @@ class ModelPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("moonshotai/kimi-k2-thinking", excluded)
         self.assertNotIn("qwen/qwen3.5-122b-a10b", excluded)
         self.assertNotIn("qwen/qwen3-235b-a22b", excluded)
-        self.assertIn("stepfun-ai/step-3.5-flash", excluded)
+        self.assertNotIn("stepfun-ai/step-3.5-flash", excluded)
         self.assertNotIn("stepfun-ai/step-3.7-flash", excluded)
         self.assertIn("z-ai/glm-5.1", excluded)
 

@@ -14,6 +14,7 @@ class HumanChannel(Protocol):
         role: str = "Application",
         options: list[str] | None = None,
         risk: str = "medium",
+        image_path: str = "",
     ) -> str: ...
 
     async def confirm(

@@ -75,6 +75,39 @@ class ProseToolCallGuardTests(unittest.TestCase):
         with self.assertRaises(ToolProtocolViolation):
             self._run(middleware.awrap_model_call(request, handler))
 
+    def test_provider_parameter_markup_is_not_treated_as_a_tool_call(self) -> None:
+        tool = MagicMock()
+        tool.name = "authentication_verified"
+        request = _make_request(tools=[tool])
+        invalid = _make_response([
+            AIMessage(
+                content=(
+                    "authentication_verified <parameter=evidence>dashboard visible"
+                ),
+                tool_calls=[],
+            ),
+        ])
+        valid = _make_response([
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "authentication_verified",
+                        "args": {"evidence": "dashboard visible"},
+                        "id": "call-2",
+                    }
+                ],
+            ),
+        ])
+        handler = AsyncMock(side_effect=[invalid, valid])
+
+        result = self._run(
+            ProseToolCallGuardMiddleware().awrap_model_call(request, handler)
+        )
+
+        self.assertEqual(result.result[0].tool_calls[0]["name"], "authentication_verified")
+        self.assertEqual(handler.await_count, 2)
+
     def test_json_name_arguments_imitation(self) -> None:
         tool = MagicMock()
         tool.name = "task"

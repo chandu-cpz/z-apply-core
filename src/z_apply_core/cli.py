@@ -11,12 +11,13 @@ from z_apply_core.logging_config import configure_logging
 from z_apply_core.rich_stream import RichStreamRenderer
 
 DEFAULT_RUN_TASK = (
-    "Prepare the current job application for review: enter the form if needed, "
+    "Complete and submit the current job application: enter the form if needed, "
     "upload the resume early when the primary resume/CV control is available, reuse "
     "known candidate and saved-profile facts, ask the human only for unavailable "
     "answers, and fill the remaining fields in verified semantic operations. Defer a "
     "final-submit CAPTCHA while other work remains. When review-ready, request human "
-    "submission approval, but do not click final submit in this runtime."
+    "submission approval. If approved, activate final submit and verify visible "
+    "submission confirmation."
 )
 DEFAULT_JOB_URL = "https://amberstudent.keka.com/careers/jobdetails/133388"
 
