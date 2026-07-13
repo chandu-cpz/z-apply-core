@@ -7,6 +7,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CORE_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_SIMPLIFY_ADDON_PATH = Path.home() / "Downloads" / "simplify_jobs-2.3.0"
 
 
 class Settings(BaseSettings):
@@ -14,6 +15,10 @@ class Settings(BaseSettings):
     default_password: str = Field(default="", alias="DEFAULT_PASSWORD")
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_group_chat_id: str = Field(default="", alias="TELEGRAM_GROUP_CHAT_ID")
+    simplify_addon_path: Path = Field(
+        default=DEFAULT_SIMPLIFY_ADDON_PATH,
+        alias="SIMPLIFY_ADDON_PATH",
+    )
 
     model_config = SettingsConfigDict(
         env_file=CORE_ROOT / ".env",

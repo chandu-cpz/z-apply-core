@@ -13,13 +13,19 @@ def build_browser_config(run_id: str = "manual") -> dict[str, Any]:
     profile_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     settings = load_settings()
+    addon_path = Path(settings.simplify_addon_path).expanduser().resolve()
+    if not addon_path.is_dir():
+        raise ValueError(f"Configured Simplify addon directory does not exist: {addon_path}")
 
     config: dict[str, Any] = {
         "browser": {
             "provider": "camoufox",
             "browserName": "firefox",
             "userDataDir": str(profile_dir),
-            "camoufoxOptions": {"no_viewport": True},
+            "camoufoxOptions": {
+                "no_viewport": True,
+                "addons": [str(addon_path)],
+            },
         },
         "outputDir": str(output_dir),
         "outputMode": "stdout",

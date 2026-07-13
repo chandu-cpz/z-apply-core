@@ -233,6 +233,13 @@ Job URL: {job_url}
 Configured resume: {resume_path}
 CAPTCHA artifact path: {captcha_path}
 
+Simplify policy:
+The Simplify addon is natively loaded in the persistent browser. Interact with
+its visible page UI once after an editable application form appears and before
+direct resume/fact filling. Observe the actual form afterward and trust only
+visible field values, not an extension success label. If its UI is absent,
+times out, or changes nothing, continue direct filling immediately.
+
 Objective:
 {task}
 

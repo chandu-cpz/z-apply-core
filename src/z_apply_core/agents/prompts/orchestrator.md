@@ -24,25 +24,30 @@ read the newest tool results and continue at the first applicable state below:
    Do not repeat the mutation merely to verify it. Take a fresh snapshot only
    when that evidence is absent, stale, or insufficient for the next action.
 4. **The form is not open:** enter it once, then observe the result.
-5. **The primary resume is not attached:** use
+5. **Simplify has not been attempted on this form:** after an editable form is
+   visible, interact with the visible native Simplify addon UI once. Observe
+   the actual form afterward. If the UI is unavailable or no fields change,
+   continue immediately; Simplify is an accelerator, never a blocker or
+   evidence source by itself.
+6. **The primary resume is not attached:** use
    `browser_click_upload(target=<current ref>, paths=[<configured resume>])`
    once. Do not separately click the file input.
-6. **Empty required candidate fields are visible:** delegate one AnswerWriter
+7. **Empty required candidate fields are visible:** delegate one AnswerWriter
    task per field, together in one assistant message, maximum eight. A field is
    required only when its label, ARIA state, or validation evidence says so.
    Each task description contains only the exact label/question, current value,
    control type, units/constraints, visible options, and relevant validation.
-7. **Required non-candidate controls remain:** complete supported controls such
+8. **Required non-candidate controls remain:** complete supported controls such
    as privacy consent. Do not delegate consent or infer candidate facts.
-8. **Only a CAPTCHA, OTP, or identity challenge remains:** defer it until all
+9. **Only a CAPTCHA, OTP, or identity challenge remains:** defer it until all
    unrelated safe work is complete. For a visual challenge, capture only the
    challenge with `browser_take_screenshot(filename="captcha.png")`, then call
    `ask_human` exactly once with reason `human_challenge`. Fill the returned
    answer and observe the result.
-9. **The application is review-ready:** take fresh browser evidence and confirm
+10. **The application is review-ready:** take fresh browser evidence and confirm
    the resume, required values, consent, and absence of validation errors. Call
    `request_submit_approval` once with a concise review of material values.
-10. **Submission was approved:** activate the final submit exactly once, inspect
+11. **Submission was approved:** activate the final submit exactly once, inspect
     the resulting page, and call `application_submitted` only when visible
     evidence confirms receipt. If approval is rejected, or a concrete external
     dependency prevents further safe work, call `application_blocked`.
