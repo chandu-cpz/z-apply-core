@@ -12,6 +12,44 @@ from z_apply_core.memory.applicant_memory import CandidateMemory
 logger = logging.getLogger(__name__)
 
 
+def make_manual_auth_tool(
+    channel: HumanChannel,
+    *,
+    human_challenge_image_path: str = "",
+) -> BaseTool:
+    """Create one fixed, credential-safe manual authentication handoff."""
+
+    @tool
+    async def request_manual_auth(
+        challenge_summary: str,
+        url: str = "",
+        company_name: str = "System",
+        role_name: str = "Application",
+    ) -> dict[str, str]:
+        """Ask the human to complete the visible auth gate in the live browser.
+
+        Never requests credentials in Telegram. The human replies with one
+        button after completing the browser action or when unable to continue.
+        """
+        answer = await channel.ask(
+            question=(
+                "Please complete the visible authentication or CAPTCHA in the live "
+                "browser, then choose one option."
+            ),
+            context=challenge_summary,
+            url=url,
+            company=company_name,
+            role=role_name,
+            options=["Done", "Cannot complete"],
+            image_path=human_challenge_image_path,
+        )
+        return {
+            "manual_auth": "done" if answer == "Done" else "cannot_complete"
+        }
+
+    return request_manual_auth
+
+
 def make_human_tools(
     channel: HumanChannel,
     *,

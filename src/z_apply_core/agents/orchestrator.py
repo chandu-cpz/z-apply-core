@@ -27,7 +27,7 @@ from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.human.channel import HumanChannel
-from z_apply_core.human.tools import make_human_tools
+from z_apply_core.human.tools import make_human_tools, make_manual_auth_tool
 from z_apply_core.log_labels import node_info
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.stream_events import FrameworkEventSink, SequencedEventSink
@@ -116,6 +116,16 @@ async def run_orchestrator(
             ),
             human_challenge_image_path=str(_captcha_path(run_id)),
         )
+    manual_auth_tools = (
+        [
+            make_manual_auth_tool(
+                human_channel,
+                human_challenge_image_path=str(_captcha_path(run_id)),
+            )
+        ]
+        if human_channel is not None
+        else []
+    )
 
     @tool(return_direct=True)
     async def application_submitted(confirmation: str) -> str:
@@ -186,7 +196,7 @@ async def run_orchestrator(
             answer_writer_middleware=[answer_writer_human_guard],
             authentication_tools=[
                 *authentication_tools,
-                *[tool for tool in human_tools if tool.name == "ask_human"],
+                *manual_auth_tools,
             ],
         ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
@@ -250,7 +260,9 @@ The Simplify addon is natively loaded in the persistent browser. Trigger its
 explicit Autofill action once on every newly rendered editable application-form
 step, before direct resume/fact filling. A job description, login page, cookie
 banner, landing page, or confirmation page is not a form step; reach visible
-editable application controls first. A multi-step form may render a new step
+editable application controls first. A button-only choice dialog is not a form
+step: require an actual textbox, combobox, checkbox, radio, or file input before
+Autofill. A multi-step form may render a new step
 without changing the URL. Never click the generic Simplify panel/header,
 Profile, job tracker, referral, tailoring, or keyword controls as Autofill, and
 never trigger twice on the same unchanged controls. Observe the actual form

@@ -27,18 +27,20 @@ read the newest tool results and continue at the first applicable state below:
 4. **The form is not open:** enter it once, then observe the result.
 5. **A login, email-verification, OTP, or identity gate is visible:** delegate
    one `AuthenticationSpecialist` task with the current URL and exact visible
-   gate evidence. It owns that gate, configured credentials, read-only Gmail,
-   and one-question human fallback. When it returns, continue only from fresh
-   browser evidence; never treat its prose alone as proof. Do not ask
-   AnswerWriter for authentication data.
+   gate evidence. It owns the authorized login → account creation → password
+   reset recovery order, configured secrets, read-only Gmail, and a fixed
+   one-question manual-browser fallback. Never instruct it to ask for raw
+   credentials. When it returns, continue only from fresh browser evidence;
+   never treat its prose alone as proof. Do not ask AnswerWriter for auth data.
 6. **Simplify has not been attempted on this rendered form step:** after each
    newly rendered page or step with editable application fields, interact with
    the visible native Simplify addon UI exactly once before direct filling. A
    new step means the visible form controls changed after navigation or an
    advance action; the URL may stay the same. A job description, login page,
-   cookie banner, landing page, or confirmation page is not an editable form
-   step: reach visible application controls first and do not touch Simplify on
-   those pages. Do not trigger Simplify again on the same unchanged step.
+   cookie banner, landing page, confirmation page, or choice dialog containing
+   only buttons is not an editable form step. At least one actual textbox,
+   combobox, checkbox, radio, or file input must be visible before using
+   Simplify. Do not trigger Simplify again on the same unchanged step.
    Trigger only an explicit addon action whose accessible purpose is autofilling
    the current page. Never click the generic Simplify panel/header, Profile,
    job-tracker, referral, resume-tailoring, or keyword controls as an autofill

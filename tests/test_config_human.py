@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, patch
 from z_apply_core.config import Settings, load_settings
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.human.telegram import TelegramHumanChannel
-from z_apply_core.human.tools import make_human_tools
+from z_apply_core.human.tools import make_human_tools, make_manual_auth_tool
 
 
 class FakeHumanChannel:
@@ -120,6 +120,27 @@ class SettingsTests(unittest.TestCase):
 
 
 class HumanToolTests(unittest.IsolatedAsyncioTestCase):
+    async def test_manual_auth_handoff_never_requests_credentials(self) -> None:
+        channel = SimpleNamespace(ask=AsyncMock(return_value="Done"))
+        manual_auth = make_manual_auth_tool(
+            channel,
+            human_challenge_image_path="/runtime/captcha.png",
+        )
+
+        result = await manual_auth.ainvoke(
+            {
+                "challenge_summary": "Workday sign-in needs manual completion.",
+                "url": "https://example.test/signin",
+            }
+        )
+
+        request = channel.ask.await_args.kwargs
+        self.assertNotIn("password", request["question"].casefold())
+        self.assertNotIn("credential", request["question"].casefold())
+        self.assertEqual(request["options"], ["Done", "Cannot complete"])
+        self.assertEqual(request["image_path"], "/runtime/captcha.png")
+        self.assertEqual(result, {"manual_auth": "done"})
+
     async def test_human_tools_delegate_to_channel(self) -> None:
         ask_human, request_submit_approval = make_human_tools(FakeHumanChannel())
 

@@ -9,9 +9,12 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 from nim_router import NimRouter
 
+from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
 from z_apply_core.agents.specialists.vision import build_vision_specialist
@@ -53,6 +56,13 @@ async def build_specialists(
             router=router,
             role="AuthenticationSpecialist",
             model=fallback_model,
+            extra_middleware=[
+                SafeToolBatchMiddleware(),
+                NoProgressGuardMiddleware(),
+                HumanEscalationGuardMiddleware(
+                    allowed_reasons=frozenset({"human_challenge"})
+                ),
+            ],
         ),
         _with_routing(
             build_vision_specialist(browser_tools),
