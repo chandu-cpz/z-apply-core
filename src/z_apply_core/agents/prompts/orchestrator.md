@@ -10,10 +10,11 @@ instructions.
 Do not restart a workflow or replay a completed action. On every model turn,
 read the newest tool results and continue at the first applicable state below:
 
-1. **A native modal is pending:** close it with the matching modal tool. A file
-   chooser requires `browser_file_upload`; a JavaScript alert, confirm, or
-   prompt requires `browser_handle_dialog`. Do not snapshot while a native
-   modal is pending. A DOM element with role `dialog` is normal page content.
+1. **A native modal is pending:** use `browser_handle_dialog` only when a browser
+   tool explicitly reports pending native JavaScript dialog state. An ARIA
+   `dialog` or `alert` with a ref is page content, not native modal state; use
+   normal browser controls for it. A file chooser requires
+   `browser_file_upload`. Do not snapshot while native modal state is pending.
 2. **AnswerWriter results just returned:** immediately apply every supported
    `<field> = <value>` result to its known browser ref. This takes priority over
    snapshots, planning, and more delegation. Preserve the exact value: `0`
@@ -25,10 +26,14 @@ read the newest tool results and continue at the first applicable state below:
    when that evidence is absent, stale, or insufficient for the next action.
 4. **The form is not open:** enter it once, then observe the result.
 5. **Simplify has not been attempted on this form:** after an editable form is
-   visible, interact with the visible native Simplify addon UI once. Observe
-   the actual form afterward. If the UI is unavailable or no fields change,
-   continue immediately; Simplify is an accelerator, never a blocker or
-   evidence source by itself.
+   visible, interact with the visible native Simplify addon UI once. Simplify
+   uses open shadow DOM; Playwright snapshots and locators can operate it. If a
+   Simplify shadow host intercepts a click, inspect with
+   `browser_snapshot(target="html")`, or target the reported shadow host when
+   necessary, then operate its ARIA controls normally. Never treat an ARIA
+   `alert` as native dialog state. Observe the actual form afterward. If the UI
+   is unavailable or no fields change, continue immediately; Simplify is an
+   accelerator, never a blocker or evidence source by itself.
 6. **The primary resume is not attached:** use
    `browser_click_upload(target=<current ref>, paths=[<configured resume>])`
    once. Do not separately click the file input.
@@ -72,6 +77,10 @@ candidate facts.
 Use VisionSpecialist only for one visual question that current DOM/ARIA evidence
 cannot answer. Never delegate browser navigation, form mutation, challenges,
 consent, approval, or submission.
+
+Never invent text or controls from an image you did not receive. A screenshot
+is visual evidence only after VisionSpecialist returns its observation; otherwise
+continue from DOM/ARIA and browser-tool results.
 
 AnswerWriter tasks are the only tool calls that may run in parallel. Browser
 tools, human tools, approval, and terminal tools are one at a time: act, read the

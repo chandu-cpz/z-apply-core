@@ -19,6 +19,48 @@ from z_apply_core.browser_tools import BrowserToolRegistry
 
 
 class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
+    async def test_full_snapshot_is_rooted_at_html_for_open_shadow_dom(self) -> None:
+        backend = SimpleNamespace(
+            call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),
+            close=AsyncMock(),
+        )
+        server = SimpleNamespace(
+            backend=backend,
+            backend_pool=SimpleNamespace(tools=[]),
+        )
+        session = BrowserSession(server, run_id="test-run")
+
+        await session.call_tool("browser_snapshot", {})
+
+        self.assertEqual(
+            backend.call_tool.await_args.args,
+            ("browser_snapshot", {"target": "html"}),
+        )
+
+    async def test_explicit_snapshot_target_is_preserved(self) -> None:
+        backend = SimpleNamespace(
+            call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),
+            close=AsyncMock(),
+        )
+        server = SimpleNamespace(
+            backend=backend,
+            backend_pool=SimpleNamespace(tools=[]),
+        )
+        session = BrowserSession(server, run_id="test-run")
+
+        await session.call_tool(
+            "browser_snapshot",
+            {"target": ".simplify-jobs-shadow-root"},
+        )
+
+        self.assertEqual(
+            backend.call_tool.await_args.args,
+            (
+                "browser_snapshot",
+                {"target": ".simplify-jobs-shadow-root"},
+            ),
+        )
+
     async def test_agent_aria_reference_notation_is_normalized_for_backend(self) -> None:
         backend = SimpleNamespace(
             call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),

@@ -50,9 +50,12 @@ class BrowserSession:
         )
 
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
+        normalized = normalize_browser_arguments(arguments)
+        if name == "browser_snapshot" and "target" not in normalized:
+            normalized["target"] = "html"
         result = await self._backend.call_tool(
             name,
-            normalize_browser_arguments(arguments),
+            normalized,
             meta=self._call_meta(name),
         )
         _raise_for_tool_error(name, result)
