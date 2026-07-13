@@ -127,23 +127,58 @@ class BrowserSession:
         return evidence
 
     async def upload_files(self, target: str, paths: list[str]) -> str:
-        """Resolve a current ARIA target and attach files without native chooser state."""
+        """Resolve an upload trigger to its file input without opening a chooser."""
         tab = await self._backend._ensure_tab()
         resolved = await tab.resolve_target(target=target)
         locator = resolved.locator
-        is_file_input = await locator.evaluate(
-            "element => element instanceof HTMLInputElement && element.type === 'file'"
+        handle = await locator.evaluate_handle(
+            r"""element => {
+                const isFileInput = candidate =>
+                    candidate instanceof HTMLInputElement && candidate.type === 'file';
+                if (isFileInput(element)) return element;
+
+                const uniqueFileInput = container => {
+                    if (!container || !container.querySelectorAll) return null;
+                    const inputs = [...container.querySelectorAll('input[type="file"]')];
+                    return inputs.length === 1 ? inputs[0] : null;
+                };
+
+                const label = element.closest('label');
+                if (label && isFileInput(label.control)) return label.control;
+
+                const controlledIds = [element.getAttribute('for'),
+                    element.getAttribute('aria-controls')]
+                    .filter(Boolean)
+                    .flatMap(value => value.trim().split(/\s+/));
+                for (const id of controlledIds) {
+                    const controlled = element.ownerDocument.getElementById(id);
+                    if (isFileInput(controlled)) return controlled;
+                }
+
+                let container = element;
+                while (container) {
+                    const input = uniqueFileInput(container);
+                    if (input) return input;
+                    container = container.parentElement;
+                }
+
+                const rootInput = uniqueFileInput(element.getRootNode());
+                if (rootInput) return rootInput;
+                return uniqueFileInput(element.ownerDocument);
+            }"""
         )
-        if not is_file_input:
-            file_inputs = locator.locator("input[type=file]")
-            count = await file_inputs.count()
-            if count != 1:
-                raise BrowserToolExecutionError(
-                    f"Upload target {target!r} is not a file input and contains "
-                    f"{count} file inputs."
-                )
-            locator = file_inputs
-        await locator.set_input_files(paths)
+        file_input = handle.as_element()
+        if file_input is None:
+            await handle.dispose()
+            raise BrowserToolExecutionError(
+                f"Upload target {target!r} could not be associated with exactly one "
+                "file input. Capture fresh evidence and call browser_click_upload on "
+                "the upload control; never click it to open a native chooser."
+            )
+        try:
+            await file_input.set_input_files(paths)
+        finally:
+            await handle.dispose()
         evidence = await self.call_tool("browser_snapshot")
         return "Files attached directly to the resolved upload control.\n" + evidence
 

@@ -13,14 +13,7 @@ LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 FileUploader = Callable[[str, list[str]], Awaitable[str]]
 AuthSubmitter = Callable[[str], Awaitable[str]]
 VerificationLinkOpener = Callable[[str], Awaitable[str]]
-_AGENT_TOOL_DESCRIPTIONS = {
-    "browser_file_upload": (
-        "Upload files into the currently open native file chooser. This tool has no "
-        "target or selector argument. First open the chooser with browser_click, then "
-        "immediately call browser_file_upload with paths as a JSON array of absolute "
-        'paths, for example paths=["/absolute/resume.pdf"].'
-    ),
-}
+_AGENT_TOOL_DESCRIPTIONS: dict[str, str] = {}
 
 INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_snapshot",
@@ -29,7 +22,6 @@ INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_type",
     "browser_fill_form",
     "browser_select_option",
-    "browser_file_upload",
     "browser_tabs",
     "browser_wait_for",
     "browser_handle_dialog",

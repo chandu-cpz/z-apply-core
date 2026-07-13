@@ -13,8 +13,9 @@ read the newest tool results and continue at the first applicable state below:
 1. **A native modal is pending:** use `browser_handle_dialog` only when a browser
    tool explicitly reports pending native JavaScript dialog state. An ARIA
    `dialog` or `alert` with a ref is page content, not native modal state; use
-   normal browser controls for it. A file chooser requires
-   `browser_file_upload`. Do not snapshot while native modal state is pending.
+   normal browser controls for it. Never open a native file chooser. The only
+   valid file-attachment operation is `browser_click_upload`, which resolves the
+   visible upload control to its file input and attaches the file atomically.
 2. **AnswerWriter results just returned:** immediately apply every supported
    `<field> = <value>` result to its known browser ref. This takes priority over
    snapshots, planning, and more delegation. Preserve the exact value: `0`
@@ -55,7 +56,10 @@ read the newest tool results and continue at the first applicable state below:
    Simplify is an accelerator per step, never a blocker or a success signal.
 7. **The primary resume is not attached:** use
    `browser_click_upload(target=<current ref>, paths=[<configured resume>])`
-   once. Do not separately click the file input.
+   once. Never use `browser_click` on a Choose file, Select file, Upload resume,
+   or equivalent upload trigger. If the atomic operation fails, inspect fresh
+   evidence and retry it with the correct current ref; do not fall back to a
+   native chooser.
 8. **Empty required candidate fields are visible:** delegate one AnswerWriter
    task per field, together in one assistant message, maximum eight. A field is
    required only when its label, ARIA state, or validation evidence says so.

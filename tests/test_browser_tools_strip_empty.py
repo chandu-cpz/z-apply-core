@@ -177,24 +177,6 @@ class StripEmptyArgsTests(unittest.TestCase):
 
         self.assertEqual(result, "stale browser ref")
 
-    def test_file_upload_tool_exposes_native_chooser_contract(self) -> None:
-        spec = SimpleSpec(
-            name="browser_file_upload",
-            title="Upload files",
-            description="Upload one or multiple files",
-            parameters=[SimpleParam("paths", list[str], None, "File paths", False)],
-        )
-        registry = BrowserToolRegistry(specs=[spec], caller=AsyncMock())
-
-        tool = registry.langchain_tools()[0]
-
-        self.assertIn("currently open native file chooser", tool.description)
-        self.assertIn('paths=["/absolute/resume.pdf"]', tool.description)
-        self.assertIn("no target or selector", tool.description)
-
-        self._run(tool.ainvoke({"paths": '["/resume.pdf"]'}))
-        self.assertEqual(registry._caller.await_args.args[1]["paths"], ["/resume.pdf"])
-
     def test_atomic_click_upload_passes_typed_paths_to_direct_uploader(self) -> None:
         uploader = AsyncMock(return_value="resume attached with current form snapshot")
         tool = make_click_upload_tool(uploader)
