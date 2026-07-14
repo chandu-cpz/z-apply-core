@@ -50,7 +50,6 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "nvidia/nvidia-nemotron-nano-9b-v2",
     "nvidia/nemotron-3-ultra-550b-a55b",
     "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
     "nvidia/nemotron-3-nano-30b-a3b",
     "qwen/qwen3-next-80b-a3b-instruct",
     "qwen/qwen3-next-80b-a3b-thinking",
