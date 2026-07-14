@@ -4,6 +4,8 @@ import unittest
 from collections.abc import AsyncIterator
 from typing import Any
 
+from langchain_core.messages import ToolMessage
+
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.stream_events import FrameworkTraceEvent
 
@@ -67,6 +69,26 @@ class FakeSubagent:
         self.output = done()
 
 
+class FakeToolCall:
+    tool_name = "task"
+    tool_call_id = "call-1"
+    parent_tool_call_id = ""
+    input = {"subagent_type": "AnswerWriter", "description": "Resolve Skills"}
+    output_deltas = async_items([])
+    output = ToolMessage(
+        content={"answer": "Skills = Python, FastAPI"},
+        tool_call_id="call-1",
+    )
+    error = None
+    completed = True
+
+
+class FakeToolStream(FakeStream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_calls = async_items([FakeToolCall()])
+
+
 class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_orchestrator_text_deltas_are_streamed(self) -> None:
         sink = CollectingSink()
@@ -103,6 +125,20 @@ class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
             if event.event == "agent_message_delta" and event.data.get("kind") == "text"
         ]
         self.assertIn("fake JSON task call", rendered_text)
+
+    async def test_completed_tool_event_contains_normalized_authoritative_output(self) -> None:
+        sink = CollectingSink()
+
+        await consume_deepagent_stream(FakeToolStream(), sink=sink)
+
+        completed = next(event for event in sink.events if event.event == "agent_tool_end")
+        self.assertEqual(
+            completed.data["output"],
+            {
+                "content": "{'answer': 'Skills = Python, FastAPI'}",
+                "status": "success",
+            },
+        )
 
 
 if __name__ == "__main__":

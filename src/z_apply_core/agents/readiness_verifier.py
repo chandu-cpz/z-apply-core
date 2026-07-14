@@ -77,6 +77,7 @@ async def require_submission_readiness(
         router,
         role="ReadinessVerifier",
         initial_selection=selection,
+        sink=sink,
     )
     agent = create_deep_agent(
         model=selection.llm,

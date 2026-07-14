@@ -76,6 +76,7 @@ async def run_auth_orchestrator(
         router,
         role="auth_orchestrator",
         initial_selection=selection,
+        sink=sink,
     )
     agent = create_deep_agent(
         model=selection.llm,

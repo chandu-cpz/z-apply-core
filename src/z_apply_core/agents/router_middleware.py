@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Sequence
@@ -20,6 +21,7 @@ from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +111,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         role: str,
         *,
         initial_selection: ModelSelection | None = None,
+        sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
         self._router = router
@@ -116,6 +119,8 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": False})
         self._active_selection = initial_selection
         self._last_model_id = initial_selection.info.id if initial_selection is not None else ""
+        self._sink = sink
+        self._selection_announced = False
 
     @property
     def role(self) -> str:
@@ -145,6 +150,12 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             selection.info.id,
         )
         self._active_selection = None
+        self._selection_announced = False
+        self._emit_from_sync(
+            "model_rotated",
+            selection.info.id,
+            {"reason": "tool_protocol_failure"},
+        )
 
     async def awrap_model_call(
         self,
@@ -172,6 +183,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         )
 
         selection = self._active_selection
+        leased_new = selection is None
         if selection is None:
             selection = await self._router.lease(
                 tools=tools,
@@ -183,6 +195,20 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             self._active_selection = selection
         _attach_tracking_callback(selection)
         self._last_model_id = selection.info.id
+        if leased_new or not self._selection_announced:
+            await self._emit(
+                "model_selected",
+                selection.info.id,
+                {
+                    "role": self._role,
+                    "priority": priority,
+                    "tools": tools,
+                    "structured": structured,
+                    "vision": vision,
+                    "reasoning": reasoning,
+                },
+            )
+            self._selection_announced = True
 
         logger.info(
             "router %s selected %s (priority=%s, tools=%s, structured=%s, "
@@ -221,6 +247,21 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 )
                 self._router.cooldown_model(selection.info.id, 20.0)
             self._active_selection = None
+            self._selection_announced = False
+            await self._emit(
+                "model_failed",
+                selection.info.id,
+                {
+                    "role": self._role,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            await self._emit(
+                "model_rotated",
+                selection.info.id,
+                {"role": self._role, "reason": "model_call_failed"},
+            )
             if protocol_failure:
                 logger.warning(
                     "NimRouterMiddleware recorded tool protocol failure for model=%s role=%s",
@@ -246,6 +287,21 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 )
                 self._router.cooldown_model(selection.info.id, 20.0)
                 self._active_selection = None
+                self._selection_announced = False
+                await self._emit(
+                    "model_failed",
+                    selection.info.id,
+                    {
+                        "role": self._role,
+                        "error_type": type(failure).__name__,
+                        "error": str(failure),
+                    },
+                )
+                await self._emit(
+                    "model_rotated",
+                    selection.info.id,
+                    {"role": self._role, "reason": "missing_native_action"},
+                )
                 raise failure
             logger.info(
                 "router %s model %s succeeded in %.2fs",
@@ -254,6 +310,27 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 latency,
             )
             return result
+
+    async def _emit(self, event: str, model_id: str, data: dict[str, Any]) -> None:
+        if self._sink is None:
+            return
+        await self._sink.accept(
+            FrameworkTraceEvent(
+                event=event,
+                name=self._role,
+                data={"model_id": model_id, **data},
+                raw={},
+            )
+        )
+
+    def _emit_from_sync(self, event: str, model_id: str, data: dict[str, Any]) -> None:
+        if self._sink is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._emit(event, model_id, {"role": self._role, **data}))
 
 
 def _attach_tracking_callback(selection: ModelSelection) -> None:

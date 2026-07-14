@@ -179,6 +179,7 @@ async def run_orchestrator(
         router,
         role="orchestrator",
         initial_selection=selection,
+        sink=event_sink,
     )
     active_goal_middleware = ActiveGoalMiddleware(
         is_terminal=lambda: terminal is not None,
@@ -226,6 +227,7 @@ async def run_orchestrator(
                 *authentication_tools,
                 *manual_auth_tools,
             ],
+            sink=event_sink,
         ),
         backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
         permissions=deepagent_filesystem_permissions(run_id),

@@ -775,6 +775,7 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "agent_message_delta": "agent.message.delta",
         "agent_model_tool_call": "model.tool_call.delta",
         "model_selected": "model.selected",
+        "model_failed": "model.failed",
         "model_rotated": "model.rotated",
         "model_rate_limited": "model.rate_limited",
         "recovery_started": "recovery.started",

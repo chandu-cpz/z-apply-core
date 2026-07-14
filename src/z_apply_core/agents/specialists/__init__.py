@@ -19,6 +19,7 @@ from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
 from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.memory.applicant_memory import CandidateMemory, build_answer_writer_memory_tools
+from z_apply_core.stream_events import FrameworkEventSink
 
 
 def _with_routing(
@@ -28,10 +29,11 @@ def _with_routing(
     role: str,
     model: BaseChatModel,
     extra_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
+    sink: FrameworkEventSink | None = None,
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
-    router_middleware = NimRouterMiddleware(router, role=role)
+    router_middleware = NimRouterMiddleware(router, role=role, sink=sink)
     enriched["middleware"] = [
         *extra_middleware,
         NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
@@ -51,6 +53,7 @@ async def build_specialists(
     answer_writer_human_tools: Sequence[BaseTool] = (),
     answer_writer_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
     authentication_tools: Sequence[BaseTool] = (),
+    sink: FrameworkEventSink | None = None,
 ) -> list[SubAgent]:
     return [
         _with_routing(
@@ -62,12 +65,14 @@ async def build_specialists(
                 SafeToolBatchMiddleware(),
                 HumanEscalationGuardMiddleware(allowed_reasons=frozenset({"human_challenge"})),
             ],
+            sink=sink,
         ),
         _with_routing(
             build_vision_specialist(browser_tools),
             router=router,
             role="VisionSpecialist",
             model=fallback_model,
+            sink=sink,
         ),
         _with_routing(
             build_answer_writer(
@@ -80,5 +85,6 @@ async def build_specialists(
             role="AnswerWriter",
             model=fallback_model,
             extra_middleware=answer_writer_middleware,
+            sink=sink,
         ),
     ]

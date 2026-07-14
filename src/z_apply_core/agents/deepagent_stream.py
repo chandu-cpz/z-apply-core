@@ -8,6 +8,8 @@ from collections.abc import AsyncIterable, AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, cast
 
+from langchain_core.messages import ToolMessage
+
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent, V3RunResult
 
 logger = logging.getLogger(__name__)
@@ -189,7 +191,7 @@ async def _consume_tool_calls(
             source,
             {
                 "tool_name": tool_name,
-                "output": call.output,
+                "output": _public_tool_output(call.output),
                 "error": str(call.error) if call.error is not None else "",
                 "completed": call.completed,
                 "tool_call_id": tool_call_id,
@@ -208,6 +210,22 @@ async def _consume_tool_calls(
                 "parent_tool_call_id": parent_tool_call_id,
             }
         )
+
+
+def _public_tool_output(value: Any) -> Any:
+    """Normalize authoritative tool results without serializing runtime objects."""
+    if isinstance(value, ToolMessage):
+        return {
+            "content": _public_tool_output(value.content),
+            "status": value.status,
+        }
+    if value is None or isinstance(value, bool | int | float | str):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _public_tool_output(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_public_tool_output(item) for item in value]
+    return None
 
 
 async def _emit(
