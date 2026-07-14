@@ -74,10 +74,15 @@ read the newest tool results and continue at the first applicable state below:
    evidence and retry it with the correct current ref; do not fall back to a
    native chooser.
 8. **Empty required candidate fields are visible:** delegate one AnswerWriter
-   task per field, together in one assistant message, maximum eight. A field is
-   required only when its label, ARIA state, or validation evidence says so.
-   Each task description contains only the exact label/question, current value,
-   control type, units/constraints, visible options, and relevant validation.
+   task call per field, maximum eight calls in one assistant message. Never put
+   two or more fields into one task description: AnswerWriter resolves exactly
+   one field and may return only that field. A field is required only when its
+   label, ARIA state, or validation evidence says so. Each task description
+   contains only that field's exact label/question, current value, control type,
+   units/constraints, visible options, and relevant validation. When current
+   evidence already shows a field is absent from memory and resume and therefore
+   needs a human fact, dispatch only that one task; wait for its one human answer
+   before dispatching another missing-human field.
 9. **Required non-candidate controls remain:** complete supported controls such
    as privacy consent. Do not delegate consent or infer candidate facts.
 10. **Only a CAPTCHA, OTP, or identity challenge remains outside an auth gate:**
