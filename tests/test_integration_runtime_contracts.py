@@ -120,8 +120,10 @@ async def test_browser_gate_serializes_operations_across_run_sessions() -> None:
 @pytest.mark.asyncio
 async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
     workspace = BrowserWorkspace()
-    anchor = SimpleNamespace(_ensure_context=AsyncMock())
-    pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor))
+    tabs = [SimpleNamespace(page=object()), SimpleNamespace(page=object())]
+    context = SimpleNamespace(new_tab=AsyncMock(side_effect=tabs))
+    anchor = SimpleNamespace(_ensure_context=AsyncMock(return_value=context))
+    pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor), tools=())
     server = SimpleNamespace(backend_pool=pool)
 
     with (
@@ -133,11 +135,17 @@ async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
         patch("z_apply_core.browser_workspace.LiveView.start"),
     ):
         await asyncio.gather(workspace.start(), workspace.start(), workspace.start())
+        first, second = await asyncio.gather(
+            workspace.open_run("run-1"), workspace.open_run("run-2")
+        )
 
     create.assert_awaited_once()
     pool.backend_for.assert_awaited_once_with("__z_apply_workspace__")
     anchor._ensure_context.assert_awaited_once()
     display_start.assert_called_once()
+    assert first.backend is anchor and second.backend is anchor
+    assert first.context is context and second.context is context
+    assert first.primary_tab is tabs[0] and second.primary_tab is tabs[1]
 
 
 def test_framework_state_event_never_serializes_runtime_objects() -> None:

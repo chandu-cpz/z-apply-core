@@ -122,6 +122,7 @@ class BrowserWorkspace:
         self.gate = BrowserControlGate()
         self._server: Any | None = None
         self._anchor_backend: Any | None = None
+        self._context: Any | None = None
         self._leases: dict[str, RunBrowserLease] = {}
         self._start_lock = asyncio.Lock()
         self._creation_lock = asyncio.Lock()
@@ -142,11 +143,14 @@ class BrowserWorkspace:
                 self._anchor_backend = await self._server.backend_pool.backend_for(
                     "__z_apply_workspace__"
                 )
-                await self._anchor_backend._ensure_context(cwd=Path.cwd(), roots=None)
+                self._context = await self._anchor_backend._ensure_context(
+                    cwd=Path.cwd(), roots=None
+                )
                 self._started = True
             except Exception:
                 self._server = None
                 self._anchor_backend = None
+                self._context = None
                 self.live_view.stop()
                 self.display.stop()
                 raise
@@ -154,14 +158,16 @@ class BrowserWorkspace:
     async def open_run(self, run_id: str) -> RunBrowserLease:
         await self.start()
         assert self._server is not None
+        assert self._anchor_backend is not None
+        assert self._context is not None
         async with self._creation_lock:
             if run_id in self._leases:
                 raise RuntimeError(f"browser lease already exists for run {run_id}")
             async with self.gate.mutation():
-                backend = await self._server.backend_pool.backend_for(run_id)
                 artifact_dir = (ARTIFACT_ROOT / run_id / "browser-artifacts").resolve()
                 artifact_dir.mkdir(parents=True, exist_ok=True)
-                context = await backend._ensure_context(cwd=artifact_dir, roots=None)
+                backend = self._anchor_backend
+                context = self._context
                 tab = await context.new_tab()
             session = BrowserSession.from_backend(
                 backend,
@@ -210,8 +216,6 @@ class BrowserWorkspace:
             return
         async with self.gate.mutation():
             await lease.close_pages()
-            if self._server is not None:
-                await self._server.backend_pool.close(run_id)
 
     async def close(self) -> None:
         for run_id in tuple(self._leases):
@@ -220,6 +224,7 @@ class BrowserWorkspace:
             await self._server.backend_pool.close_all()
         self._server = None
         self._anchor_backend = None
+        self._context = None
         self._started = False
         self.live_view.stop()
         self.display.stop()
