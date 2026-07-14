@@ -69,6 +69,24 @@ async def require_submission_readiness(
         )
         return "Readiness recorded."
 
+    @tool(return_direct=True)
+    async def review_not_ready(
+        evidence: str,
+        unresolved_required_fields: list[str] | None = None,
+        visible_errors: list[str] | None = None,
+        questionable_values: list[str] | None = None,
+    ) -> str:
+        """Block approval when fresh evidence shows unresolved or conflicting data."""
+        nonlocal verdict
+        verdict = ReadinessVerdict(
+            ready=False,
+            evidence=evidence,
+            unresolved_required_fields=tuple(unresolved_required_fields or ()),
+            visible_errors=tuple(visible_errors or ()),
+            questionable_values=tuple(questionable_values or ()),
+        )
+        return "Readiness rejection recorded."
+
     router_middleware = NimRouterMiddleware(
         router,
         role="ReadinessVerifier",
@@ -77,7 +95,7 @@ async def require_submission_readiness(
     )
     agent = create_deep_agent(
         model=selection.llm,
-        tools=[review_ready],
+        tools=[review_ready, review_not_ready],
         system_prompt=load_prompt("readiness_verifier.md"),
         middleware=[
             SafeToolBatchMiddleware(),

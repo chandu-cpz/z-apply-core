@@ -130,6 +130,21 @@ def make_human_tools(
         )
         if on_approval is not None:
             on_approval(approved)
-        return {"submit_approval": "approved" if approved else "rejected"}
+        if approved:
+            return {"submit_approval": "approved"}
+        correction = await channel.ask(
+            question="What should I correct before requesting submission approval again?",
+            context=(
+                "Submission was not approved. Give one precise correction or say "
+                "that the application should be stopped."
+            ),
+            url=url,
+            company=company_name,
+            role=role_name,
+        )
+        return {
+            "submit_approval": "rejected",
+            "correction": correction,
+        }
 
     return [ask_human, request_submit_approval]

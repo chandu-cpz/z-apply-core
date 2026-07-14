@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from z_apply_core.config import Settings, load_settings
 from z_apply_core.human.factory import make_configured_human_channel
@@ -227,6 +227,39 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
             {"ready": False, "visible_errors": ["Required field is empty"]},
         )
         channel.confirm.assert_not_awaited()
+
+    async def test_rejected_submission_waits_for_correction_instead_of_terminating(
+        self,
+    ) -> None:
+        channel = SimpleNamespace(
+            confirm=AsyncMock(return_value=False),
+            ask=AsyncMock(return_value="Class XII branch must be Math"),
+        )
+        on_approval = Mock()
+        _, request_submit_approval = make_human_tools(
+            channel,
+            on_approval=on_approval,
+        )
+
+        result = await request_submit_approval.ainvoke(
+            {
+                "final_review": "Ready",
+                "url": "https://example.test",
+                "company_name": "Acme",
+                "role_name": "Engineer",
+            }
+        )
+
+        self.assertEqual(
+            result,
+            {
+                "submit_approval": "rejected",
+                "correction": "Class XII branch must be Math",
+            },
+        )
+        on_approval.assert_called_once_with(False)
+        channel.ask.assert_awaited_once()
+        self.assertIn("correct", channel.ask.await_args.kwargs["question"].casefold())
 
 
 class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):

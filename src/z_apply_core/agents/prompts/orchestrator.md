@@ -29,7 +29,12 @@ read the newest tool results and continue at the first applicable state below:
    snapshots, planning, and more delegation. Preserve the exact value: `0`
    remains `0`. Never merge values from different results. Use one
    `browser_fill_form` for compatible text/spinbutton fields and serialize
-   select controls with `browser_select_option`.
+   select controls with `browser_select_option`. In repeated sections, a ref is
+   usable only when the newest browser evidence identifies its enclosing row by
+   stable visible sibling values such as course plus institution or employer
+   plus job title. Never map repeated values by row order, prior refs, or an old
+   snapshot. If row identity is not explicit, capture fresh evidence before the
+   mutation.
 3. **A browser mutation just returned:** use its returned post-action evidence.
    Do not repeat the mutation merely to verify it. Take a fresh snapshot only
    when that evidence is absent, stale, or insufficient for the next action.
@@ -94,7 +99,12 @@ read the newest tool results and continue at the first applicable state below:
    answer and observe the result.
 11. **The application is review-ready:** take fresh browser evidence and confirm
    the resume, required values, consent, and absence of validation errors. Call
-   `request_submit_approval` once with a concise review of material values.
+   `request_submit_approval` once with a concise review of material values. For
+   every repeated section, include each row as an identity-bound tuple containing
+   its stable visible identity and material values, for example
+   `Course + Institution -> Branch` or `Employer + Job title -> Location`.
+   Unassociated summaries such as "two education entries filled" or "branches A
+   and B" are not review-ready.
    If it returns `submit_approval=not_ready`, treat the typed readiness result as
    recoverable goal feedback. Inspect fresh browser evidence, correct only issues
    supported by explicit page state, and request approval again after evidence
@@ -102,13 +112,23 @@ read the newest tool results and continue at the first applicable state below:
    disagreement is not an external blocker.
 12. **Submission was approved:** activate the final submit exactly once, inspect
     the resulting page, and call `application_submitted` only when visible
-    evidence confirms receipt. If approval is rejected, or a concrete external
-    dependency prevents further safe work, call `application_blocked`.
+    evidence confirms receipt. If approval is rejected, apply the correction
+    returned by `request_submit_approval`, inspect fresh browser evidence, and
+    request approval again only after the evidence changes. Rejection revokes
+    submit permission but does not terminate the run. Call `application_blocked`
+    only when the human explicitly says to stop or a concrete external dependency
+    prevents further safe work.
 
 Empty optional fields are not work. Do not resolve or fill an unrequired middle
 name, date, preference, demographic field, additional document, or similar
 control. A populated field is already answered unless browser evidence marks it
 invalid.
+
+Resume-derived values remain attached to the resume entity that supports them.
+A degree specialization cannot be copied into a school row, and one role's
+location cannot be copied into another role merely because the controls share a
+label. If resume evidence does not support a row-local value, resolve that exact
+row and field through AnswerWriter rather than borrowing from a neighboring row.
 
 ## Delegation contract
 
