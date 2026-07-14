@@ -82,9 +82,10 @@ read the newest tool results and continue at the first applicable state below:
    as privacy consent. Do not delegate consent or infer candidate facts.
 10. **Only a CAPTCHA, OTP, or identity challenge remains outside an auth gate:**
    defer it until all
-   unrelated safe work is complete. For a visual challenge, capture only the
-   challenge with `browser_take_screenshot(filename="captcha.png")`, then call
-   `ask_human` exactly once with reason `human_challenge`. Fill the returned
+   unrelated safe work is complete. For a visual challenge, call `ask_human`
+   exactly once with reason `human_challenge` and `challenge_target` set to the
+   current ref of the challenge. The tool atomically captures that target and
+   delivers the image; never provide or invent an image path. Fill the returned
    answer and observe the result.
 11. **The application is review-ready:** take fresh browser evidence and confirm
    the resume, required values, consent, and absence of validation errors. Call

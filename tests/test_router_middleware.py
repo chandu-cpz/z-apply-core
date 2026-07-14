@@ -58,13 +58,8 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             return_value=ModelResponse(
                 result=[
                     AIMessage(
-                        content=(
-                            "<think>Memory lookup was exact.</think>\n"
-                            "Gender = Male"
-                        ),
-                        additional_kwargs={
-                            "reasoning_content": "Memory lookup was exact."
-                        },
+                        content=("<think>Memory lookup was exact.</think>\nGender = Male"),
+                        additional_kwargs={"reasoning_content": "Memory lookup was exact."},
                     )
                 ]
             )

@@ -43,16 +43,18 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "write_todos"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content=(
-                    "I'll start by dispatching the task.\n\n"
-                    "task(subagent_type='FieldMapper', description='Map fields')\n\n"
-                    "FIELD_MAPPER_RESULT: Gender, Email, Phone..."
+        response = _make_response(
+            [
+                AIMessage(
+                    content=(
+                        "I'll start by dispatching the task.\n\n"
+                        "task(subagent_type='FieldMapper', description='Map fields')\n\n"
+                        "FIELD_MAPPER_RESULT: Gender, Email, Phone..."
+                    ),
+                    tool_calls=[{"name": "write_todos", "args": {"todos": ["Step 1"]}, "id": "c1"}],
                 ),
-                tool_calls=[{"name": "write_todos", "args": {"todos": ["Step 1"]}, "id": "c1"}],
-            ),
-        ])
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -63,13 +65,17 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        payload = json.dumps({
-            "tool": "task",
-            "params": {"subagent_type": "BrowserSpecialist"},
-        })
-        response = _make_response([
-            AIMessage(content=payload, tool_calls=[]),
-        ])
+        payload = json.dumps(
+            {
+                "tool": "task",
+                "params": {"subagent_type": "BrowserSpecialist"},
+            }
+        )
+        response = _make_response(
+            [
+                AIMessage(content=payload, tool_calls=[]),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -79,31 +85,31 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "authentication_verified"
         request = _make_request(tools=[tool])
-        invalid = _make_response([
-            AIMessage(
-                content=(
-                    "authentication_verified <parameter=evidence>dashboard visible"
+        invalid = _make_response(
+            [
+                AIMessage(
+                    content=("authentication_verified <parameter=evidence>dashboard visible"),
+                    tool_calls=[],
                 ),
-                tool_calls=[],
-            ),
-        ])
-        valid = _make_response([
-            AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": "authentication_verified",
-                        "args": {"evidence": "dashboard visible"},
-                        "id": "call-2",
-                    }
-                ],
-            ),
-        ])
+            ]
+        )
+        valid = _make_response(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "authentication_verified",
+                            "args": {"evidence": "dashboard visible"},
+                            "id": "call-2",
+                        }
+                    ],
+                ),
+            ]
+        )
         handler = AsyncMock(side_effect=[invalid, valid])
 
-        result = self._run(
-            ProseToolCallGuardMiddleware().awrap_model_call(request, handler)
-        )
+        result = self._run(ProseToolCallGuardMiddleware().awrap_model_call(request, handler))
 
         self.assertEqual(result.result[0].tool_calls[0]["name"], "authentication_verified")
         self.assertEqual(handler.await_count, 2)
@@ -112,12 +118,16 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content=json.dumps({"name": "task", "arguments": {"subagent_type": "FieldMapper"}}),
-                tool_calls=[],
-            ),
-        ])
+        response = _make_response(
+            [
+                AIMessage(
+                    content=json.dumps(
+                        {"name": "task", "arguments": {"subagent_type": "FieldMapper"}}
+                    ),
+                    tool_calls=[],
+                ),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -129,12 +139,13 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool.name = "task"
         request = _make_request(tools=[tool])
         content = (
-            "We should now do this: "
-            "task(subagent_type='BrowserSpecialist', description='Click')"
+            "We should now do this: task(subagent_type='BrowserSpecialist', description='Click')"
         )
-        response = _make_response([
-            AIMessage(content=content, tool_calls=[]),
-        ])
+        response = _make_response(
+            [
+                AIMessage(content=content, tool_calls=[]),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -144,12 +155,14 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content="Let me call tool.task(subagent_type='FieldMapper') now.",
-                tool_calls=[],
-            ),
-        ])
+        response = _make_response(
+            [
+                AIMessage(
+                    content="Let me call tool.task(subagent_type='FieldMapper') now.",
+                    tool_calls=[],
+                ),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -160,12 +173,14 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "write_todos"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content="The task has been completed successfully. All fields are mapped.",
-                tool_calls=[],
-            ),
-        ])
+        response = _make_response(
+            [
+                AIMessage(
+                    content="The task has been completed successfully. All fields are mapped.",
+                    tool_calls=[],
+                ),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         self._run(middleware.awrap_model_call(request, handler))
@@ -175,12 +190,14 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content="I will dispatch a task for the BrowserSpecialist.",
-                tool_calls=[],
-            ),
-        ])
+        response = _make_response(
+            [
+                AIMessage(
+                    content="I will dispatch a task for the BrowserSpecialist.",
+                    tool_calls=[],
+                ),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         self._run(middleware.awrap_model_call(request, handler))
@@ -197,26 +214,29 @@ class ProseToolCallGuardTests(unittest.TestCase):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                content = (
-                    "task(subagent_type='BrowserSpecialist',"
-                    " description='Click')"
+                content = "task(subagent_type='BrowserSpecialist', description='Click')"
+                return _make_response(
+                    [
+                        AIMessage(content=content, tool_calls=[]),
+                    ]
                 )
-                return _make_response([
-                    AIMessage(content=content, tool_calls=[]),
-                ])
-            return _make_response([
-                AIMessage(
-                    content="",
-                    tool_calls=[{
-                        "name": "task",
-                        "args": {
-                            "subagent_type": "BrowserSpecialist",
-                            "description": "Click",
-                        },
-                        "id": "c2",
-                    }],
-                ),
-            ])
+            return _make_response(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "task",
+                                "args": {
+                                    "subagent_type": "BrowserSpecialist",
+                                    "description": "Click",
+                                },
+                                "id": "c2",
+                            }
+                        ],
+                    ),
+                ]
+            )
 
         middleware = ProseToolCallGuardMiddleware()
         self._run(middleware.awrap_model_call(request, handler))
@@ -238,26 +258,29 @@ class ProseToolCallGuardTests(unittest.TestCase):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                content = (
-                    "task(subagent_type='BrowserSpecialist',"
-                    " description='Click submit')"
+                content = "task(subagent_type='BrowserSpecialist', description='Click submit')"
+                return _make_response(
+                    [
+                        AIMessage(content=content, tool_calls=[]),
+                    ]
                 )
-                return _make_response([
-                    AIMessage(content=content, tool_calls=[]),
-                ])
-            return _make_response([
-                AIMessage(
-                    content="",
-                    tool_calls=[{
-                        "name": "task",
-                        "args": {
-                            "subagent_type": "BrowserSpecialist",
-                            "description": "Click submit",
-                        },
-                        "id": "c2",
-                    }],
-                ),
-            ])
+            return _make_response(
+                [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "task",
+                                "args": {
+                                    "subagent_type": "BrowserSpecialist",
+                                    "description": "Click submit",
+                                },
+                                "id": "c2",
+                            }
+                        ],
+                    ),
+                ]
+            )
 
         middleware = ProseToolCallGuardMiddleware()
         result = self._run(middleware.awrap_model_call(request, handler))
@@ -269,12 +292,14 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "write_todos"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content="write_todos(todos=['Step 1'])",
-                tool_calls=[],
-            ),
-        ])
+        response = _make_response(
+            [
+                AIMessage(
+                    content="write_todos(todos=['Step 1'])",
+                    tool_calls=[],
+                ),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -284,12 +309,14 @@ class ProseToolCallGuardTests(unittest.TestCase):
     # Test: No tools skips validation
     def test_no_tools_skips_validation(self) -> None:
         request = _make_request(tools=[])
-        response = _make_response([
-            AIMessage(
-                content="task(subagent_type='BrowserSpecialist', description='Click')",
-                tool_calls=[],
-            ),
-        ])
+        response = _make_response(
+            [
+                AIMessage(
+                    content="task(subagent_type='BrowserSpecialist', description='Click')",
+                    tool_calls=[],
+                ),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         self._run(middleware.awrap_model_call(request, handler))
@@ -300,17 +327,19 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content=(
-                    "task(subagent_type='FieldMapper', description='Map')\n\n"
-                    "FIELD_MAPPER_RESULT: Gender, Email\n\n"
-                    "task(subagent_type='AnswerWriter', description='Answer')\n\n"
-                    "ANSWER_WRITER_RESULT: Male"
+        response = _make_response(
+            [
+                AIMessage(
+                    content=(
+                        "task(subagent_type='FieldMapper', description='Map')\n\n"
+                        "FIELD_MAPPER_RESULT: Gender, Email\n\n"
+                        "task(subagent_type='AnswerWriter', description='Answer')\n\n"
+                        "ANSWER_WRITER_RESULT: Male"
+                    ),
+                    tool_calls=[],
                 ),
-                tool_calls=[],
-            ),
-        ])
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -321,15 +350,17 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content=(
-                    "task(subagent_type='FieldMapper', description='Map')\n\n"
-                    "FIELD_MAPPER_RESULT: Gender"
+        response = _make_response(
+            [
+                AIMessage(
+                    content=(
+                        "task(subagent_type='FieldMapper', description='Map')\n\n"
+                        "FIELD_MAPPER_RESULT: Gender"
+                    ),
+                    tool_calls=[],
                 ),
-                tool_calls=[],
-            ),
-        ])
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         with self.assertRaises(ToolProtocolViolation):
@@ -341,22 +372,26 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content=(
-                    "Based on the FIELD_MAPPER_RESULT, the Gender field is required.\n"
-                    "I will now dispatch a task."
+        response = _make_response(
+            [
+                AIMessage(
+                    content=(
+                        "Based on the FIELD_MAPPER_RESULT, the Gender field is required.\n"
+                        "I will now dispatch a task."
+                    ),
+                    tool_calls=[
+                        {
+                            "name": "task",
+                            "args": {
+                                "subagent_type": "FieldMapper",
+                                "description": "Map",
+                            },
+                            "id": "c4",
+                        }
+                    ],
                 ),
-                tool_calls=[{
-                    "name": "task",
-                    "args": {
-                        "subagent_type": "FieldMapper",
-                        "description": "Map",
-                    },
-                    "id": "c4",
-                }],
-            ),
-        ])
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         self._run(middleware.awrap_model_call(request, handler))
@@ -367,19 +402,23 @@ class ProseToolCallGuardTests(unittest.TestCase):
         tool = MagicMock()
         tool.name = "task"
         request = _make_request(tools=[tool])
-        response = _make_response([
-            AIMessage(
-                content="I'll inspect the form now.",
-                tool_calls=[{
-                    "name": "task",
-                    "args": {
-                        "subagent_type": "BrowserSpecialist",
-                        "description": "Inspect form",
-                    },
-                    "id": "c3",
-                }],
-            ),
-        ])
+        response = _make_response(
+            [
+                AIMessage(
+                    content="I'll inspect the form now.",
+                    tool_calls=[
+                        {
+                            "name": "task",
+                            "args": {
+                                "subagent_type": "BrowserSpecialist",
+                                "description": "Inspect form",
+                            },
+                            "id": "c3",
+                        }
+                    ],
+                ),
+            ]
+        )
         middleware = ProseToolCallGuardMiddleware()
         handler = AsyncMock(return_value=response)
         result = self._run(middleware.awrap_model_call(request, handler))

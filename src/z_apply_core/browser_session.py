@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
+from collections.abc import AsyncIterator, Sequence
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from typing import Any, Self
+from typing import Any, Protocol, Self
 from uuid import uuid4
 
 from langchain_core.tools import ToolException
@@ -16,16 +19,40 @@ from z_apply_core.browser_tools import (
 )
 
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot", "browser_pdf"})
+CORE_ROOT = Path(__file__).resolve().parents[2]
+ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
 
 
 class BrowserToolExecutionError(ToolException):
     """A browser backend tool result explicitly marked as an execution error."""
 
 
+class MutationGate(Protocol):
+    def mutation(self) -> AbstractAsyncContextManager[None]: ...
+
+
+class BrowserLease(Protocol):
+    def owns_current_page(self) -> bool: ...
+
+    async def discover_owned_popups(self) -> None: ...
+
+
 class BrowserSession:
-    def __init__(self, server: Any, *, run_id: str) -> None:
+    def __init__(
+        self,
+        server: Any,
+        *,
+        run_id: str,
+        backend: Any | None = None,
+        tools: Sequence[Any] | None = None,
+        mutation_gate: MutationGate | None = None,
+        owns_backend: bool = True,
+    ) -> None:
         self._server = server
-        self._backend = server.backend
+        self._backend = backend if backend is not None else server.backend
+        self._mutation_gate = mutation_gate
+        self._lease: BrowserLease | None = None
+        self._owns_backend = owns_backend
         self.run_id = run_id
         self._submission_guard_active = False
         self._approved_submissions = 0
@@ -34,9 +61,9 @@ class BrowserSession:
         self._last_mutation_made_progress = True
         self._last_auth_submit_target = ""
         self._last_auth_submit_snapshot = ""
-        self._capture_workspace = Path.cwd() / ".z-apply" / "runs" / run_id / "browser-artifacts"
+        self._capture_workspace = ARTIFACT_ROOT / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
-            tuple(server.backend_pool.tools),
+            tuple(tools if tools is not None else server.backend_pool.tools),
             self.call_tool,
             langchain_callers={
                 **{
@@ -55,6 +82,27 @@ class BrowserSession:
             await create_connection(build_browser_config(resolved_run_id)), run_id=resolved_run_id
         )
 
+    @classmethod
+    def from_backend(
+        cls,
+        backend: Any,
+        *,
+        tools: Sequence[Any],
+        run_id: str,
+        mutation_gate: MutationGate,
+    ) -> Self:
+        return cls(
+            None,
+            run_id=run_id,
+            backend=backend,
+            tools=tools,
+            mutation_gate=mutation_gate,
+            owns_backend=False,
+        )
+
+    def bind_lease(self, lease: BrowserLease) -> None:
+        self._lease = lease
+
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         normalized = normalize_browser_arguments(arguments)
         if name == "browser_snapshot" and "target" not in normalized:
@@ -70,11 +118,22 @@ class BrowserSession:
                     "Final-form submission is locked. Call request_submit_approval and "
                     "wait for an approved result before clicking this submit control."
                 )
-        result = await self._backend.call_tool(
-            name,
-            normalized,
-            meta=self._call_meta(name),
-        )
+        if name in BROWSER_CHANGING_TOOL_NAMES:
+            async with self._mutation_scope():
+                self._assert_owned_page()
+                result = await self._backend.call_tool(
+                    name,
+                    normalized,
+                    meta=self._call_meta(name),
+                )
+                await self._discover_owned_popups()
+        else:
+            self._assert_owned_page()
+            result = await self._backend.call_tool(
+                name,
+                normalized,
+                meta=self._call_meta(name),
+            )
         _raise_for_tool_error(name, result)
         if guarded_submit:
             self._approved_submissions -= 1
@@ -128,11 +187,13 @@ class BrowserSession:
 
     async def upload_files(self, target: str, paths: list[str]) -> str:
         """Resolve an upload trigger to its file input without opening a chooser."""
-        tab = await self._backend._ensure_tab()
-        resolved = await tab.resolve_target(target=target)
-        locator = resolved.locator
-        handle = await locator.evaluate_handle(
-            r"""element => {
+        async with self._mutation_scope():
+            self._assert_owned_page()
+            tab = await self._backend._ensure_tab()
+            resolved = await tab.resolve_target(target=target)
+            locator = resolved.locator
+            handle = await locator.evaluate_handle(
+                r"""element => {
                 const isFileInput = candidate =>
                     candidate instanceof HTMLInputElement && candidate.type === 'file';
                 if (isFileInput(element)) return element;
@@ -166,21 +227,38 @@ class BrowserSession:
                 if (rootInput) return rootInput;
                 return uniqueFileInput(element.ownerDocument);
             }"""
-        )
-        file_input = handle.as_element()
-        if file_input is None:
-            await handle.dispose()
-            raise BrowserToolExecutionError(
-                f"Upload target {target!r} could not be associated with exactly one "
-                "file input. Capture fresh evidence and call browser_click_upload on "
-                "the upload control; never click it to open a native chooser."
             )
-        try:
-            await file_input.set_input_files(paths)
-        finally:
-            await handle.dispose()
+            file_input = handle.as_element()
+            if file_input is None:
+                await handle.dispose()
+                raise BrowserToolExecutionError(
+                    f"Upload target {target!r} could not be associated with exactly one "
+                    "file input. Capture fresh evidence and call browser_click_upload on "
+                    "the upload control; never click it to open a native chooser."
+                )
+            try:
+                await file_input.set_input_files(paths)
+            finally:
+                await handle.dispose()
         evidence = await self.call_tool("browser_snapshot")
         return "Files attached directly to the resolved upload control.\n" + evidence
+
+    async def capture_human_challenge(self, target: str) -> Path:
+        """Capture one visible challenge into the run-owned artifact directory."""
+        if not target.strip():
+            raise BrowserToolExecutionError(
+                "A current browser target is required to capture a human challenge."
+            )
+        path = self.artifact_path("captcha.png")
+        await self.call_tool(
+            "browser_take_screenshot",
+            {"target": target, "filename": path.name, "type": "png", "scale": "css"},
+        )
+        if not path.is_file():
+            raise BrowserToolExecutionError(
+                "The browser did not create the requested human-challenge artifact."
+            )
+        return path
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""
@@ -243,11 +321,14 @@ class BrowserSession:
                 "Authentication submit rejected: the target is not a submit control in "
                 "a structurally identifiable login or verification form."
             )
-        result = await self._backend.call_tool(
-            "browser_click",
-            {"target": target},
-            meta=self._call_meta("browser_click"),
-        )
+        async with self._mutation_scope():
+            self._assert_owned_page()
+            result = await self._backend.call_tool(
+                "browser_click",
+                {"target": target},
+                meta=self._call_meta("browser_click"),
+            )
+            await self._discover_owned_popups()
         _raise_for_tool_error("browser_click", result)
         try:
             evidence = await self.call_tool("browser_snapshot")
@@ -262,20 +343,22 @@ class BrowserSession:
 
     async def open_verification_link(self, url: str) -> str:
         """Resolve an email link in a temporary tab and always restore the app tab."""
-        original = await self._backend._ensure_tab()
-        context = original.context
-        temporary = await context.new_tab()
-        verification_evidence = ""
-        verification_title = ""
-        try:
-            await temporary.check_url_and_navigate(url)
-            verification_title = await temporary.page.title()
-            verification_evidence = await temporary.capture_snapshot(target="html")
-        finally:
-            if temporary in context.tabs():
-                await temporary.close()
-            if original in context.tabs():
-                await context.select_tab(context.tabs().index(original))
+        async with self._mutation_scope():
+            self._assert_owned_page()
+            original = await self._backend._ensure_tab()
+            context = original.context
+            temporary = await context.new_tab()
+            verification_evidence = ""
+            verification_title = ""
+            try:
+                await temporary.check_url_and_navigate(url)
+                verification_title = await temporary.page.title()
+                verification_evidence = await temporary.capture_snapshot(target="html")
+            finally:
+                if temporary in context.tabs():
+                    await temporary.close()
+                if original in context.tabs():
+                    await context.select_tab(context.tabs().index(original))
 
         if original not in context.tabs():
             raise BrowserToolExecutionError(
@@ -342,7 +425,8 @@ class BrowserSession:
             ) from exc
 
     async def close(self) -> None:
-        await self._backend.close()
+        if getattr(self, "_owns_backend", True):
+            await self._backend.close()
 
     def artifact_path(self, filename: str) -> Path:
         """Return the run-owned path used by browser capture tools."""
@@ -353,6 +437,29 @@ class BrowserSession:
         if name in INLINE_CAPTURE_TOOLS:
             meta["cwd"] = str(self._capture_workspace)
         return meta
+
+    def _mutation_scope(self) -> AbstractAsyncContextManager[None]:
+        mutation_gate = getattr(self, "_mutation_gate", None)
+        if mutation_gate is not None:
+            return mutation_gate.mutation()
+        return _unlocked_mutation()
+
+    def _assert_owned_page(self) -> None:
+        lease = getattr(self, "_lease", None)
+        if lease is not None and not lease.owns_current_page():
+            raise BrowserToolExecutionError(
+                "The assigned run page is unavailable or another run's page became selected."
+            )
+
+    async def _discover_owned_popups(self) -> None:
+        lease = getattr(self, "_lease", None)
+        if lease is not None:
+            await lease.discover_owned_popups()
+
+
+@contextlib.asynccontextmanager
+async def _unlocked_mutation() -> AsyncIterator[None]:
+    yield
 
 
 def _text_content(result: Any) -> str:

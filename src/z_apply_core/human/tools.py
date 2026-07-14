@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import Literal
 
 from langchain_core.tools import BaseTool, tool
@@ -54,8 +55,8 @@ def make_human_tools(
     candidate_memory: CandidateMemory | None = None,
     on_answer: Callable[[str], None] | None = None,
     on_approval: Callable[[bool], None] | None = None,
-    before_submit_approval: Callable[[], Awaitable[None]] | None = None,
-    human_challenge_image_path: str = "",
+    before_submit_approval: Callable[[str], Awaitable[None]] | None = None,
+    capture_human_challenge: Callable[[str], Awaitable[Path]] | None = None,
 ) -> list[BaseTool]:
     @tool
     async def ask_human(
@@ -68,19 +69,20 @@ def make_human_tools(
         company_name: str = "System",
         role_name: str = "Application",
         options: list[str] | None = None,
-        image_path: str = "",
+        challenge_target: str = "",
     ) -> dict[str, str]:
         """Ask the human for missing or ambiguous information and wait for the answer.
 
         reason: one of 'missing_candidate_fact', 'ambiguous_field', 'human_challenge'.
         field_label: the specific required field or fields that need human input.
         field_evidence: current browser evidence showing the field is unresolved.
+        challenge_target: current browser ref for a visible human challenge.
         """
-        resolved_image_path = (
-            human_challenge_image_path
-            if reason == "human_challenge" and human_challenge_image_path
-            else image_path
-        )
+        resolved_image_path = ""
+        if reason == "human_challenge":
+            if capture_human_challenge is None:
+                raise RuntimeError("human challenge capture is unavailable")
+            resolved_image_path = str(await capture_human_challenge(challenge_target))
         answer = await channel.ask(
             question=question,
             context=context,
@@ -110,10 +112,7 @@ def make_human_tools(
     ) -> dict[str, str]:
         """Ask the human to approve or reject a review-ready application."""
         if before_submit_approval is not None:
-            try:
-                await before_submit_approval()
-            except Exception:
-                logger.exception("Pre-submit application artifact could not be published")
+            await before_submit_approval(final_review)
         approved = await channel.confirm(
             question="Submit this application?",
             context=final_review,

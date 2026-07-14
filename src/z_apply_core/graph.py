@@ -7,9 +7,10 @@ from langgraph.graph import END, START, StateGraph
 from nim_router import NimRouter
 from nim_router.config import RouterConfig
 
+from z_apply_core.agents.context_inbox import ContextInbox
 from z_apply_core.model_policy import BANNED_MODEL_IDS_UNDER_30B
 from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
-from z_apply_core.runtime import RunResources
+from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
 
@@ -39,6 +40,8 @@ async def run_job(
     router: NimRouter | None = None,
     resources: RunResources | None = None,
     cleanup_resources: bool = True,
+    context_inbox: ContextInbox | None = None,
+    prepared_runtime: RunRuntime | None = None,
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
     run_resources = resources or RunResources()
@@ -51,6 +54,8 @@ async def run_job(
                     "sink": sink,
                     "nim_router": resolved_router,
                     "run_resources": run_resources,
+                    "context_inbox": context_inbox,
+                    "prepared_runtime": prepared_runtime,
                 }
             },
             version="v3",

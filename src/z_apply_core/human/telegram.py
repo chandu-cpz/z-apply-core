@@ -14,6 +14,7 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, U
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
 logger = logging.getLogger(__name__)
+CORE_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _norm(value: str) -> str:
@@ -63,7 +64,6 @@ class TelegramHumanChannel:
         self._run_topic_name: str | None = None
         self._app: Application[Any, Any, Any, Any, Any, Any] | None = None
         self._start_lock = asyncio.Lock()
-        self._ask_lock = asyncio.Lock()
 
     def bind_run(
         self,
@@ -94,26 +94,69 @@ class TelegramHumanChannel:
         risk: str = "medium",
         image_path: str = "",
     ) -> str:
-        async with self._ask_lock:
-            return await self._ask_once(
-                question=question,
-                context=context,
-                url=url,
-                company=company,
-                role=role,
-                options=options,
-                risk=risk,
-                image_path=image_path,
-            )
+        return await self.ask_with_id(
+            request_id=uuid.uuid4().hex[:10],
+            question=question,
+            context=context,
+            url=url,
+            company=company,
+            role=role,
+            options=options,
+            risk=risk,
+            image_path=image_path,
+        )
+
+    async def ask_with_id(
+        self,
+        *,
+        request_id: str,
+        question: str,
+        context: str = "",
+        url: str = "",
+        company: str = "System",
+        role: str = "Application",
+        options: list[str] | None = None,
+        risk: str = "medium",
+        image_path: str = "",
+    ) -> str:
+        return await self._ask_once(
+            request_id=request_id,
+            question=question,
+            context=context,
+            url=url,
+            company=company,
+            role=role,
+            options=options,
+            risk=risk,
+            image_path=image_path,
+        )
 
     async def send_artifact(self, *, path: str, caption: str) -> None:
         """Post a run-owned image or PDF into the bound application topic."""
-        if self._app is None:
-            await self.start()
-        topic_id = await self._get_or_create_topic(
+        await self.send_artifact_for(
+            path=path,
+            caption=caption,
             url="",
             company="Z-Apply",
             role="Job application",
+        )
+
+    async def send_artifact_for(
+        self,
+        *,
+        path: str,
+        caption: str,
+        url: str,
+        company: str,
+        role: str,
+    ) -> None:
+        """Post an artifact into the topic associated with an application URL."""
+        if self._app is None:
+            await self.start()
+        topic_id = await self._get_or_create_topic(
+            url=url,
+            company=company,
+            role=role,
         )
         artifact = self._safe_artifact_path(path)
         if artifact is None:
@@ -142,6 +185,7 @@ class TelegramHumanChannel:
     async def _ask_once(
         self,
         *,
+        request_id: str,
         question: str,
         context: str,
         url: str,
@@ -154,7 +198,6 @@ class TelegramHumanChannel:
         if self._app is None:
             await self.start()
         topic_id = await self._get_or_create_topic(url=url, company=company, role=role)
-        request_id = uuid.uuid4().hex[:10]
         option_list = [option.strip() for option in (options or []) if option and option.strip()]
 
         text = self._message_text(
@@ -193,6 +236,14 @@ class TelegramHumanChannel:
                 reply_to_message_id=sent.message_id,
             )
         return await future
+
+    async def cancel_request(self, request_id: str) -> None:
+        pending = self._pending.get(request_id)
+        if pending is None:
+            return
+        if not pending.future.done():
+            pending.future.cancel()
+        await self.resolve(request_id, "Cancelled")
 
     async def confirm(
         self,
@@ -316,7 +367,7 @@ class TelegramHumanChannel:
     @staticmethod
     def _safe_artifact_path(path: str) -> Path | None:
         artifact = Path(path).expanduser().resolve()
-        artifact_root = (Path.cwd() / ".z-apply" / "runs").resolve()
+        artifact_root = (CORE_ROOT / ".z-apply" / "runs").resolve()
         if not artifact.is_file() or not artifact.is_relative_to(artifact_root):
             return None
         if artifact.suffix.casefold() not in {".png", ".jpg", ".jpeg", ".webp", ".pdf"}:

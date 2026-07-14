@@ -13,12 +13,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
+from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_active_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
+from z_apply_core.agents.readiness_verifier import require_submission_readiness
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
@@ -79,6 +81,7 @@ async def run_orchestrator(
     human_channel: HumanChannel | None = None,
     artifact_publisher: ApplicationArtifactPublisher | None = None,
     on_submit_approval: Callable[[bool], None] | None = None,
+    context_inbox: ContextInbox | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
     configure_z_apply_harness_profile()
@@ -105,14 +108,33 @@ async def run_orchestrator(
             on_submit_approval(value)
 
     if human_channel is not None:
+
+        async def prepare_submission_review(final_review: str) -> None:
+            publisher = artifact_publisher
+            if publisher is None:
+                raise ToolException("Submission artifacts are unavailable for this run.")
+            await publisher.publish_review_pdf()
+            await require_submission_readiness(
+                browser=publisher.browser,
+                router=router,
+                final_review=final_review,
+                config=config,
+                sink=event_sink,
+                run_id=run_id,
+            )
+
         human_tools = make_human_tools(
             human_channel,
             candidate_memory=candidate_memory,
             on_approval=record_approval,
             before_submit_approval=(
-                artifact_publisher.publish_review_pdf if artifact_publisher is not None else None
+                prepare_submission_review if artifact_publisher is not None else None
             ),
-            human_challenge_image_path=str(_captcha_path(run_id)),
+            capture_human_challenge=(
+                artifact_publisher.browser.capture_human_challenge
+                if artifact_publisher is not None
+                else None
+            ),
         )
     manual_auth_tools = (
         [
@@ -134,10 +156,7 @@ async def run_orchestrator(
                 "Submission cannot finish until request_submit_approval returns approved."
             )
         if artifact_publisher is not None:
-            try:
-                await artifact_publisher.publish_submission_screenshot()
-            except Exception:
-                logger.exception("Submission confirmation screenshot could not be published")
+            await artifact_publisher.publish_submission_screenshot()
         terminal = ("completed", confirmation)
         return "Application submission recorded."
 
@@ -177,6 +196,7 @@ async def run_orchestrator(
         ],
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
+            *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
             SafeToolBatchMiddleware(),
             NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
             SubagentDispatchMiddleware(
@@ -284,5 +304,5 @@ application_blocked. Submission requires explicit request_submit_approval.
 
 def _captcha_path(run_id: str) -> Path:
     return (
-        Path.cwd() / ".z-apply" / "runs" / run_id / "browser-artifacts" / "captcha.png"
+        CORE_ROOT / ".z-apply" / "runs" / run_id / "browser-artifacts" / "captcha.png"
     ).resolve()

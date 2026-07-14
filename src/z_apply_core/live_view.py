@@ -37,7 +37,7 @@ class LiveView:
     remmina: subprocess.Popen[bytes] | None = None
     state_path: Path = Path("/tmp/z-apply-live-view.json")
 
-    def start(self, display: str | None, *, enabled: bool) -> None:
+    def start(self, display: str | None, *, enabled: bool, open_client: bool = True) -> None:
         if not enabled:
             logger.info("Live view disabled")
             return
@@ -87,6 +87,8 @@ class LiveView:
         self.port = port
         self._write_state(display)
         logger.info("Live view ready: vnc://localhost:%s", port)
+        if not open_client:
+            return
         if shutil.which("remmina") is None:
             logger.warning("Remmina is not installed; open vnc://localhost:%s manually", port)
             return

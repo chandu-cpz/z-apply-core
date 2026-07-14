@@ -58,10 +58,13 @@ class BrowserTabState(StrEnum):
 @dataclass(frozen=True, slots=True)
 class CoreIntegrationConfig:
     max_active_runs: int = 3
+    browser_navigation_timeout_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_active_runs <= 8:
             raise ValueError("max_active_runs must be from 1 through 8")
+        if self.browser_navigation_timeout_seconds <= 0:
+            raise ValueError("browser_navigation_timeout_seconds must be positive")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +73,14 @@ class StartRunRequest:
     task: str | None = None
     resume_path: Path | None = None
     live_view: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class CoreContextMessage:
+    run_id: str
+    content: str
+    source: str
+    accepted_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,6 +122,7 @@ class CoreHumanRequest:
     options: tuple[str, ...]
     risk: str
     allow_free_text: bool
+    image_artifact_id: str | None
     created_at: datetime
     status: str = "pending"
     answer: str | None = None

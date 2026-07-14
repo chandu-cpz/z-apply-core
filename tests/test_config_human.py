@@ -31,8 +31,10 @@ class FakeHumanChannel:
         risk: str = "medium",
         image_path: str = "",
     ) -> str:
-        return options[0] if options else (
-            f"{company}:{role}:{question}:{context}:{url}:{risk}:{image_path}"
+        return (
+            options[0]
+            if options
+            else (f"{company}:{role}:{question}:{context}:{url}:{risk}:{image_path}")
         )
 
     async def confirm(
@@ -171,19 +173,21 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(approval, {"submit_approval": "approved"})
 
     async def test_human_challenge_uses_runtime_owned_image_path(self) -> None:
+        capture = AsyncMock(return_value=Path("/runtime/captcha.png"))
         ask_human, _ = make_human_tools(
             FakeHumanChannel(),
-            human_challenge_image_path="/runtime/captcha.png",
+            capture_human_challenge=capture,
         )
 
         answer = await ask_human.ainvoke(
             {
                 "question": "Enter CAPTCHA",
                 "reason": "human_challenge",
-                "image_path": "captcha.png",
+                "challenge_target": "e42",
             }
         )
 
+        capture.assert_awaited_once_with("e42")
         self.assertTrue(answer["human_answer"].endswith(":/runtime/captcha.png"))
 
     async def test_review_artifact_is_published_before_submit_approval(self) -> None:
@@ -217,7 +221,7 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
             png = artifact_root / "submission-confirmation.png"
             pdf.write_bytes(b"pdf")
             png.write_bytes(b"png")
-            with patch("z_apply_core.human.telegram.Path.cwd", return_value=root):
+            with patch("z_apply_core.human.telegram.CORE_ROOT", root):
                 await channel.send_artifact(path=str(pdf), caption="Review")
                 await channel.send_artifact(path=str(png), caption="Submitted")
 
@@ -293,7 +297,7 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertEqual(labels, ["Alpha", "Beta"])
 
-    async def test_questions_are_serialized_until_the_active_one_is_answered(self) -> None:
+    async def test_questions_for_concurrent_runs_can_wait_independently(self) -> None:
         channel = TelegramHumanChannel(token="token", chat_id="-100")
         channel.bot = FakeBot()  # type: ignore[assignment]
         channel._app = SimpleNamespace()
@@ -301,12 +305,11 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
         first = asyncio.create_task(channel.ask(question="First"))
         second = asyncio.create_task(channel.ask(question="Second"))
         await asyncio.sleep(0)
-        self.assertEqual(len(channel._pending), 1)
+        self.assertEqual(len(channel._pending), 2)
 
         first_id = next(iter(channel._pending))
         await channel.resolve(first_id, "one")
         self.assertEqual(await first, "one")
-        await asyncio.sleep(0)
         self.assertEqual(len(channel._pending), 1)
 
         second_id = next(iter(channel._pending))
@@ -324,7 +327,7 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
             image_path = root / ".z-apply" / "runs" / "run-1" / "captcha.png"
             image_path.parent.mkdir(parents=True)
             image_path.write_bytes(b"image")
-            with patch("z_apply_core.human.telegram.Path.cwd", return_value=root):
+            with patch("z_apply_core.human.telegram.CORE_ROOT", root):
                 task = asyncio.create_task(
                     channel.ask(question="Enter CAPTCHA", image_path=str(image_path))
                 )

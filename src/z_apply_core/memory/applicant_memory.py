@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
+import functools
 import logging
 import re
 import uuid
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Protocol, cast
 
@@ -18,6 +21,8 @@ CORE_ROOT = Path(__file__).resolve().parents[3]
 MEMORY_PATH = CORE_ROOT / ".z-apply" / "qdrant"
 MEMORY_COLLECTION = "z_apply_core_applicant_memory_v1"
 MEMORY_NAMESPACE = uuid.UUID("f0e95a1d-6811-4fe6-a938-fb1153f3b8a9")
+_MEMORY_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candidate-memory")
+atexit.register(_MEMORY_EXECUTOR.shutdown, wait=True, cancel_futures=True)
 
 
 def _field_key(field_label: str) -> str:
@@ -43,6 +48,12 @@ class CandidateMemory:
         self._client = client or QdrantClient(path=str(MEMORY_PATH))
         self._embeddings = embeddings or cast(EmbeddingClient, NVIDIAEmbeddings())
         self._collection_name = collection_name
+        self._lock = asyncio.Lock()
+        self._closed = False
+        init_options = getattr(self._client, "_init_options", {})
+        self._in_memory = (
+            isinstance(init_options, dict) and init_options.get("location") == ":memory:"
+        )
 
     async def remember_human_answer(
         self,
@@ -52,12 +63,13 @@ class CandidateMemory:
         answer: str,
     ) -> bool:
         try:
-            await asyncio.to_thread(
-                self._remember_human_answer,
-                field_label=field_label,
-                question=question,
-                answer=answer,
-            )
+            async with self._lock:
+                await self._run(
+                    self._remember_human_answer,
+                    field_label=field_label,
+                    question=question,
+                    answer=answer,
+                )
         except Exception as exc:  # noqa: BLE001 - memory must not discard a human answer
             logger.warning("Candidate-memory ingestion failed: %s", exc)
             return False
@@ -71,12 +83,13 @@ class CandidateMemory:
         limit: int = 5,
     ) -> dict[str, object]:
         try:
-            return await asyncio.to_thread(
-                self._lookup,
-                field_label=field_label,
-                question=question,
-                limit=limit,
-            )
+            async with self._lock:
+                return await self._run(
+                    self._lookup,
+                    field_label=field_label,
+                    question=question,
+                    limit=limit,
+                )
         except Exception as exc:  # noqa: BLE001 - an unavailable memory is not a candidate fact
             logger.warning("Candidate-memory lookup failed: %s", exc)
             return {
@@ -111,7 +124,21 @@ class CandidateMemory:
         return [lookup_candidate_memory]
 
     def close(self) -> None:
-        self._client.close()
+        if self._closed:
+            return
+        self._closed = True
+        _MEMORY_EXECUTOR.submit(self._client.close).result(timeout=10)
+
+    async def _run(self, function: Any, /, **kwargs: Any) -> Any:
+        if self._closed:
+            raise RuntimeError("candidate memory is closed")
+        if self._in_memory:
+            return function(**kwargs)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            _MEMORY_EXECUTOR,
+            functools.partial(function, **kwargs),
+        )
 
     def _remember_human_answer(self, *, field_label: str, question: str, answer: str) -> None:
         document = f"Field: {field_label}\nQuestion: {question}\nAnswer: {answer}"

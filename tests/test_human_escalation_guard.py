@@ -10,9 +10,7 @@ from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddl
 
 
 def _request(args: dict[str, object]) -> SimpleNamespace:
-    return SimpleNamespace(
-        tool_call={"name": "ask_human", "args": args, "id": "call-1"}
-    )
+    return SimpleNamespace(tool_call={"name": "ask_human", "args": args, "id": "call-1"})
 
 
 class HumanEscalationGuardTests(unittest.IsolatedAsyncioTestCase):
@@ -28,9 +26,7 @@ class HumanEscalationGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_allows_specific_candidate_question(self) -> None:
         expected = ToolMessage(content="answer", tool_call_id="call-1")
         handler = AsyncMock(return_value=expected)
-        request = _request(
-            {"reason": "missing_candidate_fact", "field_label": "Expected salary"}
-        )
+        request = _request({"reason": "missing_candidate_fact", "field_label": "Expected salary"})
 
         result = await HumanEscalationGuardMiddleware().awrap_tool_call(request, handler)
 
@@ -48,14 +44,10 @@ class HumanEscalationGuardTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_orchestrator_guard_denies_candidate_questions(self) -> None:
         handler = AsyncMock()
-        guard = HumanEscalationGuardMiddleware(
-            allowed_reasons=frozenset({"human_challenge"})
-        )
+        guard = HumanEscalationGuardMiddleware(allowed_reasons=frozenset({"human_challenge"}))
 
         result = await guard.awrap_tool_call(
-            _request(
-                {"reason": "missing_candidate_fact", "field_label": "Expected salary"}
-            ),
+            _request({"reason": "missing_candidate_fact", "field_label": "Expected salary"}),
             handler,
         )
 

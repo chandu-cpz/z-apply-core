@@ -12,9 +12,7 @@ from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 async def test_repeated_denials_rotate_model_without_escaping_agent() -> None:
     failures: list[Exception] = []
     middleware = NoProgressGuardMiddleware(on_no_progress=failures.append)
-    request = SimpleNamespace(
-        tool_call={"name": "ls", "args": {"path": "/"}, "id": "call-1"}
-    )
+    request = SimpleNamespace(tool_call={"name": "ls", "args": {"path": "/"}, "id": "call-1"})
 
     async def denied(_request: object) -> ToolMessage:
         return ToolMessage(
