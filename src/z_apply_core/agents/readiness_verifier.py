@@ -65,11 +65,20 @@ async def require_submission_readiness(
     ) -> str:
         """Record concrete issues that must be fixed before approval is requested."""
         nonlocal verdict
+        unresolved = tuple(unresolved_required_fields or ())
+        errors = tuple(visible_errors or ())
+        if not unresolved and not errors:
+            return (
+                "Not-ready verdict rejected: questionable values alone cannot block "
+                "human review. Call review_ready and include those concerns in "
+                "questionable_values, unless fresh evidence shows a missing required "
+                "field or visible validation error."
+            )
         verdict = ReadinessVerdict(
             ready=False,
             evidence=evidence,
-            unresolved_required_fields=tuple(unresolved_required_fields or ()),
-            visible_errors=tuple(visible_errors or ()),
+            unresolved_required_fields=unresolved,
+            visible_errors=errors,
             questionable_values=tuple(questionable_values or ()),
         )
         return "Not-ready verdict recorded."
