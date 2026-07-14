@@ -12,6 +12,7 @@ from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
 
 from z_apply_core.browser_config import build_browser_config
+from z_apply_core.browser_readiness import FORM_READINESS_SCRIPT, BrowserFormReadiness
 from z_apply_core.browser_tools import (
     BROWSER_CHANGING_TOOL_NAMES,
     BrowserToolRegistry,
@@ -259,6 +260,13 @@ class BrowserSession:
                 "The browser did not create the requested human-challenge artifact."
             )
         return path
+
+    async def inspect_form_readiness(self) -> BrowserFormReadiness:
+        """Capture browser-owned constraint state without asking an LLM to infer it."""
+        self._assert_owned_page()
+        tab = await self._backend._ensure_tab()
+        payload = await tab.page.evaluate(FORM_READINESS_SCRIPT)
+        return BrowserFormReadiness.from_browser_payload(payload)
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""
