@@ -109,6 +109,24 @@ application, publish artifacts, expose an authenticated interactive noVNC sessio
 and support explicit take-control/return-control. Core should remain the owner of
 the live browser objective.
 
+## Invariants for the next layer
+
+- A run has one durable ID and one ordered event history across Core, the backend,
+  the frontend, and optional Telegram notifications. Reconnecting must replay
+  state rather than create a second conversation or application.
+- Browser input has one owner. The agent owns it during automation; manual
+  take-control pauses browser mutations, and returning control forces a fresh
+  snapshot before the agent resumes.
+- Run states remain distinct: `filled` means fields were entered;
+  `approval_ready` means a fresh review found no unresolved blockers; `submitted`
+  means the guarded submit action executed; `verified` requires independent
+  confirmation from the resulting employer page.
+- The backend supervises, persists, authenticates, and routes events. It does not
+  infer form semantics or weaken Core's execution and approval guards.
+- Raw VNC ports, credentials, verification links, and secret-bearing artifacts
+  never enter public event payloads. Browser viewing is authenticated, scoped to
+  one run, and exposed through short-lived access.
+
 ## Remaining gaps
 
 The first successful fill also exposed the next safety defect: submission approval
