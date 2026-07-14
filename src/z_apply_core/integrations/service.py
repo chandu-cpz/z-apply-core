@@ -443,13 +443,6 @@ class ZApplyCore:
             self._focused_run_id = run.run_id
             run.view = replace(run.view, browser_tab_state=BrowserTabState.OPEN)
             await self._emit(run, "browser.page_opened", {})
-            try:
-                async with asyncio.timeout(self._config.browser_navigation_timeout_seconds):
-                    await lease.session.call_tool("browser_navigate", {"url": run.request.job_url})
-            except TimeoutError as exc:
-                raise BrowserUnavailable(
-                    "initial browser navigation exceeded the configured timeout"
-                ) from exc
             run.human_broker = HumanRequestBroker(
                 run_id=run.run_id,
                 on_requested=lambda request: self._human_requested(run, request),

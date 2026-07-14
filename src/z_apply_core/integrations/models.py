@@ -58,13 +58,10 @@ class BrowserTabState(StrEnum):
 @dataclass(frozen=True, slots=True)
 class CoreIntegrationConfig:
     max_active_runs: int = 3
-    browser_navigation_timeout_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_active_runs <= 8:
             raise ValueError("max_active_runs must be from 1 through 8")
-        if self.browser_navigation_timeout_seconds <= 0:
-            raise ValueError("browser_navigation_timeout_seconds must be positive")
 
 
 @dataclass(frozen=True, slots=True)
