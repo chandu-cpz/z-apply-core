@@ -36,9 +36,34 @@ async def run_job(
     task: str,
     live_view: bool = True,
     sink: FrameworkEventSink | None = None,
+    router: NimRouter | None = None,
+    resources: RunResources | None = None,
+    cleanup_resources: bool = True,
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
-    resources = RunResources()
+    run_resources = resources or RunResources()
+    resolved_router = router or make_router()
+    try:
+        stream = graph.astream_events(
+            initial_state(job_url, task=task, live_view=live_view),
+            config={
+                "configurable": {
+                    "sink": sink,
+                    "nim_router": resolved_router,
+                    "run_resources": run_resources,
+                }
+            },
+            version="v3",
+        )
+        result = await consume_v3_events(stream, sink=sink)
+        return cast(RunState, result.output), result
+    finally:
+        if cleanup_resources and run_resources.runtime is not None:
+            await run_resources.runtime.close()
+
+
+def make_router() -> NimRouter:
+    """Create the production router configuration shared by a service or CLI run."""
     router_config = RouterConfig.from_env()
     router_config.excluded_models = list(
         dict.fromkeys([*router_config.excluded_models, *BANNED_MODEL_IDS_UNDER_30B])
@@ -49,21 +74,4 @@ async def run_job(
         router_config.exploration_interval_seconds,
         MAX_EXPLORATION_INTERVAL_SECONDS,
     )
-    router = NimRouter(config=router_config)
-    try:
-        stream = graph.astream_events(
-            initial_state(job_url, task=task, live_view=live_view),
-            config={
-                "configurable": {
-                    "sink": sink,
-                    "nim_router": router,
-                    "run_resources": resources,
-                }
-            },
-            version="v3",
-        )
-        result = await consume_v3_events(stream, sink=sink)
-        return cast(RunState, result.output), result
-    finally:
-        if resources.runtime is not None:
-            await resources.runtime.close()
+    return NimRouter(config=router_config)
