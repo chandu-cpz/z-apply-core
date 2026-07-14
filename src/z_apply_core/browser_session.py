@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import contextlib
 import json
 from collections.abc import AsyncIterator, Sequence
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
 from typing import Any, Protocol, Self
 from uuid import uuid4
@@ -38,6 +37,8 @@ class MutationGate(Protocol):
 
 class BrowserLease(Protocol):
     def owns_current_page(self) -> bool: ...
+
+    async def focus(self) -> None: ...
 
     async def discover_owned_popups(self) -> None: ...
 
@@ -112,33 +113,25 @@ class BrowserSession:
         normalized = normalize_browser_arguments(arguments)
         if name == "browser_snapshot" and "target" not in normalized:
             normalized["target"] = "html"
-        guarded_submit = False
-        if self._submission_guard_active:
-            if name == "browser_click":
-                guarded_submit = await self._is_form_submit(normalized)
-            elif name == "browser_type" and normalized.get("submit") is True:
-                guarded_submit = True
-            if guarded_submit and self._approved_submissions < 1:
-                raise BrowserToolExecutionError(
-                    "Final-form submission is locked. Call request_submit_approval and "
-                    "wait for an approved result before clicking this submit control."
-                )
-        if name in BROWSER_CHANGING_TOOL_NAMES:
-            async with self._mutation_scope():
-                self._assert_owned_page()
-                result = await self._backend.call_tool(
-                    name,
-                    normalized,
-                    meta=self._call_meta(name),
-                )
-                await self._discover_owned_popups()
-        else:
-            self._assert_owned_page()
+        async with self._operation_scope():
+            guarded_submit = False
+            if self._submission_guard_active:
+                if name == "browser_click":
+                    guarded_submit = await self._is_form_submit(normalized)
+                elif name == "browser_type" and normalized.get("submit") is True:
+                    guarded_submit = True
+                if guarded_submit and self._approved_submissions < 1:
+                    raise BrowserToolExecutionError(
+                        "Final-form submission is locked. Call request_submit_approval and "
+                        "wait for an approved result before clicking this submit control."
+                    )
             result = await self._backend.call_tool(
                 name,
                 normalized,
                 meta=self._call_meta(name),
             )
+            if name in BROWSER_CHANGING_TOOL_NAMES:
+                await self._discover_owned_popups()
         _raise_for_tool_error(name, result)
         if guarded_submit:
             self._approved_submissions -= 1
@@ -153,11 +146,12 @@ class BrowserSession:
         arguments: dict[str, Any] | None = None,
     ) -> list[dict[str, str]]:
         """Return MCP text and image results as LangChain standard content blocks."""
-        result = await self._backend.call_tool(
-            name,
-            normalize_browser_arguments(arguments),
-            meta=self._call_meta(name),
-        )
+        async with self._operation_scope():
+            result = await self._backend.call_tool(
+                name,
+                normalize_browser_arguments(arguments),
+                meta=self._call_meta(name),
+            )
         _raise_for_tool_error(name, result)
         return _content_blocks(result)
 
@@ -192,8 +186,7 @@ class BrowserSession:
 
     async def upload_files(self, target: str, paths: list[str]) -> str:
         """Resolve an upload trigger to its file input without opening a chooser."""
-        async with self._mutation_scope():
-            self._assert_owned_page()
+        async with self._operation_scope():
             tab = await self._backend._ensure_tab()
             resolved = await tab.resolve_target(target=target)
             locator = resolved.locator
@@ -267,16 +260,16 @@ class BrowserSession:
 
     async def inspect_form_readiness(self) -> BrowserFormReadiness:
         """Capture browser-owned constraint state without asking an LLM to infer it."""
-        self._assert_owned_page()
-        tab = await self._backend._ensure_tab()
-        payload = await tab.page.evaluate(FORM_READINESS_SCRIPT)
+        async with self._operation_scope():
+            tab = await self._backend._ensure_tab()
+            payload = await tab.page.evaluate(FORM_READINESS_SCRIPT)
         return BrowserFormReadiness.from_browser_payload(payload)
 
     async def required_file_upload_pending(self) -> bool:
         """Report whether the live form owns an empty required file input."""
-        self._assert_owned_page()
-        tab = await self._backend._ensure_tab()
-        return bool(await tab.page.evaluate(REQUIRED_FILE_UPLOAD_PENDING_SCRIPT))
+        async with self._operation_scope():
+            tab = await self._backend._ensure_tab()
+            return bool(await tab.page.evaluate(REQUIRED_FILE_UPLOAD_PENDING_SCRIPT))
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""
@@ -288,9 +281,10 @@ class BrowserSession:
                 "page state. Use its post-action evidence; do not repeat it."
             )
         try:
-            tab = await self._backend._ensure_tab()
-            locator = (await tab.resolve_target(target=target)).locator
-            is_auth_submit = await locator.evaluate(
+            async with self._operation_scope():
+                tab = await self._backend._ensure_tab()
+                locator = (await tab.resolve_target(target=target)).locator
+                is_auth_submit = await locator.evaluate(
                 """element => {
                 const selector = 'button, input[type="submit"], input[type="image"]';
                 let control = element.closest(selector);
@@ -326,7 +320,18 @@ class BrowserSession:
                          'one-time-code'].includes(autocomplete);
                 });
             }"""
-            )
+                )
+                if not is_auth_submit:
+                    raise BrowserToolExecutionError(
+                        "Authentication submit rejected: the target is not a submit "
+                        "control in a structurally identifiable login or verification form."
+                    )
+                result = await self._backend.call_tool(
+                    "browser_click",
+                    {"target": target},
+                    meta=self._call_meta("browser_click"),
+                )
+                await self._discover_owned_popups()
         except BrowserToolExecutionError:
             raise
         except Exception as exc:
@@ -334,19 +339,6 @@ class BrowserSession:
                 "Authentication control is stale or unavailable. Capture a fresh "
                 "snapshot and continue from current page evidence."
             ) from exc
-        if not is_auth_submit:
-            raise BrowserToolExecutionError(
-                "Authentication submit rejected: the target is not a submit control in "
-                "a structurally identifiable login or verification form."
-            )
-        async with self._mutation_scope():
-            self._assert_owned_page()
-            result = await self._backend.call_tool(
-                "browser_click",
-                {"target": target},
-                meta=self._call_meta("browser_click"),
-            )
-            await self._discover_owned_popups()
         _raise_for_tool_error("browser_click", result)
         try:
             evidence = await self.call_tool("browser_snapshot")
@@ -361,8 +353,7 @@ class BrowserSession:
 
     async def open_verification_link(self, url: str) -> str:
         """Resolve an email link in a temporary tab and always restore the app tab."""
-        async with self._mutation_scope():
-            self._assert_owned_page()
+        async with self._operation_scope():
             original = await self._backend._ensure_tab()
             context = original.context
             temporary = await context.new_tab()
@@ -456,11 +447,22 @@ class BrowserSession:
             meta["cwd"] = str(self._capture_workspace)
         return meta
 
-    def _mutation_scope(self) -> AbstractAsyncContextManager[None]:
+    @asynccontextmanager
+    async def _operation_scope(self) -> AsyncIterator[None]:
         mutation_gate = getattr(self, "_mutation_gate", None)
         if mutation_gate is not None:
-            return mutation_gate.mutation()
-        return _unlocked_mutation()
+            async with mutation_gate.mutation():
+                await self._focus_owned_page()
+                yield
+            return
+        await self._focus_owned_page()
+        yield
+
+    async def _focus_owned_page(self) -> None:
+        lease = getattr(self, "_lease", None)
+        if lease is not None:
+            await lease.focus()
+        self._assert_owned_page()
 
     def _assert_owned_page(self) -> None:
         lease = getattr(self, "_lease", None)
@@ -473,11 +475,6 @@ class BrowserSession:
         lease = getattr(self, "_lease", None)
         if lease is not None:
             await lease.discover_owned_popups()
-
-
-@contextlib.asynccontextmanager
-async def _unlocked_mutation() -> AsyncIterator[None]:
-    yield
 
 
 def _text_content(result: Any) -> str:

@@ -22,7 +22,7 @@ class BrowserControlGate:
         self._condition = asyncio.Condition()
         self._takeover_pending = False
         self._human_control = False
-        self._active_mutations = 0
+        self._operation_active = False
 
     @property
     def human_control(self) -> bool:
@@ -32,14 +32,16 @@ class BrowserControlGate:
     async def mutation(self) -> AsyncIterator[None]:
         async with self._condition:
             await self._condition.wait_for(
-                lambda: not self._human_control and not self._takeover_pending
+                lambda: not self._human_control
+                and not self._takeover_pending
+                and not self._operation_active
             )
-            self._active_mutations += 1
+            self._operation_active = True
         try:
             yield
         finally:
             async with self._condition:
-                self._active_mutations -= 1
+                self._operation_active = False
                 self._condition.notify_all()
 
     async def take(self) -> None:
@@ -47,7 +49,7 @@ class BrowserControlGate:
             if self._human_control or self._takeover_pending:
                 raise RuntimeError("browser workspace is already under human control")
             self._takeover_pending = True
-            await self._condition.wait_for(lambda: self._active_mutations == 0)
+            await self._condition.wait_for(lambda: not self._operation_active)
             self._human_control = True
             self._takeover_pending = False
 
@@ -149,11 +151,12 @@ class BrowserWorkspace:
         async with self._creation_lock:
             if run_id in self._leases:
                 raise RuntimeError(f"browser lease already exists for run {run_id}")
-            backend = await self._server.backend_pool.backend_for(run_id)
-            artifact_dir = (ARTIFACT_ROOT / run_id / "browser-artifacts").resolve()
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-            context = await backend._ensure_context(cwd=artifact_dir, roots=None)
-            tab = await context.new_tab()
+            async with self.gate.mutation():
+                backend = await self._server.backend_pool.backend_for(run_id)
+                artifact_dir = (ARTIFACT_ROOT / run_id / "browser-artifacts").resolve()
+                artifact_dir.mkdir(parents=True, exist_ok=True)
+                context = await backend._ensure_context(cwd=artifact_dir, roots=None)
+                tab = await context.new_tab()
             session = BrowserSession.from_backend(
                 backend,
                 tools=tuple(self._server.backend_pool.tools),
@@ -176,7 +179,8 @@ class BrowserWorkspace:
 
     async def focus(self, run_id: str) -> None:
         lease = self._require_lease(run_id)
-        await lease.focus()
+        async with self.gate.mutation():
+            await lease.focus()
 
     async def take_human_control(self, run_id: str) -> None:
         lease = self._require_lease(run_id)
@@ -198,9 +202,10 @@ class BrowserWorkspace:
         lease = self._leases.pop(run_id, None)
         if lease is None:
             return
-        await lease.close_pages()
-        if self._server is not None:
-            await self._server.backend_pool.close(run_id)
+        async with self.gate.mutation():
+            await lease.close_pages()
+            if self._server is not None:
+                await self._server.backend_pool.close(run_id)
 
     async def close(self) -> None:
         for run_id in tuple(self._leases):

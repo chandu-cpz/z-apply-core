@@ -88,6 +88,33 @@ async def test_browser_control_waits_for_mutation_and_blocks_new_mutations() -> 
     assert second_entered.is_set()
 
 
+@pytest.mark.asyncio
+async def test_browser_gate_serializes_operations_across_run_sessions() -> None:
+    gate = BrowserControlGate()
+    first_entered = asyncio.Event()
+    release_first = asyncio.Event()
+    second_entered = asyncio.Event()
+
+    async def first_operation() -> None:
+        async with gate.mutation():
+            first_entered.set()
+            await release_first.wait()
+
+    async def second_operation() -> None:
+        async with gate.mutation():
+            second_entered.set()
+
+    first = asyncio.create_task(first_operation())
+    await first_entered.wait()
+    second = asyncio.create_task(second_operation())
+    await asyncio.sleep(0)
+
+    assert not second_entered.is_set()
+    release_first.set()
+    await asyncio.gather(first, second)
+    assert second_entered.is_set()
+
+
 def test_framework_state_event_never_serializes_runtime_objects() -> None:
     runtime = object()
     payload = _framework_payload(
