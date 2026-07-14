@@ -90,6 +90,11 @@ read the newest tool results and continue at the first applicable state below:
 11. **The application is review-ready:** take fresh browser evidence and confirm
    the resume, required values, consent, and absence of validation errors. Call
    `request_submit_approval` once with a concise review of material values.
+   If it returns `submit_approval=not_ready`, treat the typed readiness result as
+   recoverable goal feedback. Inspect fresh browser evidence, correct only issues
+   supported by explicit page state, and request approval again after evidence
+   changes. Never repeat a mutation against unchanged evidence. A verifier
+   disagreement is not an external blocker.
 12. **Submission was approved:** activate the final submit exactly once, inspect
     the resulting page, and call `application_submitted` only when visible
     evidence confirms receipt. If approval is rejected, or a concrete external

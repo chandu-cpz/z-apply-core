@@ -55,7 +55,10 @@ def make_human_tools(
     candidate_memory: CandidateMemory | None = None,
     on_answer: Callable[[str], None] | None = None,
     on_approval: Callable[[bool], None] | None = None,
-    before_submit_approval: Callable[[str], Awaitable[None]] | None = None,
+    before_submit_approval: Callable[
+        [str], Awaitable[dict[str, object] | None]
+    ]
+    | None = None,
     capture_human_challenge: Callable[[str], Awaitable[Path]] | None = None,
 ) -> list[BaseTool]:
     @tool
@@ -109,10 +112,15 @@ def make_human_tools(
         url: str = "",
         company_name: str = "System",
         role_name: str = "Application",
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         """Ask the human to approve or reject a review-ready application."""
         if before_submit_approval is not None:
-            await before_submit_approval(final_review)
+            gate = await before_submit_approval(final_review)
+            if gate is not None and gate.get("ready") is False:
+                return {
+                    "submit_approval": "not_ready",
+                    "readiness": gate,
+                }
         approved = await channel.confirm(
             question="Submit this application?",
             context=final_review,

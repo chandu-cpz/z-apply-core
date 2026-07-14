@@ -191,7 +191,7 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(answer["human_answer"].endswith(":/runtime/captcha.png"))
 
     async def test_review_artifact_is_published_before_submit_approval(self) -> None:
-        before_approval = AsyncMock()
+        before_approval = AsyncMock(return_value={"ready": True})
         _, request_submit_approval = make_human_tools(
             FakeHumanChannel(),
             before_submit_approval=before_approval,
@@ -203,6 +203,30 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
 
         before_approval.assert_awaited_once()
         self.assertEqual(result, {"submit_approval": "approved"})
+
+    async def test_not_ready_review_returns_goal_feedback_without_human_prompt(
+        self,
+    ) -> None:
+        channel = SimpleNamespace(confirm=AsyncMock(return_value=True))
+        before_approval = AsyncMock(
+            return_value={
+                "ready": False,
+                "visible_errors": ["Required field is empty"],
+            }
+        )
+        _, request_submit_approval = make_human_tools(
+            channel,
+            before_submit_approval=before_approval,
+        )
+
+        result = await request_submit_approval.ainvoke({"final_review": "Ready"})
+
+        self.assertEqual(result["submit_approval"], "not_ready")
+        self.assertEqual(
+            result["readiness"],
+            {"ready": False, "visible_errors": ["Required field is empty"]},
+        )
+        channel.confirm.assert_not_awaited()
 
 
 class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):

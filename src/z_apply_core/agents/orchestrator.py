@@ -109,12 +109,12 @@ async def run_orchestrator(
 
     if human_channel is not None:
 
-        async def prepare_submission_review(final_review: str) -> None:
+        async def prepare_submission_review(final_review: str) -> dict[str, object]:
             publisher = artifact_publisher
             if publisher is None:
                 raise ToolException("Submission artifacts are unavailable for this run.")
             await publisher.publish_review_artifact()
-            await require_submission_readiness(
+            verdict = await require_submission_readiness(
                 browser=publisher.browser,
                 router=router,
                 final_review=final_review,
@@ -122,6 +122,13 @@ async def run_orchestrator(
                 sink=event_sink,
                 run_id=run_id,
             )
+            return {
+                "ready": verdict.ready,
+                "evidence": verdict.evidence,
+                "unresolved_required_fields": list(verdict.unresolved_required_fields),
+                "visible_errors": list(verdict.visible_errors),
+                "questionable_values": list(verdict.questionable_values),
+            }
 
         human_tools = make_human_tools(
             human_channel,
