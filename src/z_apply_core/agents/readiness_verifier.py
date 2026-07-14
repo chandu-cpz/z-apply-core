@@ -9,7 +9,7 @@ from langchain_core.tools import ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from nim_router import NimRouter
 
-from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_active_goal
+from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
@@ -99,7 +99,7 @@ async def require_submission_readiness(
     configurable = dict(verifier_config.get("configurable", {}))
     configurable["thread_id"] = f"z-apply:{run_id}:readiness"
     verifier_config["configurable"] = configurable
-    await run_active_goal(
+    await run_persistent_goal(
         agent,
         initial_message=(
             "Decide whether the current application is ready for the human to approve "
@@ -114,6 +114,7 @@ async def require_submission_readiness(
         ),
         config=verifier_config,
         sink=sink,
+        is_terminal=lambda: verdict is not None,
         source="ReadinessVerifier",
     )
     if verdict is None:
