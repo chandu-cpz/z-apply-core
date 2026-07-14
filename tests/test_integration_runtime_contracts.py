@@ -149,10 +149,13 @@ async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_browser_workspace_discards_restored_pages_without_clearing_profile() -> None:
+async def test_browser_workspace_retains_blank_anchor_and_discards_restored_pages() -> None:
     workspace = BrowserWorkspace()
+    anchor_page = SimpleNamespace(goto=AsyncMock(), is_closed=lambda: False, close=AsyncMock())
     restored_page = SimpleNamespace(is_closed=lambda: False, close=AsyncMock())
-    context = SimpleNamespace(tabs=lambda: [SimpleNamespace(page=restored_page)])
+    context = SimpleNamespace(
+        tabs=lambda: [SimpleNamespace(page=anchor_page), SimpleNamespace(page=restored_page)]
+    )
     anchor = SimpleNamespace(_ensure_context=AsyncMock(return_value=context))
     pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor), tools=())
     server = SimpleNamespace(backend_pool=pool)
@@ -167,6 +170,10 @@ async def test_browser_workspace_discards_restored_pages_without_clearing_profil
     ):
         await workspace.start()
 
+    anchor_page.goto.assert_awaited_once_with(
+        "about:blank", wait_until="commit", timeout=5_000
+    )
+    anchor_page.close.assert_not_awaited()
     restored_page.close.assert_awaited_once()
 
 

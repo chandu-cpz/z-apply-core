@@ -154,7 +154,7 @@ class BrowserWorkspace:
                 self._context = await self._anchor_backend._ensure_context(
                     cwd=Path.cwd(), roots=None
                 )
-                await self._discard_restored_pages()
+                await self._normalize_restored_pages()
                 self._started = True
             except Exception:
                 self._server = None
@@ -252,10 +252,16 @@ class BrowserWorkspace:
             raise BrowserToolExecutionError("The run's browser page is unavailable.")
         return lease
 
-    async def _discard_restored_pages(self) -> None:
-        """Start a new supervisor lifetime without resurrecting stale run pages."""
+    async def _normalize_restored_pages(self) -> None:
+        """Retain one blank Camoufox window and discard stale restored run pages."""
         assert self._context is not None
-        for tab in tuple(self._context.tabs()):
+        tabs = tuple(self._context.tabs())
+        if not tabs:
+            return
+        anchor, *restored = tabs
+        with contextlib.suppress(Exception):
+            await anchor.page.goto("about:blank", wait_until="commit", timeout=5_000)
+        for tab in restored:
             with contextlib.suppress(Exception):
                 if not tab.page.is_closed():
                     await tab.page.close()
