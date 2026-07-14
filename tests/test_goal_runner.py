@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import ToolMessage
 
 from z_apply_core.agents.goal_runner import (
     ACTIVE_OBJECTIVE_SOURCE,
@@ -56,7 +57,7 @@ async def test_active_goal_has_bounded_recovery() -> None:
 
 
 @pytest.mark.asyncio
-async def test_native_tool_action_resets_consecutive_recovery_budget() -> None:
+async def test_read_only_tool_does_not_reset_consecutive_recovery_budget() -> None:
     middleware = ActiveGoalMiddleware(
         is_terminal=lambda: False,
         on_no_progress=lambda error: None,
@@ -64,29 +65,64 @@ async def test_native_tool_action_resets_consecutive_recovery_budget() -> None:
     )
 
     await middleware.aafter_agent({}, None)
-    await middleware.aafter_model(
-        {
-            "messages": [
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "name": "browser_snapshot",
-                            "args": {},
-                            "id": "tool-1",
-                            "type": "tool_call",
-                        }
-                    ],
-                )
-            ]
-        },
-        None,
+    request = Mock(tool_call={"name": "browser_snapshot"})
+
+    async def snapshot_handler(request: Any) -> ToolMessage:
+        del request
+        return ToolMessage(content="snapshot", tool_call_id="tool-1")
+
+    await middleware.awrap_tool_call(request, snapshot_handler)
+
+    with pytest.raises(ActiveGoalExhausted):
+        await middleware.aafter_agent({}, None)
+
+
+@pytest.mark.asyncio
+async def test_successful_browser_mutation_resets_recovery_budget() -> None:
+    middleware = ActiveGoalMiddleware(
+        is_terminal=lambda: False,
+        on_no_progress=lambda error: None,
+        max_recoveries=1,
     )
+
+    await middleware.aafter_agent({}, None)
+    request = Mock(tool_call={"name": "browser_fill_form"})
+
+    async def fill_handler(request: Any) -> ToolMessage:
+        del request
+        return ToolMessage(content="filled", tool_call_id="tool-2")
+
+    await middleware.awrap_tool_call(request, fill_handler)
 
     update = await middleware.aafter_agent({}, None)
 
     assert update is not None
     assert update["jump_to"] == "model"
+
+
+@pytest.mark.asyncio
+async def test_failed_browser_mutation_does_not_reset_recovery_budget() -> None:
+    middleware = ActiveGoalMiddleware(
+        is_terminal=lambda: False,
+        on_no_progress=lambda error: None,
+        max_recoveries=1,
+    )
+
+    await middleware.aafter_agent({}, None)
+    request = Mock(tool_call={"name": "browser_fill_form"})
+
+    async def denied_fill_handler(request: Any) -> ToolMessage:
+        del request
+        return ToolMessage(
+            content="denied",
+            tool_call_id="tool-3",
+            status="error",
+        )
+
+    await middleware.awrap_tool_call(request, denied_fill_handler)
+
+    with pytest.raises(ActiveGoalExhausted):
+        await middleware.aafter_agent({}, None)
 
 
 @pytest.mark.asyncio

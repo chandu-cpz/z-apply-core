@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from langchain.agents.middleware import AgentMiddleware
@@ -10,13 +10,17 @@ from langchain.agents.middleware.types import (
     AgentState,
     ContextT,
     ResponseT,
+    ToolCallRequest,
     hook_config,
 )
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import HumanMessage
+from langchain_core.messages.tool import ToolMessage
 from langchain_core.runnables.config import RunnableConfig
+from langgraph.types import Command
 
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
+from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 logger = logging.getLogger(__name__)
@@ -25,9 +29,15 @@ ACTIVE_OBJECTIVE_SOURCE = "active_objective_controller"
 MAX_NO_PROGRESS_RECOVERIES = 20
 MAX_GOAL_RUN_RECOVERIES = 100
 
+_PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {"task", "ask_human"}
+
 
 class ActiveGoalExhausted(RuntimeError):
     """The persistent goal repeatedly stopped without a terminal action."""
+
+
+def _tool_succeeded(result: ToolMessage | Command[Any]) -> bool:
+    return not isinstance(result, ToolMessage) or result.status != "error"
 
 
 class ActiveGoalMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -69,26 +79,25 @@ class ActiveGoalMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Resp
         del state, runtime
         return self._continue_or_finish()
 
-    def after_model(
+    async def awrap_tool_call(
         self,
-        state: AgentState[ResponseT],
-        runtime: Any,
-    ) -> None:
-        del runtime
-        self._reset_after_native_action(state)
+        request: ToolCallRequest,
+        handler: Callable[
+            [ToolCallRequest], Awaitable[ToolMessage | Command[Any]]
+        ],
+    ) -> ToolMessage | Command[Any]:
+        """Credit progress only after a progress-capable tool succeeds.
 
-    async def aafter_model(
-        self,
-        state: AgentState[ResponseT],
-        runtime: Any,
-    ) -> None:
-        del runtime
-        self._reset_after_native_action(state)
-
-    def _reset_after_native_action(self, state: AgentState[ResponseT]) -> None:
-        messages = state.get("messages", ())
-        if messages and isinstance(messages[-1], AIMessage) and messages[-1].tool_calls:
+        Read-only inspection is useful evidence, but it must not erase a run of
+        prose-only stops. Crediting the proposed tool call in ``after_model``
+        allowed an endless snapshot -> prose -> snapshot loop. The executor
+        result is the first boundary where success is known.
+        """
+        result = await handler(request)
+        tool_name = str(request.tool_call.get("name", ""))
+        if tool_name in _PROGRESS_TOOL_NAMES and _tool_succeeded(result):
             self._recoveries = 0
+        return result
 
     def _continue_or_finish(self) -> dict[str, Any] | None:
         if self._is_terminal():
