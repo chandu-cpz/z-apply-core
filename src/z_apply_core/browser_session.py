@@ -18,7 +18,7 @@ from z_apply_core.browser_tools import (
     normalize_browser_arguments,
 )
 
-INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot", "browser_pdf"})
+INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
 CORE_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
 

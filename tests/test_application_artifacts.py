@@ -9,22 +9,30 @@ from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 
 
 @pytest.mark.asyncio
-async def test_application_artifacts_capture_before_publishing() -> None:
+async def test_application_artifacts_capture_before_publishing(tmp_path: Path) -> None:
     browser = Mock()
-    browser.artifact_path.side_effect = lambda filename: Path("/tmp/run") / filename
-    browser.call_tool = AsyncMock()
-    browser.call_tool_content = AsyncMock()
+    browser.artifact_path.side_effect = lambda filename: tmp_path / filename
+    browser.call_tool = AsyncMock(
+        side_effect=lambda _name, arguments: (tmp_path / str(arguments["filename"])).touch()
+    )
     channel = Mock()
     channel.send_artifact = AsyncMock()
     publisher = ApplicationArtifactPublisher(browser=browser, channel=channel)
 
-    await publisher.publish_review_pdf()
+    await publisher.publish_review_artifact()
     await publisher.publish_submission_screenshot()
 
-    browser.call_tool.assert_awaited_once_with(
-        "browser_pdf", {"filename": "application-review.pdf"}
+    assert browser.call_tool.await_args_list[0].args == (
+        "browser_take_screenshot",
+        {
+            "filename": "application-review.png",
+            "fullPage": True,
+            "type": "png",
+            "scale": "css",
+        },
     )
-    browser.call_tool_content.assert_awaited_once_with(
-        "browser_take_screenshot", {"filename": "submission-confirmation.png"}
+    assert browser.call_tool.await_args_list[1].args == (
+        "browser_take_screenshot",
+        {"filename": "submission-confirmation.png", "type": "png", "scale": "css"},
     )
     assert channel.send_artifact.await_count == 2

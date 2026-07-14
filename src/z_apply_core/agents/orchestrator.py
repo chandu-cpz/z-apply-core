@@ -113,7 +113,7 @@ async def run_orchestrator(
             publisher = artifact_publisher
             if publisher is None:
                 raise ToolException("Submission artifacts are unavailable for this run.")
-            await publisher.publish_review_pdf()
+            await publisher.publish_review_artifact()
             await require_submission_readiness(
                 browser=publisher.browser,
                 router=router,

@@ -28,26 +28,31 @@ class ApplicationArtifactPublisher:
     def browser(self) -> BrowserSession:
         return self._browser
 
-    async def publish_review_pdf(self) -> None:
-        path = self._browser.artifact_path("application-review.pdf")
+    async def publish_review_artifact(self) -> None:
+        """Publish a full-page review image using the supported browser contract."""
+        path = self._browser.artifact_path("application-review.png")
         await self._browser.call_tool(
-            "browser_pdf",
-            {"filename": path.name},
+            "browser_take_screenshot",
+            {"filename": path.name, "fullPage": True, "type": "png", "scale": "css"},
         )
+        if not path.is_file():
+            raise RuntimeError("The browser did not create the application review artifact.")
         if self._on_created is not None:
-            await self._on_created("review_pdf", path)
+            await self._on_created("review_screenshot", path)
         await self._channel.send_artifact(
             path=str(path),
-            caption="Application review PDF — inspect before approving final submission.",
+            caption="Full application review — inspect before approving final submission.",
         )
-        logger.info("Published pre-submit application PDF to the human channel")
+        logger.info("Published pre-submit application review to the human channel")
 
     async def publish_submission_screenshot(self) -> None:
         path = self._browser.artifact_path("submission-confirmation.png")
-        await self._browser.call_tool_content(
+        await self._browser.call_tool(
             "browser_take_screenshot",
-            {"filename": path.name},
+            {"filename": path.name, "type": "png", "scale": "css"},
         )
+        if not path.is_file():
+            raise RuntimeError("The browser did not create the submission artifact.")
         if self._on_created is not None:
             await self._on_created("submission_confirmation", path)
         await self._channel.send_artifact(
