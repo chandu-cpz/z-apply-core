@@ -123,27 +123,33 @@ class BrowserWorkspace:
         self._server: Any | None = None
         self._anchor_backend: Any | None = None
         self._leases: dict[str, RunBrowserLease] = {}
+        self._start_lock = asyncio.Lock()
         self._creation_lock = asyncio.Lock()
         self._started = False
 
     async def start(self, *, live_view: bool = True) -> None:
         if self._started:
             return
-        self.display.start()
-        try:
-            self.live_view.start(self.display.display, enabled=live_view, open_client=False)
-            config = build_browser_config("workspace")
-            config["sharedBrowserContext"] = True
-            self._server = await create_connection(config)
-            self._anchor_backend = await self._server.backend_pool.backend_for(
-                "__z_apply_workspace__"
-            )
-            await self._anchor_backend._ensure_context(cwd=Path.cwd(), roots=None)
-            self._started = True
-        except Exception:
-            self.live_view.stop()
-            self.display.stop()
-            raise
+        async with self._start_lock:
+            if self._started:
+                return
+            self.display.start()
+            try:
+                self.live_view.start(self.display.display, enabled=live_view, open_client=False)
+                config = build_browser_config("workspace")
+                config["sharedBrowserContext"] = True
+                self._server = await create_connection(config)
+                self._anchor_backend = await self._server.backend_pool.backend_for(
+                    "__z_apply_workspace__"
+                )
+                await self._anchor_backend._ensure_context(cwd=Path.cwd(), roots=None)
+                self._started = True
+            except Exception:
+                self._server = None
+                self._anchor_backend = None
+                self.live_view.stop()
+                self.display.stop()
+                raise
 
     async def open_run(self, run_id: str) -> RunBrowserLease:
         await self.start()

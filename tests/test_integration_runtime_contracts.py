@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
 
 from z_apply_core.agents.context_inbox import ContextInbox, ContextMessage
-from z_apply_core.browser_workspace import BrowserControlGate
+from z_apply_core.browser_workspace import BrowserControlGate, BrowserWorkspace
 from z_apply_core.human.broker import HumanRequestBroker
 from z_apply_core.integrations.models import StartRunRequest
 from z_apply_core.integrations.service import _framework_payload, _GraphSink, _Run
@@ -113,6 +115,29 @@ async def test_browser_gate_serializes_operations_across_run_sessions() -> None:
     release_first.set()
     await asyncio.gather(first, second)
     assert second_entered.is_set()
+
+
+@pytest.mark.asyncio
+async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
+    workspace = BrowserWorkspace()
+    anchor = SimpleNamespace(_ensure_context=AsyncMock())
+    pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor))
+    server = SimpleNamespace(backend_pool=pool)
+
+    with (
+        patch(
+            "z_apply_core.browser_workspace.create_connection",
+            AsyncMock(return_value=server),
+        ) as create,
+        patch("z_apply_core.browser_workspace.VirtualDisplaySession.start") as display_start,
+        patch("z_apply_core.browser_workspace.LiveView.start"),
+    ):
+        await asyncio.gather(workspace.start(), workspace.start(), workspace.start())
+
+    create.assert_awaited_once()
+    pool.backend_for.assert_awaited_once_with("__z_apply_workspace__")
+    anchor._ensure_context.assert_awaited_once()
+    display_start.assert_called_once()
 
 
 def test_framework_state_event_never_serializes_runtime_objects() -> None:

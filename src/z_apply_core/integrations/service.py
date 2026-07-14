@@ -525,7 +525,13 @@ class ZApplyCore:
             raise
         except Exception as exc:
             await self._terminal(
-                run, RunOutcome.FAILED, "Core execution failed.", {"error": type(exc).__name__}
+                run,
+                RunOutcome.FAILED,
+                "Core execution failed.",
+                {
+                    "error": type(exc).__name__,
+                    "error_detail": str(exc)[:2_000] or "No exception detail was provided.",
+                },
             )
         finally:
             if run.human_broker is not None:
