@@ -14,7 +14,7 @@ from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
-from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_active_goal
+from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
@@ -246,11 +246,12 @@ async def run_orchestrator(
         run_id=run_id,
     )
     try:
-        await run_active_goal(
+        await run_persistent_goal(
             agent,
             initial_message=prompt,
             config=run_config,
             sink=event_sink,
+            is_terminal=lambda: terminal is not None,
         )
     except Exception as exc:  # noqa: BLE001 - return a clear infrastructure status
         logger.exception("Persistent job-application agent failed")

@@ -779,6 +779,7 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "model_rotated": "model.rotated",
         "model_rate_limited": "model.rate_limited",
         "recovery_started": "recovery.started",
+        "recovery_completed": "recovery.completed",
         "recovery_exhausted": "recovery.exhausted",
         "authentication_evidence": "authentication.evidence",
         "auth": "authentication.evidence",

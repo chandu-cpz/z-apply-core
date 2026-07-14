@@ -9,6 +9,7 @@ from z_apply_core.agents.goal_runner import (
     ACTIVE_OBJECTIVE_SOURCE,
     ActiveGoalExhausted,
     ActiveGoalMiddleware,
+    run_persistent_goal,
 )
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 
@@ -86,3 +87,42 @@ async def test_native_tool_action_resets_consecutive_recovery_budget() -> None:
 
     assert update is not None
     assert update["jump_to"] == "model"
+
+
+@pytest.mark.asyncio
+async def test_persistent_goal_reenters_same_agent_after_stream_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[str] = []
+
+    async def fake_run_active_goal(
+        agent: object,
+        *,
+        initial_message: str,
+        config: object,
+        sink: object,
+        source: str = "orchestrator",
+    ) -> None:
+        del agent, config, sink, source
+        messages.append(initial_message)
+        if len(messages) < 3:
+            raise TimeoutError("provider timeout")
+
+    monkeypatch.setattr(
+        "z_apply_core.agents.goal_runner.run_active_goal",
+        fake_run_active_goal,
+    )
+
+    await run_persistent_goal(
+        object(),
+        initial_message="original objective",
+        config={},
+        sink=None,
+        is_terminal=lambda: False,
+        recovery_delay_seconds=0,
+    )
+
+    assert len(messages) == 3
+    assert messages[0] == "original objective"
+    assert "same checkpointed thread" in messages[1]
+    assert "Recovery attempt: 2/100" in messages[2]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from typing import Any, cast
@@ -16,12 +17,13 @@ from langchain_core.runnables.config import RunnableConfig
 
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
-from z_apply_core.stream_events import FrameworkEventSink
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 logger = logging.getLogger(__name__)
 
 ACTIVE_OBJECTIVE_SOURCE = "active_objective_controller"
 MAX_NO_PROGRESS_RECOVERIES = 20
+MAX_GOAL_RUN_RECOVERIES = 100
 
 
 class ActiveGoalExhausted(RuntimeError):
@@ -143,4 +145,87 @@ async def run_active_goal(
         ),
         sink=sink,
         root_source=source,
+    )
+
+
+async def run_persistent_goal(
+    agent: Any,
+    *,
+    initial_message: str,
+    config: RunnableConfig,
+    sink: FrameworkEventSink | None,
+    is_terminal: Callable[[], bool],
+    source: str = "orchestrator",
+    max_recoveries: int = MAX_GOAL_RUN_RECOVERIES,
+    recovery_delay_seconds: float = 1.0,
+) -> None:
+    """Re-enter one checkpointed goal thread after exhausted model attempts."""
+    message = initial_message
+    recovered = 0
+    while True:
+        try:
+            await run_active_goal(
+                agent,
+                initial_message=message,
+                config=config,
+                sink=sink,
+                source=source,
+            )
+        except Exception as exc:  # noqa: BLE001 - recovery owns model/provider failures
+            if is_terminal():
+                return
+            if recovered >= max_recoveries:
+                await _emit_recovery(
+                    sink,
+                    "recovery_exhausted",
+                    source,
+                    recovered,
+                    exc,
+                )
+                raise
+            recovered += 1
+            await _emit_recovery(sink, "recovery_started", source, recovered, exc)
+            if recovery_delay_seconds > 0:
+                await asyncio.sleep(recovery_delay_seconds)
+            message = (
+                "RUN GOAL CONTROLLER: the active application goal survived a model "
+                "or provider failure. Continue in this same checkpointed thread. "
+                "Preserve completed browser actions and newest live user context. "
+                "Capture fresh browser evidence, choose exactly one safe next action, "
+                "and emit it through the native tool-call channel. Do not repeat a "
+                "mutation against unchanged evidence.\n\n"
+                f"Recovery attempt: {recovered}/{max_recoveries}\n"
+                f"Previous failure type: {type(exc).__name__}\n"
+                f"Previous failure: {str(exc) or 'provider call ended without details'}"
+            )
+            continue
+        if recovered:
+            await _emit_recovery(sink, "recovery_completed", source, recovered, None)
+        return
+
+
+async def _emit_recovery(
+    sink: FrameworkEventSink | None,
+    event: str,
+    source: str,
+    attempt: int,
+    error: Exception | None,
+) -> None:
+    if sink is None:
+        return
+    data: dict[str, Any] = {"attempt": attempt}
+    if error is not None:
+        data.update(
+            {
+                "error_type": type(error).__name__,
+                "error": str(error),
+            }
+        )
+    await sink.accept(
+        FrameworkTraceEvent(
+            event=event,
+            name=source,
+            data=data,
+            raw={},
+        )
     )
