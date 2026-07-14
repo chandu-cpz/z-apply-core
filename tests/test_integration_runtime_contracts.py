@@ -121,7 +121,7 @@ async def test_browser_gate_serializes_operations_across_run_sessions() -> None:
 async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
     workspace = BrowserWorkspace()
     tabs = [SimpleNamespace(page=object()), SimpleNamespace(page=object())]
-    context = SimpleNamespace(new_tab=AsyncMock(side_effect=tabs))
+    context = SimpleNamespace(new_tab=AsyncMock(side_effect=tabs), tabs=lambda: [])
     anchor = SimpleNamespace(_ensure_context=AsyncMock(return_value=context))
     pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor), tools=())
     server = SimpleNamespace(backend_pool=pool)
@@ -146,6 +146,28 @@ async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
     assert first.backend is anchor and second.backend is anchor
     assert first.context is context and second.context is context
     assert first.primary_tab is tabs[0] and second.primary_tab is tabs[1]
+
+
+@pytest.mark.asyncio
+async def test_browser_workspace_discards_restored_pages_without_clearing_profile() -> None:
+    workspace = BrowserWorkspace()
+    restored_page = SimpleNamespace(is_closed=lambda: False, close=AsyncMock())
+    context = SimpleNamespace(tabs=lambda: [SimpleNamespace(page=restored_page)])
+    anchor = SimpleNamespace(_ensure_context=AsyncMock(return_value=context))
+    pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor), tools=())
+    server = SimpleNamespace(backend_pool=pool)
+
+    with (
+        patch(
+            "z_apply_core.browser_workspace.create_connection",
+            AsyncMock(return_value=server),
+        ),
+        patch("z_apply_core.browser_workspace.VirtualDisplaySession.start"),
+        patch("z_apply_core.browser_workspace.LiveView.start"),
+    ):
+        await workspace.start()
+
+    restored_page.close.assert_awaited_once()
 
 
 def test_framework_state_event_never_serializes_runtime_objects() -> None:

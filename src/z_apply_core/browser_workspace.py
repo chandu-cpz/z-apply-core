@@ -112,6 +112,14 @@ class RunBrowserLease:
                     await page.close()
         self.owned_pages.clear()
 
+    async def stop_loading(self) -> None:
+        """Leave retained pages inspectable without background navigation work."""
+        for page in tuple(self.owned_pages):
+            if page.is_closed():
+                continue
+            with contextlib.suppress(Exception):
+                await page.evaluate("window.stop()")
+
 
 class BrowserWorkspace:
     """One persistent Camoufox workspace shared by all application runs."""
@@ -146,6 +154,7 @@ class BrowserWorkspace:
                 self._context = await self._anchor_backend._ensure_context(
                     cwd=Path.cwd(), roots=None
                 )
+                await self._discard_restored_pages()
                 self._started = True
             except Exception:
                 self._server = None
@@ -217,6 +226,14 @@ class BrowserWorkspace:
         async with self.gate.mutation():
             await lease.close_pages()
 
+    async def quiesce_run(self, run_id: str) -> None:
+        """Stop retained run pages from consuming shared browser resources."""
+        lease = self._leases.get(run_id)
+        if lease is None or lease.closed:
+            return
+        async with self.gate.mutation():
+            await lease.stop_loading()
+
     async def close(self) -> None:
         for run_id in tuple(self._leases):
             await self.close_run(run_id)
@@ -234,3 +251,11 @@ class BrowserWorkspace:
         if lease is None or lease.closed:
             raise BrowserToolExecutionError("The run's browser page is unavailable.")
         return lease
+
+    async def _discard_restored_pages(self) -> None:
+        """Start a new supervisor lifetime without resurrecting stale run pages."""
+        assert self._context is not None
+        for tab in tuple(self._context.tabs()):
+            with contextlib.suppress(Exception):
+                if not tab.page.is_closed():
+                    await tab.page.close()

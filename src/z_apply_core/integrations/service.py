@@ -529,6 +529,8 @@ class ZApplyCore:
         finally:
             if run.human_broker is not None:
                 await run.human_broker.close()
+            if run.view.browser_tab_state is BrowserTabState.OPEN:
+                await self._workspace.quiesce_run(run.run_id)
             self._wake.set()
 
     async def _terminal(
