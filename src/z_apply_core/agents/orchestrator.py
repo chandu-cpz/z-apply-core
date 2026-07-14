@@ -13,6 +13,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
+from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
@@ -206,6 +207,9 @@ async def run_orchestrator(
         middleware=[
             *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
             SafeToolBatchMiddleware(),
+            OrchestratorActionOrderMiddleware(
+                artifact_publisher.browser if artifact_publisher is not None else None
+            ),
             NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"]

@@ -39,6 +39,17 @@ class BrowserReadinessTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(evidence.submit_controls[0].disabled)
         page.evaluate.assert_awaited_once()
 
+    async def test_required_file_upload_state_comes_from_live_dom(self) -> None:
+        page = SimpleNamespace(evaluate=AsyncMock(return_value=True))
+        session = object.__new__(BrowserSession)
+        session._backend = SimpleNamespace(
+            _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=page))
+        )
+        session._lease = None
+
+        self.assertTrue(await session.required_file_upload_pending())
+        page.evaluate.assert_awaited_once()
+
     def test_malformed_model_like_claims_are_not_accepted_as_browser_blockers(self) -> None:
         evidence = BrowserFormReadiness.from_browser_payload(
             {"blockers": ["the dates look wrong"], "submit_controls": []}

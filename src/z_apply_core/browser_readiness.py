@@ -64,6 +64,11 @@ FORM_READINESS_SCRIPT = r"""() => {
     return { blockers, submit_controls: submitControls };
 }"""
 
+REQUIRED_FILE_UPLOAD_PENDING_SCRIPT = r"""() =>
+    [...document.querySelectorAll('input[type="file"]')].some(input =>
+        !input.disabled && input.required && input.files.length === 0
+    )"""
+
 
 @dataclass(frozen=True, slots=True)
 class FormControlBlocker:
