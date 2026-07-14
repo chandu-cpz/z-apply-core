@@ -175,5 +175,52 @@ async def test_graph_sink_deduplicates_public_state_and_tracks_auth_model() -> N
     assert run.view.current_model == "provider/model"
 
 
+@pytest.mark.asyncio
+async def test_graph_sink_attributes_tool_action_to_selected_agent_model() -> None:
+    class Service:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        async def _emit(
+            self,
+            run: object,
+            event_type: str,
+            payload: dict[str, object],
+            **kwargs: object,
+        ) -> None:
+            del run, kwargs
+            self.events.append((event_type, payload))
+
+    service = Service()
+    run = _Run(StartRunRequest(job_url="https://example.com/job"), "run-1")
+    sink = _GraphSink(service, run)  # type: ignore[arg-type]
+
+    await sink.accept(
+        FrameworkTraceEvent(
+            "model_selected",
+            "AnswerWriter",
+            {"model_id": "provider/answer-model", "role": "AnswerWriter"},
+            {},
+        )
+    )
+    await sink.accept(
+        FrameworkTraceEvent(
+            "agent_tool_start",
+            "AnswerWriter:invocation-id",
+            {"tool_name": "lookup_candidate_memory", "input": {}},
+            {},
+        )
+    )
+
+    assert service.events[-1] == (
+        "tool.started",
+        {
+            "tool_name": "lookup_candidate_memory",
+            "input": {},
+            "model_id": "provider/answer-model",
+        },
+    )
+
+
 async def _append(items: list[object], item: object) -> None:
     items.append(item)

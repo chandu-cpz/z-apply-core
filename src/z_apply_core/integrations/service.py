@@ -112,6 +112,7 @@ class _GraphSink(FrameworkEventSink):
         self._service = service
         self._run = run
         self._last_graph_payload: dict[str, Any] | None = None
+        self._model_by_agent: dict[str, str] = {}
 
     async def accept(self, event: FrameworkTraceEvent) -> None:
         name = _public_agent_name(event.name or event.event)
@@ -141,6 +142,12 @@ class _GraphSink(FrameworkEventSink):
         model = payload.get("model_id") or payload.get("auth_model_id")
         if isinstance(model, str):
             self._run.view = replace(self._run.view, current_model=model)
+            if event_type == "model.selected":
+                self._model_by_agent[name] = model
+        if event_type.startswith("tool."):
+            causal_model = self._model_by_agent.get(name)
+            if causal_model is not None:
+                payload = {**payload, "model_id": causal_model}
         await self._service._emit(
             self._run, event_type, payload, source={"component": "graph", "agent": name}
         )
