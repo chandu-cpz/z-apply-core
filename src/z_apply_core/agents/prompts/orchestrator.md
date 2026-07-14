@@ -78,7 +78,17 @@ read the newest tool results and continue at the first applicable state below:
    or equivalent upload trigger. If the atomic operation fails, inspect fresh
    evidence and retry it with the correct current ref; do not fall back to a
    native chooser.
-8. **Empty required candidate fields are visible:** delegate one AnswerWriter
+8. **Autofilled repeated candidate rows are not reconciled:** before treating a
+   populated education, employment, certification, or other repeated resume
+   section as complete, reconcile each material value against candidate evidence.
+   Non-empty autofill is not correctness evidence. Delegate one AnswerWriter task
+   per exact row field that has not been verified, including the row's stable
+   visible identity, current value, and current ref. Prioritize fields commonly
+   crossed between rows: degree/course, branch/specialization, institution,
+   employer, job title, location, and dates. Apply a supported correction to that
+   same current row ref immediately. Do not ask AnswerWriter to verify page-owned
+   controls such as consent or CAPTCHA.
+9. **Empty required candidate fields are visible:** delegate one AnswerWriter
    task call per field, maximum eight calls in one assistant message. Never put
    two or more fields into one task description: AnswerWriter resolves exactly
    one field and may return only that field. A field is required only when its
@@ -88,16 +98,16 @@ read the newest tool results and continue at the first applicable state below:
    evidence already shows a field is absent from memory and resume and therefore
    needs a human fact, dispatch only that one task; wait for its one human answer
    before dispatching another missing-human field.
-9. **Required non-candidate controls remain:** complete supported controls such
+10. **Required non-candidate controls remain:** complete supported controls such
    as privacy consent. Do not delegate consent or infer candidate facts.
-10. **Only a CAPTCHA, OTP, or identity challenge remains outside an auth gate:**
+11. **Only a CAPTCHA, OTP, or identity challenge remains outside an auth gate:**
    defer it until all
    unrelated safe work is complete. For a visual challenge, call `ask_human`
    exactly once with reason `human_challenge` and `challenge_target` set to the
    current ref of the challenge. The tool atomically captures that target and
    delivers the image; never provide or invent an image path. Fill the returned
    answer and observe the result.
-11. **The application is review-ready:** take fresh browser evidence and confirm
+12. **The application is review-ready:** take fresh browser evidence and confirm
    the resume, required values, consent, and absence of validation errors. Call
    `request_submit_approval` once with a concise review of material values. For
    every repeated section, include each row as an identity-bound tuple containing
@@ -110,7 +120,7 @@ read the newest tool results and continue at the first applicable state below:
    supported by explicit page state, and request approval again after evidence
    changes. Never repeat a mutation against unchanged evidence. A verifier
    disagreement is not an external blocker.
-12. **Submission was approved:** activate the final submit exactly once, inspect
+13. **Submission was approved:** activate the final submit exactly once, inspect
     the resulting page, and call `application_submitted` only when visible
     evidence confirms receipt. If approval is rejected, apply the correction
     returned by `request_submit_approval`, inspect fresh browser evidence, and
@@ -121,8 +131,9 @@ read the newest tool results and continue at the first applicable state below:
 
 Empty optional fields are not work. Do not resolve or fill an unrequired middle
 name, date, preference, demographic field, additional document, or similar
-control. A populated field is already answered unless browser evidence marks it
-invalid.
+ control. A populated scalar field is already answered unless browser evidence
+marks it invalid. Populated material fields inside repeated candidate sections
+remain subject to the row reconciliation rule above.
 
 Resume-derived values remain attached to the resume entity that supports them.
 A degree specialization cannot be copied into a school row, and one role's
