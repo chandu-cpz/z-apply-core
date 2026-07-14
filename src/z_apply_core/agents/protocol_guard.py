@@ -8,21 +8,19 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
 from langchain_core.messages import AIMessage, HumanMessage
 
-InvocationPattern = re.compile(
-    r"(?m)(?:^|(?<=\s))([A-Za-z_][A-Za-z0-9_.-]{0,80})\s*\("
-)
+InvocationPattern = re.compile(r"(?m)(?:^|(?<=\s))([A-Za-z_][A-Za-z0-9_.-]{0,80})\s*\(")
 ResultMarker = re.compile(r"(?m)^\s*([A-Z][A-Z0-9_]{2,40})_RESULT\s*:")
-JSONToolCall = re.compile(
-    r"\{[^{}]*\"(?:tool|name)\"\s*:\s*\"([^\"]+)\""
-)
+JSONToolCall = re.compile(r"\{[^{}]*\"(?:tool|name)\"\s*:\s*\"([^\"]+)\"")
 
 _TOOLS_ONLY_NAMES = frozenset({"write_todos", "ask_human", "request_submit_approval", "task"})
 
-_SPECIALIST_RESULT_PREFIXES = frozenset({
-    "ANSWER_WRITER",
-    "BROWSER_SPECIALIST",
-    "VISION_SPECIALIST",
-})
+_SPECIALIST_RESULT_PREFIXES = frozenset(
+    {
+        "ANSWER_WRITER",
+        "BROWSER_SPECIALIST",
+        "VISION_SPECIALIST",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)

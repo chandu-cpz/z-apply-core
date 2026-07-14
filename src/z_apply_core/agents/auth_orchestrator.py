@@ -130,6 +130,8 @@ async def run_auth_orchestrator(
         router_middleware.last_model_id,
         "not_verified",
     )
+
+
 def _task_prompt(*, snapshot: str, default_credentials_available: bool) -> str:
     credential_status = (
         "DEFAULT_USERNAME and DEFAULT_PASSWORD are configured."

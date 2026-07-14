@@ -104,8 +104,7 @@ class ActiveGoalMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Resp
         )
         self._on_no_progress(failure)
         logger.warning(
-            "Active objective rejected prose-only stop; continuing in-graph "
-            "(recovery=%s/%s)",
+            "Active objective rejected prose-only stop; continuing in-graph (recovery=%s/%s)",
             self._recoveries,
             self._max_recoveries,
         )

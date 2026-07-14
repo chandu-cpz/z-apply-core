@@ -43,9 +43,7 @@ def make_manual_auth_tool(
             options=["Done", "Cannot complete"],
             image_path=human_challenge_image_path,
         )
-        return {
-            "manual_auth": "done" if answer == "Done" else "cannot_complete"
-        }
+        return {"manual_auth": "done" if answer == "Done" else "cannot_complete"}
 
     return request_manual_auth
 

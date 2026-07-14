@@ -5,9 +5,13 @@ from typing import Any
 
 from z_apply_core.config import load_settings
 
+CORE_ROOT = Path(__file__).resolve().parents[2]
+
 
 def build_browser_config(run_id: str = "manual") -> dict[str, Any]:
-    workspace_dir = Path.cwd() / ".z-apply"
+    # Browser authentication and Simplify state belong to Core, not to whichever
+    # transport process happened to launch a run (CLI, FastAPI, or tests).
+    workspace_dir = CORE_ROOT / ".z-apply"
     profile_dir = workspace_dir / "browser-profile"
     output_dir = workspace_dir / "runs" / run_id / "browser-artifacts"
     profile_dir.mkdir(parents=True, exist_ok=True)

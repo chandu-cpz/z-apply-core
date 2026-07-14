@@ -110,9 +110,7 @@ async def run_orchestrator(
             candidate_memory=candidate_memory,
             on_approval=record_approval,
             before_submit_approval=(
-                artifact_publisher.publish_review_pdf
-                if artifact_publisher is not None
-                else None
+                artifact_publisher.publish_review_pdf if artifact_publisher is not None else None
             ),
             human_challenge_image_path=str(_captcha_path(run_id)),
         )
@@ -180,9 +178,7 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             SafeToolBatchMiddleware(),
-            NoProgressGuardMiddleware(
-                on_no_progress=router_middleware.reject_active_response
-            ),
+            NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"]
             ),

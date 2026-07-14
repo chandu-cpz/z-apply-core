@@ -34,9 +34,7 @@ def _with_routing(
     router_middleware = NimRouterMiddleware(router, role=role)
     enriched["middleware"] = [
         *extra_middleware,
-        NoProgressGuardMiddleware(
-            on_no_progress=router_middleware.reject_active_response
-        ),
+        NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
         model_retry_middleware(),
         router_middleware,
         ProseToolCallGuardMiddleware(),
@@ -62,9 +60,7 @@ async def build_specialists(
             model=fallback_model,
             extra_middleware=[
                 SafeToolBatchMiddleware(),
-                HumanEscalationGuardMiddleware(
-                    allowed_reasons=frozenset({"human_challenge"})
-                ),
+                HumanEscalationGuardMiddleware(allowed_reasons=frozenset({"human_challenge"})),
             ],
         ),
         _with_routing(
