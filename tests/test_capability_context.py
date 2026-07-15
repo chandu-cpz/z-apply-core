@@ -18,6 +18,18 @@ def browser_observe() -> str:
 
 
 @tool
+def browser_click() -> str:
+    """Click."""
+    return "clicked"
+
+
+@tool
+def browser_navigate() -> str:
+    """Navigate."""
+    return "navigated"
+
+
+@tool
 def browser_fill_form() -> str:
     """Fill."""
     return "filled"
@@ -57,6 +69,8 @@ class CapabilityContextTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tools = [
             browser_observe,
+            browser_click,
+            browser_navigate,
             browser_fill_form,
             browser_click_upload,
             task,
@@ -76,12 +90,21 @@ class CapabilityContextTests(unittest.TestCase):
     def test_required_upload_hides_delegation_and_submission(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
             self.tools,
-            BrowserCapabilities(required_file_upload_pending=True),
+            BrowserCapabilities(
+                editable_controls_visible=True,
+                required_file_upload_pending=True,
+            ),
         )
 
         self.assertEqual(
             [tool.name for tool in tools],
-            ["browser_observe", "browser_fill_form", "browser_click_upload"],
+            [
+                "browser_observe",
+                "browser_click",
+                "browser_navigate",
+                "browser_fill_form",
+                "browser_click_upload",
+            ],
         )
 
     def test_ordinary_form_excludes_deepagents_filesystem_tools(self) -> None:
@@ -94,6 +117,8 @@ class CapabilityContextTests(unittest.TestCase):
             [tool.name for tool in tools],
             [
                 "browser_observe",
+                "browser_click",
+                "browser_navigate",
                 "browser_fill_form",
                 "browser_click_upload",
                 "request_submit_approval",
@@ -111,6 +136,22 @@ class CapabilityContextTests(unittest.TestCase):
         )
 
         self.assertIn("task", [tool.name for tool in tools])
+
+    def test_job_detail_page_hides_form_mutations_and_human_delegation(self) -> None:
+        tools = CapabilityContextMiddleware._filter_tools(
+            self.tools,
+            BrowserCapabilities(editable_controls_visible=False),
+        )
+
+        self.assertEqual(
+            [tool.name for tool in tools],
+            [
+                "browser_observe",
+                "browser_click",
+                "browser_navigate",
+                "application_submitted",
+            ],
+        )
 
     def test_capability_inspection_failure_exposes_only_safe_recovery_tools(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(self.tools, None)

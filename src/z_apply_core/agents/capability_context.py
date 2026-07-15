@@ -13,6 +13,15 @@ from z_apply_core.browser_session import BrowserSession
 
 CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
 _READ_BROWSER_TOOLS = frozenset({"browser_observe", "browser_snapshot", "browser_find"})
+_NON_FORM_BROWSER_TOOLS = _READ_BROWSER_TOOLS | frozenset(
+    {
+        "browser_navigate",
+        "browser_click",
+        "browser_tabs",
+        "browser_wait_for",
+        "browser_handle_dialog",
+    }
+)
 _ALWAYS_AVAILABLE = frozenset(
     {
         "task",
@@ -101,6 +110,13 @@ class CapabilityContextMiddleware(
             return [tool for tool in tools if _tool_name(tool) in safe]
         if capabilities.auth_gate_visible:
             allowed = _READ_BROWSER_TOOLS | _ALWAYS_AVAILABLE
+            return [tool for tool in tools if _tool_name(tool) in allowed]
+        if not capabilities.editable_controls_visible:
+            allowed = _NON_FORM_BROWSER_TOOLS | frozenset(
+                {"application_blocked", "application_submitted"}
+            )
+            if capabilities.visual_only_surface_visible:
+                allowed |= frozenset({"task"})
             return [tool for tool in tools if _tool_name(tool) in allowed]
         if capabilities.required_file_upload_pending:
             return [
