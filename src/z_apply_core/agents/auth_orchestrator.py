@@ -86,10 +86,13 @@ async def run_auth_orchestrator(
         initial_selection=selection,
         sink=sink,
     )
+    auth_browser_tools = [
+        tool for tool in browser_tools if tool.name != "browser_take_screenshot"
+    ]
     agent = create_deep_agent(
         model=selection.llm,
         tools=[
-            *browser_tools,
+            *auth_browser_tools,
             *human_tools,
             *verification_tools,
             authentication_verified,
