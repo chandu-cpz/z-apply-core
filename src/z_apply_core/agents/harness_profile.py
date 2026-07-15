@@ -17,7 +17,9 @@ def configure_z_apply_harness_profile() -> None:
     register_harness_profile(
         "NVIDIA",
         HarnessProfile(
-            excluded_middleware=frozenset({"TodoListMiddleware"}),
+            excluded_middleware=frozenset(
+                {"TodoListMiddleware", "SummarizationMiddleware"}
+            ),
             general_purpose_subagent=GeneralPurposeSubagentProfile(enabled=False),
             tool_description_overrides={"task": load_prompt("task_tool.md")},
         ),
