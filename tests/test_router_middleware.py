@@ -190,6 +190,36 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             priority="quality",
         )
 
+    async def test_authentication_specialist_excludes_unreliable_stateful_models(
+        self,
+    ) -> None:
+        router = MagicMock(spec=NimRouter)
+        router.lease = AsyncMock(
+            return_value=cast(
+                Any,
+                SimpleNamespace(
+                    info=SimpleNamespace(id="stepfun-ai/step-3.7-flash"),
+                    llm=MagicMock(),
+                ),
+            )
+        )
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        request.override.return_value = sentinel.overridden_request
+
+        await NimRouterMiddleware(router, role="AuthenticationSpecialist").awrap_model_call(
+            request,
+            AsyncMock(return_value=sentinel.response),
+        )
+
+        router.lease.assert_awaited_once_with(
+            tools=True,
+            structured=False,
+            vision=False,
+            reasoning=False,
+            priority="balanced",
+            excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+        )
+
     async def test_releases_failed_lease_before_retry(self) -> None:
         router = MagicMock(spec=NimRouter)
         first = SimpleNamespace(info=SimpleNamespace(id="first/model"), llm=MagicMock())

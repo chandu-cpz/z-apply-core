@@ -46,7 +46,11 @@ ROLE_POLICY: dict[str, dict[str, Any]] = {
         "reasoning": False,
         "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     },
-    "AuthenticationSpecialist": {"priority": "balanced", "reasoning": False},
+    "AuthenticationSpecialist": {
+        "priority": "balanced",
+        "reasoning": False,
+        "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+    },
     "BrowserSpecialist": {"priority": "balanced", "reasoning": False},
     "AnswerWriter": {"priority": "quality", "reasoning": False},
     "VisionSpecialist": {"priority": "balanced", "reasoning": False, "force_vision": True},
