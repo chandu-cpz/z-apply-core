@@ -21,6 +21,12 @@ _ALWAYS_AVAILABLE = frozenset(
         "browser_wait_for",
     }
 )
+_ORCHESTRATOR_CONTROL_TOOLS = _ALWAYS_AVAILABLE | frozenset(
+    {
+        "request_submit_approval",
+        "application_submitted",
+    }
+)
 
 
 class CapabilityContextMiddleware(
@@ -75,6 +81,12 @@ class CapabilityContextMiddleware(
         tools: list[BaseTool | dict[str, Any]],
         capabilities: BrowserCapabilities,
     ) -> list[BaseTool | dict[str, Any]]:
+        tools = [
+            tool
+            for tool in tools
+            if _tool_name(tool).startswith("browser_")
+            or _tool_name(tool) in _ORCHESTRATOR_CONTROL_TOOLS
+        ]
         if capabilities.auth_gate_visible:
             allowed = _READ_BROWSER_TOOLS | _ALWAYS_AVAILABLE
             return [tool for tool in tools if _tool_name(tool) in allowed]

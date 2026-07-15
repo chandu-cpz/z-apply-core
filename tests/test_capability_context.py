@@ -47,6 +47,12 @@ def application_submitted() -> str:
     return "finished"
 
 
+@tool
+def ls() -> str:
+    """List files."""
+    return "files"
+
+
 class CapabilityContextTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tools = [
@@ -56,6 +62,7 @@ class CapabilityContextTests(unittest.TestCase):
             task,
             request_submit_approval,
             application_submitted,
+            ls,
         ]
 
     def test_auth_gate_keeps_read_and_delegation_but_hides_mutations(self) -> None:
@@ -77,13 +84,13 @@ class CapabilityContextTests(unittest.TestCase):
             ["browser_observe", "browser_fill_form", "browser_click_upload"],
         )
 
-    def test_ordinary_form_preserves_available_tools(self) -> None:
+    def test_ordinary_form_excludes_deepagents_filesystem_tools(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
             self.tools,
             BrowserCapabilities(editable_controls_visible=True),
         )
 
-        self.assertEqual(tools, self.tools)
+        self.assertEqual(tools, self.tools[:-1])
 
 
 class BrowserCapabilityParsingTests(unittest.IsolatedAsyncioTestCase):
