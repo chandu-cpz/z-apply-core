@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 from langchain_core.tools import tool
 
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
-from z_apply_core.browser_observation import BrowserCapabilities
+from z_apply_core.browser_observation import BrowserCapabilities, BrowserObservation
 from z_apply_core.browser_session import BrowserSession
 
 
@@ -90,7 +90,50 @@ class CapabilityContextTests(unittest.TestCase):
             BrowserCapabilities(editable_controls_visible=True),
         )
 
-        self.assertEqual(tools, self.tools[:-1])
+        self.assertEqual(
+            [tool.name for tool in tools],
+            [
+                "browser_observe",
+                "browser_fill_form",
+                "browser_click_upload",
+                "request_submit_approval",
+                "application_submitted",
+            ],
+        )
+
+    def test_unresolved_required_control_exposes_answer_writer_delegation(self) -> None:
+        tools = CapabilityContextMiddleware._filter_tools(
+            self.tools,
+            BrowserCapabilities(
+                editable_controls_visible=True,
+                unresolved_required_controls=1,
+            ),
+        )
+
+        self.assertIn("task", [tool.name for tool in tools])
+
+    def test_capability_inspection_failure_exposes_only_safe_recovery_tools(self) -> None:
+        tools = CapabilityContextMiddleware._filter_tools(self.tools, None)
+
+        self.assertEqual([tool.name for tool in tools], ["browser_observe"])
+
+    def test_compact_observation_bounds_repeated_model_context(self) -> None:
+        evidence = "\n".join(
+            [f"- generic filler {index} {'x' * 80}" for index in range(300)]
+            + ['- textbox "Email" [ref=e500]', '- button "Continue" [ref=e501]']
+        )
+        observation = BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence=evidence,
+        )
+
+        rendered = observation.compact_render(max_chars=2_000)
+
+        self.assertLessEqual(len(rendered), 2_000)
+        self.assertIn("https://example.test/apply", rendered)
+        self.assertIn("bounded current-page view", rendered)
 
 
 class BrowserCapabilityParsingTests(unittest.IsolatedAsyncioTestCase):

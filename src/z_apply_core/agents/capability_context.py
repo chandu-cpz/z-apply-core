@@ -48,17 +48,18 @@ class CapabilityContextMiddleware(
         browser = self._browser
         if browser is None:
             return await handler(request)
+        capabilities: BrowserCapabilities | None
         try:
             capabilities = await browser.inspect_capabilities()
         except Exception:
-            capabilities = BrowserCapabilities()
+            capabilities = None
 
         tools = self._filter_tools(request.tools, capabilities)
         observation = browser.current_observation
         revision = observation.revision if observation is not None else 0
         available = ", ".join(_tool_name(tool) for tool in tools)
         current_evidence = (
-            "\nCURRENT BROWSER EVIDENCE\n" + observation.render()
+            "\nCURRENT BROWSER EVIDENCE\n" + observation.compact_render()
             if observation is not None
             else ""
         )
@@ -68,7 +69,7 @@ class CapabilityContextMiddleware(
             content=(
                 "CURRENT BROWSER ACTION CONTEXT\n"
                 f"browser_revision={revision}\n"
-                f"{capabilities.render()}\n"
+                f"{capabilities.render() if capabilities is not None else 'capability_inspection=unavailable'}\n"
                 f"available_tools={available or '(none)'}\n"
                 "Use current browser evidence and choose one legal native action. "
                 "These are compositional structural facts, not a workflow phase."
@@ -85,7 +86,7 @@ class CapabilityContextMiddleware(
     @staticmethod
     def _filter_tools(
         tools: list[BaseTool | dict[str, Any]],
-        capabilities: BrowserCapabilities,
+        capabilities: BrowserCapabilities | None,
     ) -> list[BaseTool | dict[str, Any]]:
         tools = [
             tool
@@ -93,6 +94,11 @@ class CapabilityContextMiddleware(
             if _tool_name(tool).startswith("browser_")
             or _tool_name(tool) in _ORCHESTRATOR_CONTROL_TOOLS
         ]
+        if capabilities is None:
+            safe = _READ_BROWSER_TOOLS | frozenset(
+                {"browser_wait_for", "application_blocked"}
+            )
+            return [tool for tool in tools if _tool_name(tool) in safe]
         if capabilities.auth_gate_visible:
             allowed = _READ_BROWSER_TOOLS | _ALWAYS_AVAILABLE
             return [tool for tool in tools if _tool_name(tool) in allowed]
@@ -103,6 +109,11 @@ class CapabilityContextMiddleware(
                 if _tool_name(tool)
                 not in {"request_submit_approval", "application_submitted", "task"}
             ]
+        candidate_resolution_needed = bool(
+            capabilities.unresolved_required_controls or capabilities.invalid_controls
+        )
+        if not candidate_resolution_needed and not capabilities.visual_only_surface_visible:
+            return [tool for tool in tools if _tool_name(tool) != "task"]
         return tools
 
 

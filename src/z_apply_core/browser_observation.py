@@ -27,6 +27,24 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
         element instanceof HTMLInputElement && element.type === 'file' &&
         element.required && element.files.length === 0
     );
+    const emptyValue = element => {
+        if (element instanceof HTMLInputElement) {
+            if (element.type === 'file') return element.files.length === 0;
+            if (element.type === 'checkbox' || element.type === 'radio') {
+                return !element.checked;
+            }
+        }
+        return !String(element.value ?? element.textContent ?? '').trim();
+    };
+    const requiredControl = element => element.matches(':required') ||
+        element.getAttribute('aria-required') === 'true';
+    const unresolvedRequiredControls = controls.filter(element =>
+        requiredControl(element) && emptyValue(element)
+    );
+    const invalidControls = controls.filter(element =>
+        element.getAttribute('aria-invalid') === 'true' ||
+        ('validity' in element && !element.validity.valid)
+    );
     const submitControls = [...document.querySelectorAll(
         'button[type="submit"], input[type="submit"], input[type="image"], form button:not([type])'
     )].filter(visible).filter(element => !element.disabled &&
@@ -43,6 +61,8 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
         });
     return {
         editable_controls_visible: controls.length > 0,
+        unresolved_required_controls: unresolvedRequiredControls.length,
+        invalid_controls: invalidControls.length,
         auth_gate_visible: authGate,
         required_file_upload_pending: requiredUploadPending,
         enabled_form_submit_visible: submitControls.length > 0,
@@ -56,6 +76,8 @@ class BrowserCapabilities:
     """High-confidence structural facts used to narrow legal agent actions."""
 
     editable_controls_visible: bool = False
+    unresolved_required_controls: int = 0
+    invalid_controls: int = 0
     auth_gate_visible: bool = False
     required_file_upload_pending: bool = False
     enabled_form_submit_visible: bool = False
@@ -66,6 +88,10 @@ class BrowserCapabilities:
         data = payload if isinstance(payload, dict) else {}
         return cls(
             editable_controls_visible=bool(data.get("editable_controls_visible")),
+            unresolved_required_controls=int(
+                data.get("unresolved_required_controls") or 0
+            ),
+            invalid_controls=int(data.get("invalid_controls") or 0),
             auth_gate_visible=bool(data.get("auth_gate_visible")),
             required_file_upload_pending=bool(data.get("required_file_upload_pending")),
             enabled_form_submit_visible=bool(data.get("enabled_form_submit_visible")),
@@ -76,6 +102,8 @@ class BrowserCapabilities:
         return "\n".join(
             (
                 f"editable_controls_visible={str(self.editable_controls_visible).lower()}",
+                f"unresolved_required_controls={self.unresolved_required_controls}",
+                f"invalid_controls={self.invalid_controls}",
                 f"auth_gate_visible={str(self.auth_gate_visible).lower()}",
                 "required_file_upload_pending="
                 f"{str(self.required_file_upload_pending).lower()}",
@@ -127,6 +155,64 @@ class BrowserObservation:
             "current accessibility evidence:\n"
             f"{self.evidence}"
         )
+
+    def compact_render(self, *, max_chars: int = 12_000) -> str:
+        """Render bounded, interaction-focused evidence for a model turn.
+
+        The complete observation remains available from browser tools and artifacts.
+        This projection only limits repeated context injection; it is not used to
+        infer browser state or authorize an action.
+        """
+        header = (
+            "BROWSER OBSERVATION\n"
+            f"revision: {self.revision}\n"
+            f"signature: {self.signature[:16]}\n"
+            f"url: {self.url or '(unknown)'}\n"
+            f"title: {self.title or '(untitled)'}\n"
+            "current accessibility evidence:\n"
+        )
+        if len(header) + len(self.evidence) <= max_chars:
+            return header + self.evidence
+
+        roles = (
+            "textbox",
+            "button",
+            "checkbox",
+            "radio",
+            "combobox",
+            "listbox",
+            "option",
+            "link",
+            "alert",
+            "status",
+            "heading",
+            "spinbutton",
+            "switch",
+            "tab",
+            "dialog",
+        )
+        lines = self.evidence.splitlines()
+        selected: set[int] = set(range(min(12, len(lines))))
+        for index, line in enumerate(lines):
+            normalized = line.casefold()
+            if any(role in normalized for role in roles):
+                selected.update(range(max(0, index - 1), min(len(lines), index + 2)))
+
+        marker = (
+            "\n[bounded current-page view; full accessibility evidence remains "
+            "available through browser_observe/browser_snapshot]\n"
+        )
+        budget = max(0, max_chars - len(header) - len(marker))
+        kept: list[str] = []
+        used = 0
+        for index in sorted(selected):
+            line = lines[index]
+            addition = len(line) + 1
+            if used + addition > budget:
+                break
+            kept.append(line)
+            used += addition
+        return header + "\n".join(kept) + marker
 
 
 @dataclass(frozen=True, slots=True)
