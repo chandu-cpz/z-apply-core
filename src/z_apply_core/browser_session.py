@@ -67,6 +67,20 @@ FILE_INPUT_RESOLUTION_SCRIPT = r"""element => {
     if (rootInput) return rootInput;
     return uniqueFileInput(element.ownerDocument);
 }"""
+DIRECT_FILE_INPUT_TRIGGER_SCRIPT = r"""element => {
+    const isFileInput = candidate =>
+        candidate instanceof HTMLInputElement && candidate.type === 'file';
+    if (isFileInput(element)) return true;
+
+    const label = element.closest('label');
+    if (label && isFileInput(label.control)) return true;
+
+    const controlledIds = [element.getAttribute('for'), element.getAttribute('aria-controls')]
+        .filter(Boolean).flatMap(value => value.trim().split(/\s+/));
+    return controlledIds.some(id =>
+        isFileInput(element.ownerDocument.getElementById(id))
+    );
+}"""
 
 
 class BrowserToolExecutionError(ToolException):
@@ -320,11 +334,7 @@ class BrowserSession:
             return False
         tab = await self._backend._ensure_tab()
         resolved = await tab.resolve_target(target=target)
-        handle = await resolved.locator.evaluate_handle(FILE_INPUT_RESOLUTION_SCRIPT)
-        try:
-            return handle.as_element() is not None
-        finally:
-            await handle.dispose()
+        return bool(await resolved.locator.evaluate(DIRECT_FILE_INPUT_TRIGGER_SCRIPT))
 
     async def capture_human_challenge(self, target: str) -> Path:
         """Capture one visible challenge into the run-owned artifact directory."""

@@ -82,6 +82,17 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         call_tool.assert_not_awaited()
 
+    async def test_ordinary_control_is_not_rejected_because_form_has_file_input(self) -> None:
+        session, call_tool = self._session(is_submit=False)
+        session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+        self.assertEqual(
+            await session.call_tool("browser_click", {"target": "e-continue"}),
+            "clicked",
+        )
+
+        call_tool.assert_awaited_once()
+
     async def test_approval_allows_exactly_one_successful_submit(self) -> None:
         session, call_tool = self._session(is_submit=True)
         session.activate_submission_guard()
