@@ -5,7 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
-from z_apply_core.browser_session import BrowserSession, BrowserToolExecutionError
+from z_apply_core.browser_session import (
+    BrowserSession,
+    BrowserToolExecutionError,
+    SubmitControlKind,
+)
 
 
 class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
@@ -92,6 +96,19 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         capability = session.submission_capability
         self.assertIsNotNone(capability)
         self.assertFalse(capability.consumed if capability is not None else True)
+
+    async def test_structural_search_submit_is_not_treated_as_final_application(self) -> None:
+        session, call_tool = self._session(is_submit=True)
+        session.activate_submission_guard()
+        session._classify_submit_control = AsyncMock(  # type: ignore[method-assign]
+            return_value=SubmitControlKind.REVERSIBLE_SEARCH
+        )
+
+        self.assertEqual(
+            await session.call_tool("browser_click", {"target": "e-search"}),
+            "clicked",
+        )
+        call_tool.assert_awaited_once()
 
     async def test_typing_with_submit_is_guarded_without_dom_text_matching(self) -> None:
         session, call_tool = self._session(is_submit=False)

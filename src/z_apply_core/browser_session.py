@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Protocol, Self
 from uuid import uuid4
@@ -38,6 +39,14 @@ ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
 
 class BrowserToolExecutionError(ToolException):
     """A browser backend tool result explicitly marked as an execution error."""
+
+
+class SubmitControlKind(StrEnum):
+    """Browser-owned structural classification for one activated control."""
+
+    NOT_SUBMIT = "not_submit"
+    REVERSIBLE_SEARCH = "reversible_search"
+    FORM_SUBMIT = "form_submit"
 
 
 class MutationGate(Protocol):
@@ -131,7 +140,10 @@ class BrowserSession:
             guarded_submit = False
             if self._submission_guard_active:
                 if name == "browser_click":
-                    guarded_submit = await self._is_form_submit(normalized)
+                    guarded_submit = (
+                        await self._classify_submit_control(normalized)
+                        is SubmitControlKind.FORM_SUBMIT
+                    )
                 elif name == "browser_type" and normalized.get("submit") is True:
                     guarded_submit = True
                 if guarded_submit:
@@ -518,7 +530,10 @@ class BrowserSession:
             raise BrowserToolExecutionError(
                 "Submission review requires the current final submit control ref."
             )
-        if not await self._is_form_submit({"target": normalized_target}):
+        if (
+            await self._classify_submit_control({"target": normalized_target})
+            is not SubmitControlKind.FORM_SUBMIT
+        ):
             raise BrowserToolExecutionError(
                 "Submission review target is not a current form submit control."
             )
@@ -576,15 +591,18 @@ class BrowserSession:
                 "Inspect, review, and request approval again."
             )
 
-    async def _is_form_submit(self, arguments: dict[str, Any]) -> bool:
+    async def _classify_submit_control(
+        self,
+        arguments: dict[str, Any],
+    ) -> SubmitControlKind:
+        """Classify submit behavior from explicit DOM semantics, never button text."""
         target = arguments.get("target")
         if not isinstance(target, str) or not target:
-            return False
+            return SubmitControlKind.NOT_SUBMIT
         try:
             tab = await self._backend._ensure_tab()
             locator = (await tab.resolve_target(target=target)).locator
-            return bool(
-                await locator.evaluate(
+            classification = await locator.evaluate(
                     """element => {
                         const selector =
                             'button, input[type="submit"], input[type="image"]';
@@ -602,20 +620,50 @@ class BrowserSession:
                             }
                         }
                         if (control instanceof HTMLInputElement) {
-                            return control.type === 'submit' || control.type === 'image';
+                            if (control.type !== 'submit' && control.type !== 'image')
+                                return 'not_submit';
                         }
-                        if (!(control instanceof HTMLButtonElement)) return false;
-                        const type = control.getAttribute('type');
-                        return type === 'submit' || (type === null && control.form !== null);
+                        if (control instanceof HTMLButtonElement) {
+                            const type = control.getAttribute('type');
+                            if (type !== 'submit' && !(type === null && control.form !== null))
+                                return 'not_submit';
+                        } else if (!(control instanceof HTMLInputElement)) {
+                            return 'not_submit';
+                        }
+
+                        const form = control.form || control.closest('form');
+                        if (form && (
+                            form.getAttribute('role') === 'search' ||
+                            form.querySelector('input[type="search"]')
+                        )) return 'reversible_search';
+                        return 'form_submit';
                     }"""
                 )
-            )
+            if isinstance(classification, bool):
+                return (
+                    SubmitControlKind.FORM_SUBMIT
+                    if classification
+                    else SubmitControlKind.NOT_SUBMIT
+                )
+            try:
+                return SubmitControlKind(str(classification))
+            except ValueError as exc:
+                raise BrowserToolExecutionError(
+                    f"Browser returned an unknown submit classification for {target!r}."
+                ) from exc
         except BrowserToolExecutionError:
             raise
         except Exception as exc:
             raise BrowserToolExecutionError(
                 f"Cannot inspect browser target {target!r}; capture a fresh snapshot and retry."
             ) from exc
+
+    async def _is_form_submit(self, arguments: dict[str, Any]) -> bool:
+        """Compatibility predicate for callers that require a final-capable submit."""
+        return (
+            await self._classify_submit_control(arguments)
+            is SubmitControlKind.FORM_SUBMIT
+        )
 
     async def close(self) -> None:
         if getattr(self, "_owns_backend", True):

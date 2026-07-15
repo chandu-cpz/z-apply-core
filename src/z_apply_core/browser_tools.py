@@ -22,6 +22,7 @@ _AGENT_TOOL_DESCRIPTIONS["browser_wait_for"] = (
 )
 
 INITIAL_AGENT_BROWSER_TOOLS = (
+    "browser_navigate",
     "browser_snapshot",
     "browser_find",
     "browser_click",
@@ -65,6 +66,7 @@ VERIFIER_BROWSER_TOOLS = (
 
 BROWSER_CHANGING_TOOL_NAMES = frozenset(
     {
+        "browser_navigate",
         "browser_click",
         "browser_click_upload",
         "browser_type",

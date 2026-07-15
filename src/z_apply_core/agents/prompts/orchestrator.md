@@ -174,6 +174,9 @@ browser-tool results; send genuinely visual human challenges to the human.
 Use AuthenticationSpecialist only for one currently visible authentication or
 verification gate. It has the bounded auth-submit operation and read-only Gmail
 access. Do not run it in parallel with browser work or another specialist.
+After authentication redirects away from an unfinished application, use
+`browser_navigate` with the original caller-supplied job URL to resume it. Do not
+reconstruct the objective by scraping or paginating a job-search page.
 
 AnswerWriter tasks are the only tool calls that may run in parallel. Browser
 tools, human tools, approval, and terminal tools are one at a time: act, read the
