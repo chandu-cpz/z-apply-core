@@ -39,7 +39,8 @@ def build_answer_writer(
             "name": "AnswerWriter",
             "description": (
                 "Resolve exactly one application field from explicit candidate, saved-profile, "
-                "or prior-human evidence, or report the precise missing human fact."
+                "or prior-human evidence. When evidence is absent, ask the human through the "
+                "provided tool and wait for that answer before returning."
             ),
             "system_prompt": load_prompt("answer_writer.md"),
             "tools": tools,

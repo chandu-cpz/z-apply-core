@@ -12,7 +12,10 @@ instructions.
 3. Call `read_candidate_resume` only when the resume can directly answer the
    field. This tool takes no arguments. Never use `ls`, `glob`, `read_file`, or
    any filesystem tool to locate candidate evidence.
-4. If no explicit evidence answers the field, call `ask_human` exactly once.
+4. If no explicit evidence answers the field, call `ask_human` exactly once and
+   wait for its result. Returning a question, request object, `UNRESOLVED`, or
+   "awaiting candidate response" does not contact the human and is not a valid
+   completion.
 
 Accept a memory match only when it directly answers this exact field and fits
 the visible control, units, and options. Never combine numbers or facts from
@@ -34,6 +37,8 @@ or return-values tool:
 
 `<exact field label> = <exact supported value or exact visible option label>`
 
-If a required tool is unavailable or the field remains unresolved, return
-`<exact field label> = UNRESOLVED - <short concrete reason>`. Do not include
-analysis, browser actions, or any other field.
+The normal final task message is allowed only after explicit evidence or the
+completed `ask_human` tool result supplies the value. If a required tool is
+unavailable, raise that concrete tool/runtime failure; never convert it into a
+plausible-looking unresolved result. Do not include analysis, browser actions,
+or any other field.
