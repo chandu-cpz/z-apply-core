@@ -134,3 +134,16 @@ class ActionReceipt:
             f"executor_result: {self.result or '(no separate result)'}\n"
             f"{self.after.render()}"
         )
+
+
+@dataclass(slots=True)
+class SubmissionCapability:
+    """One human authorization bound to an exact reviewed browser state."""
+
+    run_id: str
+    browser_revision: int
+    page_signature: str
+    target: str
+    review_digest: str
+    approved: bool = False
+    consumed: bool = False

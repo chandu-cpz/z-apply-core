@@ -56,7 +56,7 @@ def make_human_tools(
     on_answer: Callable[[str], None] | None = None,
     on_approval: Callable[[bool], None] | None = None,
     before_submit_approval: Callable[
-        [str], Awaitable[dict[str, object] | None]
+        [str, str], Awaitable[dict[str, object] | None]
     ]
     | None = None,
     capture_human_challenge: Callable[[str], Awaitable[Path]] | None = None,
@@ -109,13 +109,14 @@ def make_human_tools(
     @tool
     async def request_submit_approval(
         final_review: str,
+        submission_target: str,
         url: str = "",
         company_name: str = "System",
         role_name: str = "Application",
     ) -> dict[str, object]:
-        """Ask the human to approve or reject a review-ready application."""
+        """Ask the human to approve the review for one exact final submit control."""
         if before_submit_approval is not None:
-            gate = await before_submit_approval(final_review)
+            gate = await before_submit_approval(final_review, submission_target)
             if gate is not None and gate.get("ready") is False:
                 return {
                     "submit_approval": "not_ready",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -16,6 +17,7 @@ from z_apply_core.browser_observation import (
     ActionReceipt,
     BrowserCapabilities,
     BrowserObservation,
+    SubmissionCapability,
 )
 from z_apply_core.browser_readiness import (
     FORM_READINESS_SCRIPT,
@@ -67,7 +69,7 @@ class BrowserSession:
         self._owns_backend = owns_backend
         self.run_id = run_id
         self._submission_guard_active = False
-        self._approved_submissions = 0
+        self._submission_capability: SubmissionCapability | None = None
         self._last_snapshot = ""
         self._last_observation: BrowserObservation | None = None
         self._browser_revision = 0
@@ -130,11 +132,8 @@ class BrowserSession:
                     guarded_submit = await self._is_form_submit(normalized)
                 elif name == "browser_type" and normalized.get("submit") is True:
                     guarded_submit = True
-                if guarded_submit and self._approved_submissions < 1:
-                    raise BrowserToolExecutionError(
-                        "Final-form submission is locked. Call request_submit_approval and "
-                        "wait for an approved result before clicking this submit control."
-                    )
+                if guarded_submit:
+                    await self._require_submission_capability_locked(normalized)
             result = await self._backend.call_tool(
                 name,
                 normalized,
@@ -146,7 +145,9 @@ class BrowserSession:
                 page_url, page_title = await self._page_identity()
         _raise_for_tool_error(name, result)
         if guarded_submit:
-            self._approved_submissions -= 1
+            capability = self._submission_capability
+            if capability is not None:
+                capability.consumed = True
         text = _text_content(result)
         if name == "browser_snapshot":
             self._last_snapshot = text
@@ -433,11 +434,85 @@ class BrowserSession:
     def activate_submission_guard(self) -> None:
         """Require a one-use human capability before application form submission."""
         self._submission_guard_active = True
-        self._approved_submissions = 0
+        self._submission_capability = None
 
     def set_submit_approval(self, approved: bool) -> None:
-        """Grant or revoke the one-use form-submit capability."""
-        self._approved_submissions = 1 if approved else 0
+        """Approve the pending reviewed capability or revoke it."""
+        capability = self._submission_capability
+        if not approved:
+            self._submission_capability = None
+            return
+        if capability is None:
+            raise BrowserToolExecutionError(
+                "Submission approval has no pending reviewed browser target."
+            )
+        capability.approved = True
+
+    async def prepare_submission_review(self, target: str, final_review: str) -> None:
+        """Bind a pending approval to the exact current submit control and page."""
+        normalized = normalize_browser_arguments({"target": target})
+        normalized_target = normalized.get("target")
+        if not isinstance(normalized_target, str) or not normalized_target:
+            raise BrowserToolExecutionError(
+                "Submission review requires the current final submit control ref."
+            )
+        if not await self._is_form_submit({"target": normalized_target}):
+            raise BrowserToolExecutionError(
+                "Submission review target is not a current form submit control."
+            )
+        observation = self._current_observation()
+        review_digest = hashlib.sha256(
+            f"{observation.signature}\0{final_review}".encode(
+                "utf-8", errors="replace"
+            )
+        ).hexdigest()
+        self._submission_capability = SubmissionCapability(
+            run_id=self.run_id,
+            browser_revision=observation.revision,
+            page_signature=observation.signature,
+            target=normalized_target,
+            review_digest=review_digest,
+        )
+
+    @property
+    def submission_capability(self) -> SubmissionCapability | None:
+        return self._submission_capability
+
+    async def _require_submission_capability_locked(
+        self,
+        arguments: dict[str, Any],
+    ) -> None:
+        capability = self._submission_capability
+        target = arguments.get("target")
+        if (
+            capability is None
+            or not capability.approved
+            or capability.consumed
+            or target != capability.target
+        ):
+            raise BrowserToolExecutionError(
+                "Final-form submission is locked. Approval must match the exact current "
+                "submit control reviewed through request_submit_approval."
+            )
+        result = await self._backend.call_tool(
+            "browser_snapshot",
+            {"target": "html"},
+            meta=self._call_meta("browser_snapshot"),
+        )
+        _raise_for_tool_error("browser_snapshot", result)
+        evidence = _text_content(result)
+        page_url, page_title = await self._page_identity()
+        self._last_snapshot = evidence
+        current = self._record_observation(evidence, url=page_url, title=page_title)
+        if (
+            current.revision != capability.browser_revision
+            or current.signature != capability.page_signature
+        ):
+            self._submission_capability = None
+            raise BrowserToolExecutionError(
+                "Submission approval was revoked because the reviewed browser state changed. "
+                "Inspect, review, and request approval again."
+            )
 
     async def _is_form_submit(self, arguments: dict[str, Any]) -> bool:
         target = arguments.get("target")

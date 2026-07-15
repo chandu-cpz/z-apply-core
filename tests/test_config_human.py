@@ -160,6 +160,7 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         approval = await request_submit_approval.ainvoke(
             {
                 "final_review": "Ready",
+                "submission_target": "e10",
                 "url": "https://example.test",
                 "company_name": "Acme",
                 "role_name": "Engineer",
@@ -198,10 +199,14 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         )
 
         result = await request_submit_approval.ainvoke(
-            {"final_review": "Ready", "url": "https://example.test"}
+            {
+                "final_review": "Ready",
+                "submission_target": "e10",
+                "url": "https://example.test",
+            }
         )
 
-        before_approval.assert_awaited_once()
+        before_approval.assert_awaited_once_with("Ready", "e10")
         self.assertEqual(result, {"submit_approval": "approved"})
 
     async def test_not_ready_review_returns_goal_feedback_without_human_prompt(
@@ -219,7 +224,9 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
             before_submit_approval=before_approval,
         )
 
-        result = await request_submit_approval.ainvoke({"final_review": "Ready"})
+        result = await request_submit_approval.ainvoke(
+            {"final_review": "Ready", "submission_target": "e10"}
+        )
 
         self.assertEqual(result["submit_approval"], "not_ready")
         self.assertEqual(
@@ -244,6 +251,7 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         result = await request_submit_approval.ainvoke(
             {
                 "final_review": "Ready",
+                "submission_target": "e10",
                 "url": "https://example.test",
                 "company_name": "Acme",
                 "role_name": "Engineer",

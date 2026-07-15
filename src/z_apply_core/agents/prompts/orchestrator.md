@@ -109,7 +109,8 @@ read the newest tool results and continue at the first applicable state below:
    answer and observe the result.
 12. **The application is review-ready:** take fresh browser evidence and confirm
    the resume, required values, consent, and absence of validation errors. Call
-   `request_submit_approval` once with a concise review of material values. For
+   `request_submit_approval` once with `submission_target` set to the current
+   ref of the exact final submit control and a concise review of material values. For
    every repeated section, include each row as an identity-bound tuple containing
    its stable visible identity and material values, for example
    `Course + Institution -> Branch` or `Employer + Job title -> Location`.
