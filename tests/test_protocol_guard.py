@@ -425,6 +425,46 @@ class ProseToolCallGuardTests(unittest.TestCase):
         self.assertEqual(handler.call_count, 1)
         self.assertEqual(result.result[0].tool_calls[0]["name"], "task")
 
+    def test_runtime_receipt_is_rejected_beside_native_tool_call(self) -> None:
+        tool = MagicMock()
+        tool.name = "browser_observe"
+        request = _make_request(tools=[tool])
+        invalid = _make_response(
+            [
+                AIMessage(
+                    content=(
+                        "BROWSER ACTION RECEIPT\n"
+                        "action: browser_click\n"
+                        "target: e420\n"
+                        "changed: true"
+                    ),
+                    tool_calls=[
+                        {"name": "browser_observe", "args": {}, "id": "observe-1"}
+                    ],
+                )
+            ]
+        )
+        valid = _make_response(
+            [
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "browser_click",
+                            "args": {"target": "e420"},
+                            "id": "click-1",
+                        }
+                    ],
+                )
+            ]
+        )
+        handler = AsyncMock(side_effect=[invalid, valid])
+
+        result = self._run(ProseToolCallGuardMiddleware().awrap_model_call(request, handler))
+
+        self.assertEqual(handler.await_count, 2)
+        self.assertEqual(result.result[0].tool_calls[0]["name"], "browser_click")
+
 
 if __name__ == "__main__":
     unittest.main()

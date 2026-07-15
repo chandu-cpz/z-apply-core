@@ -11,6 +11,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 InvocationPattern = re.compile(r"(?m)(?:^|(?<=\s))([A-Za-z_][A-Za-z0-9_.-]{0,80})\s*\(")
 ResultMarker = re.compile(r"(?m)^\s*([A-Z][A-Z0-9_]{2,40})_RESULT\s*:")
 JSONToolCall = re.compile(r"\{[^{}]*\"(?:tool|name)\"\s*:\s*\"([^\"]+)\"")
+RuntimeEvidenceMarker = re.compile(
+    r"(?m)^\s*(BROWSER ACTION RECEIPT|BROWSER OBSERVATION)\b"
+)
 
 _TOOLS_ONLY_NAMES = frozenset({"write_todos", "ask_human", "request_submit_approval", "task"})
 
@@ -30,6 +33,7 @@ class ToolProtocolViolationDetail:
         "json_tool_call_imitation",
         "serialized_tool_call",
         "fabricated_transcript",
+        "fabricated_runtime_evidence",
     ]
     detected_name: str | None
     content_excerpt: str
@@ -119,11 +123,31 @@ def _detect_violations(
         prose_calls = _check_exact_tool_calls(text, tool_names)
         json_calls = _check_json_imitations(text, tool_names)
         serialized_calls = _check_serialized_tool_calls(text, tool_names)
+        runtime_evidence = _check_fabricated_runtime_evidence(text)
         violations.extend(prose_calls)
         violations.extend(json_calls)
         violations.extend(serialized_calls)
+        violations.extend(runtime_evidence)
         if prose_calls or json_calls or serialized_calls:
             violations.extend(_check_fabricated_transcripts(text))
+    return violations
+
+
+def _check_fabricated_runtime_evidence(
+    text: str,
+) -> list[ToolProtocolViolationDetail]:
+    """Reject browser evidence markers that only the runtime may produce."""
+    violations: list[ToolProtocolViolationDetail] = []
+    for match in RuntimeEvidenceMarker.finditer(text):
+        violations.append(
+            ToolProtocolViolationDetail(
+                kind="fabricated_runtime_evidence",
+                detected_name=match.group(1),
+                content_excerpt=text[
+                    max(0, match.start() - 40) : min(len(text), match.end() + 80)
+                ],
+            )
+        )
     return violations
 
 
@@ -229,8 +253,10 @@ def _correction_message(
             content=(
                 "RUNTIME PROTOCOL ERROR: your previous response encoded intended "
                 f"tool execution for {names_str} inside assistant content, so nothing "
-                "executed. Discard that response. Retry the same action now through "
-                "the native tool-call channel with no accompanying assistant content."
+                "executed. Browser observations and action receipts are emitted only "
+                "by the runtime; never write or predict them yourself. Discard that "
+                "response. Retry the same action now through the native tool-call "
+                "channel with no accompanying assistant content."
             ),
         ),
     ]

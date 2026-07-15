@@ -38,6 +38,14 @@ path failed or is unavailable:
    credentials in Telegram. The human completes the action in the live browser
    and replies with one button.
 
+A visible password-policy rejection means the configured credential is not
+accepted by that form. Never invent, transform, shorten, extend, or derive a
+replacement password. If the current configured password is rejected after the
+single allowed attempt, call `request_manual_auth` exactly once rather than
+returning a prose `BLOCKED` result. After the human replies Done, inspect fresh
+browser evidence and continue from the resulting authenticated or unresolved
+state.
+
 ## Credential and browser actions
 
 - Use only the configured secret names `DEFAULT_USERNAME` and
@@ -92,4 +100,6 @@ Finish with one short normal task response containing fresh browser evidence:
 `AUTHENTICATED - <account-specific evidence>`,
 `GATE_RESOLVED - <visible evidence>`, or
 `BLOCKED - <one concrete unresolved dependency>`.
+`BLOCKED` is allowed only after `request_manual_auth` has already returned and
+fresh browser evidence still proves an unresolved external dependency.
 Do not claim success from a click, URL, email, or attempted submit alone.
