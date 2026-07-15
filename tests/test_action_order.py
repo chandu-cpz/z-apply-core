@@ -8,6 +8,7 @@ from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
 
 from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
+from z_apply_core.browser_observation import BrowserCapabilities
 
 
 def response(name: str, args: dict[str, object]) -> ModelResponse:
@@ -39,6 +40,24 @@ class ActionOrderTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(messages=[], override=lambda **values: SimpleNamespace(**values))
 
         self.assertIs(await middleware.awrap_model_call(request, handler), upload)
+
+    async def test_auth_gate_rejects_answer_writer_and_requires_auth_specialist(self) -> None:
+        browser = SimpleNamespace(
+            inspect_capabilities=AsyncMock(
+                return_value=BrowserCapabilities(auth_gate_visible=True)
+            ),
+            required_file_upload_pending=AsyncMock(return_value=False),
+        )
+        middleware = OrchestratorActionOrderMiddleware(browser)
+        answer = response("task", {"subagent_type": "AnswerWriter", "description": "Email"})
+        authenticate = response(
+            "task",
+            {"subagent_type": "AuthenticationSpecialist", "description": "Visible login"},
+        )
+        handler = AsyncMock(side_effect=[answer, authenticate])
+        request = SimpleNamespace(messages=[], override=lambda **values: SimpleNamespace(**values))
+
+        self.assertIs(await middleware.awrap_model_call(request, handler), authenticate)
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         artifact_publisher=_artifact_publisher(state),
         on_submit_approval=(runtime.browser.set_submit_approval if runtime is not None else None),
         context_inbox=(runtime.context_inbox if runtime is not None else None),
+        browser=(runtime.browser if runtime is not None else None),
     )
     snapshot = await _fresh_snapshot(state)
     return {

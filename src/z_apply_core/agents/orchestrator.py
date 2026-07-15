@@ -14,6 +14,7 @@ from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
+from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
@@ -29,6 +30,7 @@ from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
+from z_apply_core.browser_session import BrowserSession
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.tools import make_human_tools, make_manual_auth_tool
 from z_apply_core.log_labels import node_info
@@ -83,6 +85,7 @@ async def run_orchestrator(
     artifact_publisher: ApplicationArtifactPublisher | None = None,
     on_submit_approval: Callable[[bool], None] | None = None,
     context_inbox: ContextInbox | None = None,
+    browser: BrowserSession | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
     configure_z_apply_harness_profile()
@@ -176,6 +179,9 @@ async def run_orchestrator(
         return "Application blocker recorded."
 
     event_sink = SequencedEventSink(sink, run_id=run_id)
+    active_browser = browser or (
+        artifact_publisher.browser if artifact_publisher is not None else None
+    )
     router_middleware = NimRouterMiddleware(
         router,
         role="orchestrator",
@@ -206,9 +212,10 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
+            CapabilityContextMiddleware(active_browser),
             SafeToolBatchMiddleware(),
             OrchestratorActionOrderMiddleware(
-                artifact_publisher.browser if artifact_publisher is not None else None
+                active_browser
             ),
             NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
             SubagentDispatchMiddleware(

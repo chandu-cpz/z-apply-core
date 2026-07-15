@@ -65,6 +65,16 @@ class OrchestratorActionOrderMiddleware(
             )
         if self._browser is not None and any(_is_answer_writer(call) for call in calls):
             try:
+                capabilities = await self._browser.inspect_capabilities()
+            except Exception:
+                capabilities = None
+            if capabilities is not None and capabilities.auth_gate_visible:
+                return (
+                    "ACTION ORDER ERROR: the live page structurally contains a password "
+                    "or one-time-code gate. Delegate AuthenticationSpecialist and do not "
+                    "ask AnswerWriter for authentication data."
+                )
+            try:
                 upload_pending = await self._browser.required_file_upload_pending()
             except Exception:  # Browser inspection failure must remain recoverable by the agent.
                 upload_pending = False

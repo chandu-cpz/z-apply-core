@@ -4,6 +4,71 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
+BROWSER_CAPABILITY_SCRIPT = r"""() => {
+    const visible = element => {
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return style.visibility !== 'hidden' && style.display !== 'none' &&
+            box.width > 0 && box.height > 0;
+    };
+    const controls = [...document.querySelectorAll(
+        'input, select, textarea, [contenteditable="true"], [role="combobox"]'
+    )].filter(visible).filter(element => !element.disabled);
+    const authGate = controls.some(element => {
+        if (!(element instanceof HTMLInputElement)) return false;
+        const type = (element.type || 'text').toLowerCase();
+        const autocomplete = (element.autocomplete || '').toLowerCase();
+        return type === 'password' || autocomplete === 'current-password' ||
+            autocomplete === 'new-password' || autocomplete === 'one-time-code';
+    });
+    const requiredUploadPending = controls.some(element =>
+        element instanceof HTMLInputElement && element.type === 'file' &&
+        element.required && element.files.length === 0
+    );
+    const submitControls = [...document.querySelectorAll(
+        'button[type="submit"], input[type="submit"], input[type="image"], form button:not([type])'
+    )].filter(visible).filter(element => !element.disabled &&
+        element.getAttribute('aria-disabled') !== 'true');
+    return {
+        editable_controls_visible: controls.length > 0,
+        auth_gate_visible: authGate,
+        required_file_upload_pending: requiredUploadPending,
+        enabled_form_submit_visible: submitControls.length > 0,
+    };
+}"""
+
+
+@dataclass(frozen=True, slots=True)
+class BrowserCapabilities:
+    """High-confidence structural facts used to narrow legal agent actions."""
+
+    editable_controls_visible: bool = False
+    auth_gate_visible: bool = False
+    required_file_upload_pending: bool = False
+    enabled_form_submit_visible: bool = False
+
+    @classmethod
+    def from_browser_payload(cls, payload: Any) -> BrowserCapabilities:
+        data = payload if isinstance(payload, dict) else {}
+        return cls(
+            editable_controls_visible=bool(data.get("editable_controls_visible")),
+            auth_gate_visible=bool(data.get("auth_gate_visible")),
+            required_file_upload_pending=bool(data.get("required_file_upload_pending")),
+            enabled_form_submit_visible=bool(data.get("enabled_form_submit_visible")),
+        )
+
+    def render(self) -> str:
+        return "\n".join(
+            (
+                f"editable_controls_visible={str(self.editable_controls_visible).lower()}",
+                f"auth_gate_visible={str(self.auth_gate_visible).lower()}",
+                "required_file_upload_pending="
+                f"{str(self.required_file_upload_pending).lower()}",
+                "enabled_form_submit_visible="
+                f"{str(self.enabled_form_submit_visible).lower()}",
+            )
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class BrowserObservation:

@@ -11,7 +11,12 @@ from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
 
 from z_apply_core.browser_config import build_browser_config
-from z_apply_core.browser_observation import ActionReceipt, BrowserObservation
+from z_apply_core.browser_observation import (
+    BROWSER_CAPABILITY_SCRIPT,
+    ActionReceipt,
+    BrowserCapabilities,
+    BrowserObservation,
+)
 from z_apply_core.browser_readiness import (
     FORM_READINESS_SCRIPT,
     REQUIRED_FILE_UPLOAD_PENDING_SCRIPT,
@@ -305,6 +310,13 @@ class BrowserSession:
         async with self._operation_scope():
             tab = await self._backend._ensure_tab()
             return bool(await tab.page.evaluate(REQUIRED_FILE_UPLOAD_PENDING_SCRIPT))
+
+    async def inspect_capabilities(self) -> BrowserCapabilities:
+        """Return compositional structural facts about the current browser page."""
+        async with self._operation_scope():
+            tab = await self._backend._ensure_tab()
+            payload = await tab.page.evaluate(BROWSER_CAPABILITY_SCRIPT)
+        return BrowserCapabilities.from_browser_payload(payload)
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""
