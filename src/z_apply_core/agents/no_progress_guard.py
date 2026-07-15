@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import (
     AgentMiddleware,
@@ -16,6 +16,9 @@ from langgraph.types import Command
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
+
+if TYPE_CHECKING:
+    from z_apply_core.browser_session import BrowserSession
 
 _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {
     "application_blocked",
@@ -39,24 +42,45 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         *,
         max_identical_denials: int = 2,
         max_non_progress: int = 3,
+        max_state_action_failures: int = 3,
+        browser: BrowserSession | None = None,
         on_no_progress: Callable[[ToolProtocolViolation], None] | None = None,
     ) -> None:
         super().__init__()
         self._max_identical_denials = max_identical_denials
         self._max_non_progress = max_non_progress
+        self._max_state_action_failures = max_state_action_failures
+        self._browser = browser
         self._last_denial = ""
         self._same_denials = 0
         self._non_progress = 0
         self._on_no_progress = on_no_progress
         self._last_read_signature: str | None = None
+        self._browser_signature: str | None = None
+        self._state_action_failures: dict[str, int] = {}
+        self._blocked_state_actions: set[str] = set()
 
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
+        self._refresh_browser_state()
+        state_action = self._state_action_signature(request)
         read_signature = _read_signature(request)
-        if read_signature is not None and read_signature == self._last_read_signature:
+        if state_action in self._blocked_state_actions:
+            result = ToolMessage(
+                content=(
+                    "RUNTIME STATE-ACTION CIRCUIT: this exact action repeatedly failed "
+                    "against the current browser revision. It is unavailable until "
+                    "browser evidence changes. Choose a different action or inspect "
+                    "fresh evidence."
+                ),
+                name=str(request.tool_call.get("name", "runtime")),
+                tool_call_id=str(request.tool_call.get("id", "")),
+                status="error",
+            )
+        elif read_signature is not None and read_signature == self._last_read_signature:
             result = ToolMessage(
                 content=(
                     "RUNTIME NO-PROGRESS: this exact read-only tool call already "
@@ -76,6 +100,12 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 self._last_read_signature = None
             elif read_signature is not None:
                 self._last_read_signature = read_signature
+        if isinstance(result, ToolMessage) and result.status == "error":
+            failures = self._state_action_failures.get(state_action, 0) + 1
+            self._state_action_failures[state_action] = failures
+            if failures >= self._max_state_action_failures:
+                self._blocked_state_actions.add(state_action)
+
         if _is_non_progress(result):
             detail = str(getattr(result, "content", ""))
             self._non_progress += 1
@@ -110,12 +140,26 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
             self._non_progress = 0
         return result
 
+    def _refresh_browser_state(self) -> None:
+        observation = self._browser.current_observation if self._browser is not None else None
+        signature = observation.signature if observation is not None else None
+        if signature == self._browser_signature:
+            return
+        self._browser_signature = signature
+        self._state_action_failures.clear()
+        self._blocked_state_actions.clear()
+
+    def _state_action_signature(self, request: ToolCallRequest) -> str:
+        name = str(request.tool_call.get("name", ""))
+        args = request.tool_call.get("args", {})
+        encoded = json.dumps(args, sort_keys=True, default=str, separators=(",", ":"))
+        return f"{self._browser_signature or '(unknown)'}:{name}:{encoded}"
+
 
 def _is_non_progress(result: ToolMessage | Command[Any]) -> bool:
     if not isinstance(result, ToolMessage):
         return False
-    text = str(result.content).lower()
-    return result.status == "error" or "denied:" in text or "duplicate mutation prevented" in text
+    return result.status == "error"
 
 
 def _read_signature(request: ToolCallRequest) -> str | None:

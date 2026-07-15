@@ -87,3 +87,42 @@ async def test_successful_mutation_allows_same_read_again() -> None:
 
     assert repeated.status == "success"
     assert executions == 3
+
+
+@pytest.mark.asyncio
+async def test_failed_action_is_blocked_until_browser_evidence_changes() -> None:
+    observation = SimpleNamespace(signature="page-a")
+    browser = SimpleNamespace(current_observation=observation)
+    middleware = NoProgressGuardMiddleware(
+        browser=browser,
+        max_identical_denials=99,
+        max_non_progress=99,
+        max_state_action_failures=3,
+    )
+    request = SimpleNamespace(
+        tool_call={"name": "browser_click", "args": {"target": "e7"}, "id": "call"}
+    )
+    executions = 0
+
+    async def failed(_request: object) -> ToolMessage:
+        nonlocal executions
+        executions += 1
+        return ToolMessage(
+            content="target unavailable",
+            name="browser_click",
+            tool_call_id="call",
+            status="error",
+        )
+
+    for _ in range(3):
+        await middleware.awrap_tool_call(request, failed)  # type: ignore[arg-type]
+    blocked = await middleware.awrap_tool_call(request, failed)  # type: ignore[arg-type]
+
+    assert executions == 3
+    assert "STATE-ACTION CIRCUIT" in str(blocked.content)
+
+    browser.current_observation = SimpleNamespace(signature="page-b")
+    retried = await middleware.awrap_tool_call(request, failed)  # type: ignore[arg-type]
+
+    assert executions == 4
+    assert "target unavailable" in str(retried.content)
