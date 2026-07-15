@@ -230,7 +230,7 @@ async def run_orchestrator(
             ),
             NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
             SubagentDispatchMiddleware(
-                ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"]
+                ["AnswerWriter", "AuthenticationSpecialist"]
             ),
             RequireNativeToolCallMiddleware(),
             model_retry_middleware(),
