@@ -23,9 +23,12 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
         return type === 'password' || autocomplete === 'current-password' ||
             autocomplete === 'new-password' || autocomplete === 'one-time-code';
     });
-    const requiredUploadPending = controls.some(element =>
-        element instanceof HTMLInputElement && element.type === 'file' &&
-        element.required && element.files.length === 0
+    const fileInputs = [...document.querySelectorAll('input[type="file"]')]
+        .filter(element => !element.disabled);
+    const emptyFileUploadPresent = fileInputs.some(element => element.files.length === 0);
+    const requiredUploadPending = fileInputs.some(element =>
+        (element.required || element.getAttribute('aria-required') === 'true') &&
+        element.files.length === 0
     );
     const emptyValue = element => {
         if (element instanceof HTMLInputElement) {
@@ -64,6 +67,7 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
         unresolved_required_controls: unresolvedRequiredControls.length,
         invalid_controls: invalidControls.length,
         auth_gate_visible: authGate,
+        empty_file_upload_present: emptyFileUploadPresent,
         required_file_upload_pending: requiredUploadPending,
         enabled_form_submit_visible: submitControls.length > 0,
         visual_only_surface_visible: largeVisualSurface && actionControls.length === 0,
@@ -79,6 +83,7 @@ class BrowserCapabilities:
     unresolved_required_controls: int = 0
     invalid_controls: int = 0
     auth_gate_visible: bool = False
+    empty_file_upload_present: bool = False
     required_file_upload_pending: bool = False
     enabled_form_submit_visible: bool = False
     visual_only_surface_visible: bool = False
@@ -93,6 +98,7 @@ class BrowserCapabilities:
             ),
             invalid_controls=int(data.get("invalid_controls") or 0),
             auth_gate_visible=bool(data.get("auth_gate_visible")),
+            empty_file_upload_present=bool(data.get("empty_file_upload_present")),
             required_file_upload_pending=bool(data.get("required_file_upload_pending")),
             enabled_form_submit_visible=bool(data.get("enabled_form_submit_visible")),
             visual_only_surface_visible=bool(data.get("visual_only_surface_visible")),
@@ -105,6 +111,8 @@ class BrowserCapabilities:
                 f"unresolved_required_controls={self.unresolved_required_controls}",
                 f"invalid_controls={self.invalid_controls}",
                 f"auth_gate_visible={str(self.auth_gate_visible).lower()}",
+                "empty_file_upload_present="
+                f"{str(self.empty_file_upload_present).lower()}",
                 "required_file_upload_pending="
                 f"{str(self.required_file_upload_pending).lower()}",
                 "enabled_form_submit_visible="

@@ -130,6 +130,11 @@ class CapabilityContextMiddleware(
         if capabilities.auth_gate_visible:
             allowed = _READ_BROWSER_TOOLS | _ALWAYS_AVAILABLE
             return [tool for tool in tools if _tool_name(tool) in allowed]
+        if capabilities.empty_file_upload_present:
+            allowed = _READ_BROWSER_TOOLS | frozenset(
+                {"browser_click_upload", "browser_wait_for", "application_blocked"}
+            )
+            return [tool for tool in tools if _tool_name(tool) in allowed]
         if not capabilities.editable_controls_visible:
             allowed = _NON_FORM_BROWSER_TOOLS | frozenset(
                 {"application_blocked", "application_submitted"}

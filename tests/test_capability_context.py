@@ -116,6 +116,17 @@ class CapabilityContextTests(unittest.TestCase):
 
         self.assertEqual([tool.name for tool in tools], ["browser_click_upload"])
 
+    def test_hidden_empty_file_input_hides_generic_click(self) -> None:
+        tools = CapabilityContextMiddleware._filter_tools(
+            self.tools,
+            BrowserCapabilities(empty_file_upload_present=True),
+        )
+
+        self.assertEqual(
+            [tool.name for tool in tools],
+            ["browser_observe", "browser_click_upload"],
+        )
+
     def test_ordinary_form_excludes_deepagents_filesystem_tools(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
             self.tools,
@@ -193,6 +204,7 @@ class BrowserCapabilityParsingTests(unittest.IsolatedAsyncioTestCase):
                 return_value={
                     "editable_controls_visible": True,
                     "auth_gate_visible": True,
+                    "empty_file_upload_present": True,
                     "required_file_upload_pending": False,
                     "enabled_form_submit_visible": True,
                 }
@@ -208,6 +220,7 @@ class BrowserCapabilityParsingTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(capabilities.auth_gate_visible)
         self.assertTrue(capabilities.editable_controls_visible)
+        self.assertTrue(capabilities.empty_file_upload_present)
         self.assertFalse(capabilities.required_file_upload_pending)
 
 
