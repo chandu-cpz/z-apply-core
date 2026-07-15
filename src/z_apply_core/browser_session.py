@@ -342,7 +342,30 @@ class BrowserSession:
             async with self._operation_scope():
                 tab = await self._backend._ensure_tab()
                 locator = (await tab.resolve_target(target=target)).locator
-                is_auth_submit = await locator.evaluate(
+                control_handle = await locator.evaluate_handle(
+                    """element => {
+                    const selector = 'button, input[type="submit"], input[type="image"]';
+                    const direct = element.closest(selector);
+                    if (direct) return direct;
+                    const clickLayer = element.closest('[role="button"]');
+                    if (!clickLayer) return null;
+                    const box = clickLayer.getBoundingClientRect();
+                    const x = box.left + box.width / 2;
+                    const y = box.top + box.height / 2;
+                    return clickLayer.ownerDocument.elementsFromPoint(x, y)
+                        .find(candidate => candidate !== clickLayer &&
+                            candidate.matches(selector)) || null;
+                }"""
+                )
+                submit_control = control_handle.as_element()
+                if submit_control is None:
+                    await control_handle.dispose()
+                    raise BrowserToolExecutionError(
+                        "Authentication submit rejected: the target does not resolve to "
+                        "a submit control."
+                    )
+                try:
+                    is_auth_submit = await submit_control.evaluate(
                 """element => {
                 const selector = 'button, input[type="submit"], input[type="image"]';
                 let control = element.closest(selector);
@@ -400,18 +423,17 @@ class BrowserSession:
                 }
                 return false;
             }"""
-                )
-                if not is_auth_submit:
-                    raise BrowserToolExecutionError(
-                        "Authentication submit rejected: the target is not a submit "
-                        "control in a structurally identifiable login or verification form."
                     )
-                await locator.click(trial=True, timeout=15_000)
-                result = await self._backend.call_tool(
-                    "browser_click",
-                    {"target": target},
-                    meta=self._call_meta("browser_click"),
-                )
+                    if not is_auth_submit:
+                        raise BrowserToolExecutionError(
+                            "Authentication submit rejected: the target is not a submit "
+                            "control in a structurally identifiable login or verification form."
+                        )
+                    await submit_control.click(trial=True, timeout=15_000)
+                    await submit_control.click(timeout=15_000)
+                    result = "Authentication submit control clicked."
+                finally:
+                    await control_handle.dispose()
                 await self._discover_owned_popups()
         except BrowserToolExecutionError:
             raise

@@ -19,9 +19,17 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         async def resolve_target(*, target: str) -> SimpleNamespace:
             submit = target in targets if targets is not None else is_submit
-            locator = SimpleNamespace(
+            submit_control = SimpleNamespace(
                 evaluate=AsyncMock(return_value=submit),
                 click=AsyncMock(),
+            )
+            handle = SimpleNamespace(
+                as_element=lambda: submit_control,
+                dispose=AsyncMock(),
+            )
+            locator = SimpleNamespace(
+                evaluate=AsyncMock(return_value=submit),
+                evaluate_handle=AsyncMock(return_value=handle),
             )
             return SimpleNamespace(locator=locator)
 
@@ -103,9 +111,8 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         evidence = await session.submit_auth_form("e10")
 
-        self.assertEqual(call_tool.await_count, 2)
-        self.assertEqual(call_tool.await_args_list[0].args[0], "browser_click")
-        self.assertEqual(call_tool.await_args_list[1].args[0], "browser_snapshot")
+        self.assertEqual(call_tool.await_count, 1)
+        self.assertEqual(call_tool.await_args_list[0].args[0], "browser_snapshot")
         self.assertIn("review state", evidence)
         self.assertIsNone(session.submission_capability)
 
@@ -115,14 +122,22 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         evidence = await session.submit_auth_form("e10")
 
         self.assertIn("review state", evidence)
-        self.assertEqual(call_tool.await_args_list[0].args[0], "browser_click")
+        self.assertEqual(call_tool.await_args_list[0].args[0], "browser_snapshot")
 
     async def test_auth_submit_classifies_pointer_interception_as_recoverable(self) -> None:
         session, call_tool = self._session(is_submit=True)
         tab = session._backend._ensure_tab.return_value
-        locator = SimpleNamespace(
+        submit_control = SimpleNamespace(
             evaluate=AsyncMock(return_value=True),
             click=AsyncMock(side_effect=TimeoutError("pointer interception")),
+        )
+        handle = SimpleNamespace(
+            as_element=lambda: submit_control,
+            dispose=AsyncMock(),
+        )
+        locator = SimpleNamespace(
+            evaluate=AsyncMock(return_value=True),
+            evaluate_handle=AsyncMock(return_value=handle),
         )
         tab.resolve_target.side_effect = None
         tab.resolve_target.return_value = SimpleNamespace(locator=locator)
