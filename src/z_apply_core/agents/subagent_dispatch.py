@@ -91,8 +91,8 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
                 nested = args.get("subagent_type")
                 if isinstance(nested, str) and nested in self._subagent_types:
                     description = args.get("description", "")
-                    if isinstance(description, str) and self._resume_path:
-                        description = description.replace("RESUME_PATH", self._resume_path)
+                    if isinstance(description, str):
+                        description = self._normalize_description(nested, description)
                         return {**call, "args": {**args, "description": description}}
             return dict(call)
 
@@ -102,10 +102,26 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
                 f"Complete the one bounded {subagent_type} task requested by the parent. "
                 "Return only evidence relevant to that task."
             )
-        if self._resume_path:
-            description = description.replace("RESUME_PATH", self._resume_path)
+        description = self._normalize_description(subagent_type, description)
         return {
             **call,
             "name": "task",
             "args": {"subagent_type": subagent_type, "description": description},
         }
+
+    def _normalize_description(self, subagent_type: str, description: str) -> str:
+        normalized = (
+            description.replace("RESUME_PATH", self._resume_path)
+            if self._resume_path
+            else description
+        )
+        if subagent_type != "AuthenticationSpecialist":
+            return normalized
+        return (
+            "RUNTIME AUTHENTICATION OBJECTIVE: Resolve the currently visible gate. "
+            "The parent description below is starting evidence, not authorization to "
+            "skip the fixed login -> account creation -> password reset recovery order. "
+            "Fresh browser evidence supersedes its refs and selected panel after every "
+            "action.\n\nPARENT HANDOFF EVIDENCE:\n"
+            f"{normalized}"
+        )

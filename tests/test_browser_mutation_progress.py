@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from z_apply_core.browser_observation import BrowserObservation
 from z_apply_core.browser_session import BrowserSession, BrowserToolExecutionError
 
 
@@ -55,6 +56,31 @@ class BrowserMutationProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("changed: true", result)
         self.assertIn("changed snapshot", result)
         self.assertEqual(call_tool.await_count, 4)
+
+    async def test_bounded_wait_returns_fresh_inline_observation(self) -> None:
+        session = object.__new__(BrowserSession)
+        session._last_observation = None
+        observation = BrowserObservation.create(
+            revision=7,
+            url="https://example.test/application",
+            title="Application",
+            evidence="- document: Sign In",
+        )
+
+        async def call_tool(name: str, _arguments: object = None) -> str:
+            if name == "browser_snapshot":
+                session._last_observation = observation
+                return observation.evidence
+            return "Waited for 2 seconds."
+
+        session.call_tool = AsyncMock(side_effect=call_tool)  # type: ignore[method-assign]
+
+        result = await session.call_bounded_wait("browser_wait_for", {"time": 2})
+
+        self.assertIn("Waited for 2 seconds.", result)
+        self.assertIn("BROWSER OBSERVATION", result)
+        self.assertIn("revision: 7", result)
+        self.assertEqual(session.call_tool.await_count, 2)
 
 
 if __name__ == "__main__":

@@ -173,8 +173,15 @@ class BrowserSession:
         name: str,
         arguments: dict[str, Any] | None = None,
     ) -> str:
-        """Execute model-requested waits only when seconds are explicit and bounded."""
-        return await self.call_tool(name, validate_bounded_wait_arguments(arguments))
+        """Execute a bounded wait and return fresh inline browser evidence."""
+        result = await self.call_tool(name, validate_bounded_wait_arguments(arguments))
+        await self.call_tool("browser_snapshot")
+        observation = self.current_observation
+        if observation is None:
+            raise BrowserToolExecutionError(
+                "The bounded wait completed but current browser evidence is unavailable."
+            )
+        return f"{result}\n{observation.render()}"
 
     async def observe(self) -> str:
         """Return one revisioned browser observation for the active page."""

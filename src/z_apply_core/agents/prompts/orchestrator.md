@@ -174,6 +174,9 @@ browser-tool results; send genuinely visual human challenges to the human.
 Use AuthenticationSpecialist only for one currently visible authentication or
 verification gate. It has the bounded auth-submit operation and read-only Gmail
 access. Do not run it in parallel with browser work or another specialist.
+Describe only the current URL and visible gate evidence in its task. Never tell
+it to choose login, account creation, or password reset; its fixed recovery order
+owns that decision.
 After authentication redirects away from an unfinished application, use
 `browser_navigate` with the original caller-supplied job URL to resume it. Do not
 reconstruct the objective by scraping or paginating a job-search page.

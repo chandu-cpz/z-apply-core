@@ -16,6 +16,30 @@ from z_apply_core.agents.vision_message_compat import (
 from z_apply_core.browser_observation import BrowserCapabilities
 
 
+def test_auth_dispatch_preserves_evidence_but_owns_recovery_order() -> None:
+    middleware = SubagentDispatchMiddleware(["AuthenticationSpecialist"])
+    message = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "task",
+                "args": {
+                    "subagent_type": "AuthenticationSpecialist",
+                    "description": "Complete Create Account at ref=e20.",
+                },
+                "id": "auth-1",
+            }
+        ],
+    )
+
+    normalized = middleware._normalize_message(message)
+
+    description = normalized.tool_calls[0]["args"]["description"]
+    assert description.startswith("RUNTIME AUTHENTICATION OBJECTIVE")
+    assert "fixed login -> account creation -> password reset recovery order" in description
+    assert "Complete Create Account at ref=e20." in description
+
+
 @pytest.mark.asyncio
 async def test_vision_delegation_is_denied_on_dom_operable_page() -> None:
     browser = SimpleNamespace(
