@@ -15,6 +15,11 @@ BrowserObserver = Callable[[], Awaitable[str]]
 AuthSubmitter = Callable[[str], Awaitable[str]]
 VerificationLinkOpener = Callable[[str], Awaitable[str]]
 _AGENT_TOOL_DESCRIPTIONS: dict[str, str] = {}
+_AGENT_TOOL_DESCRIPTIONS["browser_wait_for"] = (
+    "Wait briefly for page state to settle or visible text to appear/disappear. "
+    "The time argument is seconds, must be at most 30, and is not milliseconds. "
+    "Prefer a visible text condition when one is known."
+)
 
 INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_snapshot",
@@ -97,6 +102,28 @@ def normalize_browser_arguments(
             else field
             for field in fields
         ]
+    return normalized
+
+
+def validate_bounded_wait_arguments(
+    arguments: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Reject ambiguous or excessive model-requested browser waits."""
+    normalized = normalize_browser_arguments(arguments)
+    raw_time = normalized.get("time")
+    if raw_time in (None, ""):
+        return normalized
+    try:
+        seconds = float(raw_time)
+    except (TypeError, ValueError) as exc:
+        raise ToolException(
+            "browser_wait_for.time must be a number of seconds between 0 and 30."
+        ) from exc
+    if seconds < 0 or seconds > 30:
+        raise ToolException(
+            "browser_wait_for.time uses seconds and must be between 0 and 30; "
+            "milliseconds such as 2000 are invalid. Retry with a short seconds value."
+        )
     return normalized
 
 

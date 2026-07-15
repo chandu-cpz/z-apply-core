@@ -28,6 +28,7 @@ from z_apply_core.browser_tools import (
     BROWSER_CHANGING_TOOL_NAMES,
     BrowserToolRegistry,
     normalize_browser_arguments,
+    validate_bounded_wait_arguments,
 )
 
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
@@ -88,6 +89,7 @@ class BrowserSession:
                     if name != "browser_click_upload"
                 },
                 "browser_take_screenshot": self.call_tool_content,
+                "browser_wait_for": self.call_bounded_wait,
             },
         )
 
@@ -153,6 +155,14 @@ class BrowserSession:
             self._last_snapshot = text
             self._record_observation(text, url=page_url, title=page_title)
         return text
+
+    async def call_bounded_wait(
+        self,
+        name: str,
+        arguments: dict[str, Any] | None = None,
+    ) -> str:
+        """Execute model-requested waits only when seconds are explicit and bounded."""
+        return await self.call_tool(name, validate_bounded_wait_arguments(arguments))
 
     async def observe(self) -> str:
         """Return one revisioned browser observation for the active page."""

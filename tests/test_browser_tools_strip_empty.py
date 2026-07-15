@@ -12,6 +12,7 @@ from z_apply_core.browser_tools import (
     make_auth_submit_tool,
     make_click_upload_tool,
     make_verification_link_tool,
+    validate_bounded_wait_arguments,
 )
 
 
@@ -211,6 +212,13 @@ class StripEmptyArgsTests(unittest.TestCase):
 
         opener.assert_awaited_once_with("https://example.com/verify")
         self.assertIn("original restored", result)
+
+    def test_browser_wait_rejects_millisecond_shaped_duration(self) -> None:
+        with self.assertRaisesRegex(ToolException, "uses seconds"):
+            validate_bounded_wait_arguments({"time": 2000})
+
+    def test_browser_wait_accepts_short_seconds_duration(self) -> None:
+        self.assertEqual(validate_bounded_wait_arguments({"time": "3"})["time"], "3")
 
 
 if __name__ == "__main__":
