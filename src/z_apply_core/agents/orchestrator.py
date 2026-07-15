@@ -23,6 +23,7 @@ from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.readiness_verifier import require_submission_readiness
+from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
@@ -231,6 +232,7 @@ async def run_orchestrator(
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"]
             ),
+            RequireNativeToolCallMiddleware(),
             model_retry_middleware(),
             router_middleware,
             ProseToolCallGuardMiddleware(),
