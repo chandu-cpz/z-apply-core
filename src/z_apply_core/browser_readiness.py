@@ -5,10 +5,12 @@ from typing import Any
 
 FORM_READINESS_SCRIPT = r"""() => {
     const visible = element => {
+        if (element instanceof HTMLInputElement && element.type === 'hidden') return false;
+        if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
         const style = getComputedStyle(element);
         const box = element.getBoundingClientRect();
         return style.visibility !== 'hidden' && style.display !== 'none' &&
-            box.width > 0 && box.height > 0;
+            Number(style.opacity || 1) > 0 && box.width > 0 && box.height > 0;
     };
     const controlName = element => {
         const labelledBy = (element.getAttribute('aria-labelledby') || '')
@@ -64,10 +66,18 @@ FORM_READINESS_SCRIPT = r"""() => {
     return { blockers, submit_controls: submitControls };
 }"""
 
-REQUIRED_FILE_UPLOAD_PENDING_SCRIPT = r"""() =>
-    [...document.querySelectorAll('input[type="file"]')].some(input =>
-        !input.disabled && input.required && input.files.length === 0
-    )"""
+REQUIRED_FILE_UPLOAD_PENDING_SCRIPT = r"""() => {
+    const visible = element => {
+        if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
+        const style = getComputedStyle(element);
+        const box = element.getBoundingClientRect();
+        return style.visibility !== 'hidden' && style.display !== 'none' &&
+            Number(style.opacity || 1) > 0 && box.width > 0 && box.height > 0;
+    };
+    return [...document.querySelectorAll('input[type="file"]')].some(input =>
+        visible(input) && !input.disabled && input.required && input.files.length === 0
+    );
+}"""
 
 
 @dataclass(frozen=True, slots=True)

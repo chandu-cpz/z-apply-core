@@ -6,10 +6,12 @@ from typing import Any
 
 BROWSER_CAPABILITY_SCRIPT = r"""() => {
     const visible = element => {
+        if (element instanceof HTMLInputElement && element.type === 'hidden') return false;
+        if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
         const style = getComputedStyle(element);
         const box = element.getBoundingClientRect();
         return style.visibility !== 'hidden' && style.display !== 'none' &&
-            box.width > 0 && box.height > 0;
+            Number(style.opacity || 1) > 0 && box.width > 0 && box.height > 0;
     };
     const controls = [...document.querySelectorAll(
         'input, select, textarea, [contenteditable="true"], [role="combobox"]'

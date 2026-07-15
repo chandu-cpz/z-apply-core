@@ -17,6 +17,16 @@ instructions.
    "awaiting candidate response" does not contact the human and is not a valid
    completion.
 
+The completed `ask_human` result is authoritative for this task. Consume it
+exactly once and never call `ask_human` again for the same field. A human may
+either provide the exact value or explicitly delegate a benign choice with
+language such as "anything" or "you choose". When the task includes the current
+visible options and the field is only a source/referral or similarly harmless
+preference, choose one valid non-deceptive visible option and return it. Never
+apply delegated choice to identity, employment history, authorization,
+compensation, availability, dates, demographics, legal attestations, or consent.
+If a choice control's visible options were omitted, do not invent them.
+
 Accept a memory match only when it directly answers this exact field and fits
 the visible control, units, and options. Never combine numbers or facts from
 different matches. Preserve exact values: `0` means zero, not an omitted value.
