@@ -57,6 +57,11 @@ class CapabilityContextMiddleware(
         observation = browser.current_observation
         revision = observation.revision if observation is not None else 0
         available = ", ".join(_tool_name(tool) for tool in tools)
+        current_evidence = (
+            "\nCURRENT BROWSER EVIDENCE\n" + observation.render()
+            if observation is not None
+            else ""
+        )
         context = HumanMessage(
             name=CAPABILITY_CONTEXT_SOURCE,
             additional_kwargs={"lc_source": CAPABILITY_CONTEXT_SOURCE},
@@ -67,6 +72,7 @@ class CapabilityContextMiddleware(
                 f"available_tools={available or '(none)'}\n"
                 "Use current browser evidence and choose one legal native action. "
                 "These are compositional structural facts, not a workflow phase."
+                f"{current_evidence}"
             ),
         )
         return await handler(

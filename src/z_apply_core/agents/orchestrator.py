@@ -7,6 +7,7 @@ from typing import cast
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import FilesystemBackend
+from deepagents.middleware.summarization import SummarizationMiddleware
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -212,6 +213,7 @@ async def run_orchestrator(
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
+    deepagent_backend = FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True)
     agent = create_deep_agent(
         model=selection.llm,
         tools=[
@@ -234,6 +236,16 @@ async def run_orchestrator(
                 browser=active_browser,
             ),
             RequireNativeToolCallMiddleware(),
+            SummarizationMiddleware(
+                model=selection.llm,
+                backend=deepagent_backend,
+                trigger=[("tokens", 45_000), ("messages", 60)],
+                keep=("messages", 16),
+                truncate_args_settings={
+                    "trigger": ("messages", 20),
+                    "keep": ("messages", 12),
+                },
+            ),
             model_retry_middleware(),
             router_middleware,
             ProseToolCallGuardMiddleware(),
@@ -254,7 +266,7 @@ async def run_orchestrator(
             ],
             sink=event_sink,
         ),
-        backend=FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True),
+        backend=deepagent_backend,
         permissions=deepagent_filesystem_permissions(run_id),
         checkpointer=InMemorySaver(),
     )
