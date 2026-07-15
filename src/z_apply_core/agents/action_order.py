@@ -4,8 +4,15 @@ from collections.abc import Mapping
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
-from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain.agents.middleware.types import (
+    AgentState,
+    ContextT,
+    ModelResponse,
+    ResponseT,
+    ToolCallRequest,
+)
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.types import Command
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.browser_session import BrowserSession
@@ -30,7 +37,6 @@ class OrchestratorActionOrderMiddleware(
         response: ModelResponse[ResponseT] = await handler(request)
         violation = await self._violation(response)
         if violation is None:
-            self._record_accepted_action(response)
             return response
 
         retry = await handler(
@@ -47,8 +53,22 @@ class OrchestratorActionOrderMiddleware(
                 "tool_protocol_failure: model repeated an action-order violation "
                 "after controller correction"
             )
-        self._record_accepted_action(retry)
         return retry
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Any,
+    ) -> ToolMessage | Command[Any]:
+        """Advance ordering state only from completed, usable tool results."""
+        result: ToolMessage | Command[Any] = await handler(request)
+        call = request.tool_call
+        if _is_answer_writer(call):
+            if _has_nonempty_success(result):
+                self._answers_waiting_to_be_applied = True
+        elif call.get("name") in BROWSER_CHANGING_TOOL_NAMES and _tool_succeeded(result):
+            self._answers_waiting_to_be_applied = False
+        return result
 
     async def _violation(self, response: ModelResponse[ResponseT]) -> str | None:
         calls = _tool_calls(response)
@@ -86,14 +106,6 @@ class OrchestratorActionOrderMiddleware(
                 )
         return None
 
-    def _record_accepted_action(self, response: ModelResponse[ResponseT]) -> None:
-        calls = _tool_calls(response)
-        if any(call.get("name") in BROWSER_CHANGING_TOOL_NAMES for call in calls):
-            self._answers_waiting_to_be_applied = False
-        if any(_is_answer_writer(call) for call in calls):
-            self._answers_waiting_to_be_applied = True
-
-
 def _tool_calls(response: ModelResponse[Any]) -> list[Mapping[str, Any]]:
     calls: list[Mapping[str, Any]] = []
     for message in response.result:
@@ -107,3 +119,24 @@ def _is_answer_writer(call: Mapping[str, Any]) -> bool:
         return False
     args = call.get("args")
     return isinstance(args, dict) and args.get("subagent_type") == "AnswerWriter"
+
+
+def _tool_messages(result: ToolMessage | Command[Any]) -> list[ToolMessage]:
+    if isinstance(result, ToolMessage):
+        return [result]
+    update = result.update
+    if not isinstance(update, dict):
+        return []
+    messages = update.get("messages")
+    if not isinstance(messages, list):
+        return []
+    return [message for message in messages if isinstance(message, ToolMessage)]
+
+
+def _tool_succeeded(result: ToolMessage | Command[Any]) -> bool:
+    messages = _tool_messages(result)
+    return bool(messages) and all(message.status != "error" for message in messages)
+
+
+def _has_nonempty_success(result: ToolMessage | Command[Any]) -> bool:
+    return _tool_succeeded(result) and any(message.text.strip() for message in _tool_messages(result))

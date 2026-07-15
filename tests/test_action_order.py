@@ -5,7 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from langchain.agents.middleware.types import ModelResponse
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command
 
 from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
 from z_apply_core.browser_observation import BrowserCapabilities
@@ -28,8 +29,55 @@ class ActionOrderTests(unittest.IsolatedAsyncioTestCase):
         request = SimpleNamespace(messages=[], override=lambda **values: SimpleNamespace(**values))
 
         self.assertIs(await middleware.awrap_model_call(request, handler), first)
+        task_request = SimpleNamespace(
+            tool_call={
+                "name": "task",
+                "args": {"subagent_type": "AnswerWriter", "description": "Name"},
+                "id": "task",
+            }
+        )
+        await middleware.awrap_tool_call(
+            task_request,
+            AsyncMock(
+                return_value=Command(
+                    update={
+                        "messages": [
+                            ToolMessage("Name = Chandrakanth", tool_call_id="task")
+                        ]
+                    }
+                )
+            ),
+        )
         self.assertIs(await middleware.awrap_model_call(request, handler), fill)
         self.assertEqual(handler.await_count, 3)
+
+    async def test_empty_answer_writer_result_does_not_lock_action_order(self) -> None:
+        browser = SimpleNamespace(required_file_upload_pending=AsyncMock(return_value=False))
+        middleware = OrchestratorActionOrderMiddleware(browser)
+        task_request = SimpleNamespace(
+            tool_call={
+                "name": "task",
+                "args": {"subagent_type": "AnswerWriter", "description": "Source"},
+                "id": "task",
+            }
+        )
+        await middleware.awrap_tool_call(
+            task_request,
+            AsyncMock(
+                return_value=Command(
+                    update={"messages": [ToolMessage("", tool_call_id="task")]}
+                )
+            ),
+        )
+        next_task = response(
+            "task",
+            {"subagent_type": "AnswerWriter", "description": "Retry source"},
+        )
+        handler = AsyncMock(return_value=next_task)
+        request = SimpleNamespace(messages=[], override=lambda **values: SimpleNamespace(**values))
+
+        self.assertIs(await middleware.awrap_model_call(request, handler), next_task)
+        self.assertEqual(handler.await_count, 1)
 
     async def test_required_file_upload_precedes_answer_writer(self) -> None:
         browser = SimpleNamespace(required_file_upload_pending=AsyncMock(return_value=True))
