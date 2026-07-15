@@ -40,6 +40,10 @@ from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.tools import make_human_tools, make_manual_auth_tool
 from z_apply_core.log_labels import node_info
 from z_apply_core.memory.applicant_memory import CandidateMemory
+from z_apply_core.memory.platform_playbooks import (
+    PlatformPlaybooks,
+    make_platform_memory_tool,
+)
 from z_apply_core.stream_events import FrameworkEventSink, SequencedEventSink
 
 logger = logging.getLogger(__name__)
@@ -220,11 +224,25 @@ async def run_orchestrator(
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
+    platform_playbooks = PlatformPlaybooks()
+    platform_playbook = platform_playbooks.read_for_url(job_url)
+    platform_memory_tools = (
+        [
+            make_platform_memory_tool(
+                platform_playbooks,
+                job_url=job_url,
+                browser=active_browser,
+            )
+        ]
+        if active_browser is not None
+        else []
+    )
     deepagent_backend = FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True)
     agent = create_deep_agent(
         model=selection.llm,
         tools=[
             *orchestrator_browser_tools,
+            *platform_memory_tools,
             *human_tools,
             application_submitted,
             application_blocked,
@@ -293,6 +311,7 @@ async def run_orchestrator(
         snapshot=snapshot,
         resume_path=resume_path,
         run_id=run_id,
+        platform_playbook=platform_playbook,
     )
     try:
         await run_persistent_goal(
@@ -327,6 +346,7 @@ def _task_prompt(
     snapshot: str,
     resume_path: str,
     run_id: str,
+    platform_playbook: str,
 ) -> str:
     captcha_path = _captcha_path(run_id)
     return f"""Complete this job application in the already-open browser.
@@ -334,6 +354,14 @@ def _task_prompt(
 Job URL: {job_url}
 Configured resume: {resume_path}
 CAPTCHA artifact path: {captcha_path}
+
+HISTORICAL PLATFORM PLAYBOOK
+This is evidence-backed memory from earlier runs, not current browser truth.
+Use it to choose a faster likely path, but discard any lesson that conflicts
+with current ARIA/DOM evidence. Never reuse old refs, values, or completion state.
+
+{platform_playbook}
+END HISTORICAL PLATFORM PLAYBOOK
 
 Simplify policy:
 The Simplify addon is natively loaded in the persistent browser. Trigger its

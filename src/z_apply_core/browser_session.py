@@ -129,6 +129,7 @@ class BrowserSession:
         self._submission_capability: SubmissionCapability | None = None
         self._last_snapshot = ""
         self._last_observation: BrowserObservation | None = None
+        self._last_action_receipt: ActionReceipt | None = None
         self._browser_revision = 0
         self._last_mutation_signature = ""
         self._last_mutation_made_progress = True
@@ -325,14 +326,16 @@ class BrowserSession:
         changed = before_observation.signature != after.signature
         self._last_mutation_signature = signature
         self._last_mutation_made_progress = changed
-        return ActionReceipt(
+        receipt = ActionReceipt(
             tool=name,
             arguments=normalized,
             before_revision=before_observation.revision,
             after=after,
             changed=changed,
             result=mutation,
-        ).render()
+        )
+        self._last_action_receipt = receipt
+        return receipt.render()
 
     async def upload_files(self, target: str, paths: list[str]) -> str:
         """Resolve an upload trigger to its file input without opening a chooser."""
@@ -364,19 +367,26 @@ class BrowserSession:
         changed = before.signature != after.signature
         self._pending_atomic_upload_target = ""
         self._pending_file_chooser = None
-        return ActionReceipt(
+        receipt = ActionReceipt(
             tool="browser_click_upload",
             arguments={"target": target, "paths": paths},
             before_revision=before.revision,
             after=after,
             changed=changed,
             result="Files attached directly to the resolved upload control.",
-        ).render()
+        )
+        self._last_action_receipt = receipt
+        return receipt.render()
 
     @property
     def pending_atomic_upload_target(self) -> str:
         """Target whose activation proved that an atomic upload is required."""
         return self._pending_atomic_upload_target
+
+    @property
+    def last_action_receipt(self) -> ActionReceipt | None:
+        """Latest typed successful browser mutation evidence for this run."""
+        return self._last_action_receipt
 
     async def _is_file_upload_trigger(self, arguments: dict[str, Any]) -> bool:
         target = arguments.get("target")

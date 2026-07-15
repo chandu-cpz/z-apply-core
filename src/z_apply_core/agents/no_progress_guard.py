@@ -14,8 +14,7 @@ from langchain.agents.middleware.types import (
     ResponseT,
     ToolCallRequest,
 )
-from langchain_core.messages import ToolMessage
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
@@ -31,6 +30,7 @@ _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {
     "application_submitted",
     "ask_human",
     "request_submit_approval",
+    "remember_platform_lesson",
     "task",
 }
 _REPEATABLE_READ_TOOL_NAMES = frozenset({"browser_wait_for"})

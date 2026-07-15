@@ -19,6 +19,7 @@ _NON_FORM_BROWSER_TOOLS = _READ_BROWSER_TOOLS | frozenset(
         "browser_click",
         "browser_tabs",
         "browser_wait_for",
+        "remember_platform_lesson",
         "browser_handle_dialog",
     }
 )
@@ -34,6 +35,7 @@ _ORCHESTRATOR_CONTROL_TOOLS = _ALWAYS_AVAILABLE | frozenset(
     {
         "request_submit_approval",
         "application_submitted",
+        "remember_platform_lesson",
     }
 )
 
