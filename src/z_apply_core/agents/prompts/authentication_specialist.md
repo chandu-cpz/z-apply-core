@@ -24,6 +24,9 @@ path failed or is unavailable:
    provider.
 2. Use the site's email/username path and try login once with `DEFAULT_USERNAME` and
    `DEFAULT_PASSWORD`.
+   If the handoff opens on Create Account while a visible Sign In switch is
+   available, activate Sign In first and inspect its fresh controls. Do not fill
+   or submit Create Account merely because it is the initially selected panel.
 3. If visible evidence proves there is no usable account, login is rejected, or
    the account is not registered, use the visible Create Account/Sign Up path.
    Create one account with the same configured identity and password. Use only
