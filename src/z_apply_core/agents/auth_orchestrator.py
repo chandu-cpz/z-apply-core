@@ -19,7 +19,10 @@ from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.result import AuthOrchestratorRun, AuthStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
-from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.router_middleware import (
+    ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+    NimRouterMiddleware,
+)
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.log_labels import node_info
 from z_apply_core.stream_events import FrameworkEventSink
@@ -45,7 +48,11 @@ async def run_auth_orchestrator(
         )
 
     try:
-        selection = await router.lease(tools=True, priority="balanced")
+        selection = await router.lease(
+            tools=True,
+            priority="balanced",
+            excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+        )
     except (NimRouterError, ImportError, ValueError) as exc:
         return AuthOrchestratorRun(f"Model selection failed: {exc}", "", "failed")
 

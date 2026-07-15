@@ -25,12 +25,27 @@ from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 logger = logging.getLogger(__name__)
 
+ORCHESTRATOR_EXCLUDED_MODEL_IDS: frozenset[str] = frozenset(
+    {
+        "nvidia/nemotron-3-super-120b-a12b",
+        "openai/gpt-oss-120b",
+    }
+)
+
 # Role → routing policy.
 # ``reasoning`` / ``priority`` are role-based; ``force_vision`` always treats
 # the request as needing a vision-capable model.
 ROLE_POLICY: dict[str, dict[str, Any]] = {
-    "orchestrator": {"priority": "balanced", "reasoning": False},
-    "auth_orchestrator": {"priority": "balanced", "reasoning": False},
+    "orchestrator": {
+        "priority": "balanced",
+        "reasoning": False,
+        "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+    },
+    "auth_orchestrator": {
+        "priority": "balanced",
+        "reasoning": False,
+        "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+    },
     "AuthenticationSpecialist": {"priority": "balanced", "reasoning": False},
     "BrowserSpecialist": {"priority": "balanced", "reasoning": False},
     "AnswerWriter": {"priority": "quality", "reasoning": False},
@@ -183,12 +198,17 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         selection = self._active_selection
         leased_new = selection is None
         if selection is None:
+            lease_kwargs: dict[str, Any] = {}
+            excluded_model_ids = self._policy.get("excluded_model_ids")
+            if excluded_model_ids:
+                lease_kwargs["excluded_model_ids"] = excluded_model_ids
             selection = await self._router.lease(
                 tools=tools,
                 structured=structured,
                 vision=vision,
                 reasoning=reasoning,
                 priority=priority,
+                **lease_kwargs,
             )
             self._active_selection = selection
         _attach_tracking_callback(selection)

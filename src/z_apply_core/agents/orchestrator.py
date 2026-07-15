@@ -27,7 +27,10 @@ from z_apply_core.agents.readiness_verifier import require_submission_readiness
 from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
-from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.router_middleware import (
+    ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+    NimRouterMiddleware,
+)
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
@@ -99,7 +102,11 @@ async def run_orchestrator(
         )
 
     try:
-        selection = await router.lease(tools=True, priority="balanced")
+        selection = await router.lease(
+            tools=True,
+            priority="balanced",
+            excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+        )
     except (NimRouterError, ImportError, ValueError) as exc:
         return OrchestratorRun(f"Model selection failed: {exc}", "", "failed")
 

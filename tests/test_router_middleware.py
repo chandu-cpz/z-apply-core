@@ -11,7 +11,10 @@ from nim_router import NimRouter
 from nim_router.schemas import ModelSelection
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
-from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.router_middleware import (
+    ORCHESTRATOR_EXCLUDED_MODEL_IDS,
+    NimRouterMiddleware,
+)
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
@@ -156,8 +159,36 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             vision=False,
             reasoning=False,
             priority="balanced",
+            excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )
         self.assertEqual(request.override.call_count, 2)
+
+    async def test_bounded_specialists_keep_full_model_pool(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        router.lease = AsyncMock(
+            return_value=cast(
+                Any,
+                SimpleNamespace(
+                    info=SimpleNamespace(id="openai/gpt-oss-120b"),
+                    llm=MagicMock(),
+                ),
+            )
+        )
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        request.override.return_value = sentinel.overridden_request
+
+        await NimRouterMiddleware(router, role="AnswerWriter").awrap_model_call(
+            request,
+            AsyncMock(return_value=sentinel.response),
+        )
+
+        router.lease.assert_awaited_once_with(
+            tools=True,
+            structured=False,
+            vision=False,
+            reasoning=False,
+            priority="quality",
+        )
 
     async def test_releases_failed_lease_before_retry(self) -> None:
         router = MagicMock(spec=NimRouter)
