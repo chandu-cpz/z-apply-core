@@ -242,6 +242,7 @@ async def run_orchestrator(
             browser_tools,
             fallback_model=selection.llm,
             candidate_memory=candidate_memory,
+            candidate_resume=_candidate_resume_context(),
             answer_writer_human_tools=[tool for tool in human_tools if tool.name == "ask_human"],
             answer_writer_middleware=[answer_writer_human_guard],
             authentication_tools=[
@@ -337,3 +338,8 @@ def _captcha_path(run_id: str) -> Path:
     return (
         CORE_ROOT / ".z-apply" / "runs" / run_id / "browser-artifacts" / "captcha.png"
     ).resolve()
+
+
+def _candidate_resume_context() -> str:
+    path = CORE_ROOT / CANDIDATE_CONTEXT_VIRTUAL_PATH.lstrip("/")
+    return path.read_text(encoding="utf-8")

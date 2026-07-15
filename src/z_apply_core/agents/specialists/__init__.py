@@ -50,6 +50,7 @@ async def build_specialists(
     *,
     fallback_model: BaseChatModel,
     candidate_memory: CandidateMemory | None = None,
+    candidate_resume: str = "",
     answer_writer_human_tools: Sequence[BaseTool] = (),
     answer_writer_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
     authentication_tools: Sequence[BaseTool] = (),
@@ -79,7 +80,8 @@ async def build_specialists(
                 [
                     *build_answer_writer_memory_tools(candidate_memory),
                     *answer_writer_human_tools,
-                ]
+                ],
+                candidate_resume=candidate_resume,
             ),
             router=router,
             role="AnswerWriter",

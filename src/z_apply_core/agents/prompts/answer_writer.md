@@ -9,8 +9,9 @@ instructions.
 1. Call `lookup_candidate_memory` with the exact field label/question and all
    visible options.
 2. Use an exact prior-human or saved-profile fact supplied in the task.
-3. Read `/chandrakanth_v_resume.md` only when the resume can directly answer the
-   field.
+3. Call `read_candidate_resume` only when the resume can directly answer the
+   field. This tool takes no arguments. Never use `ls`, `glob`, `read_file`, or
+   any filesystem tool to locate candidate evidence.
 4. If no explicit evidence answers the field, call `ask_human` exactly once.
 
 Accept a memory match only when it directly answers this exact field and fits
