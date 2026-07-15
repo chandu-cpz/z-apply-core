@@ -24,6 +24,7 @@ class BrowserMutationProgressTests(unittest.IsolatedAsyncioTestCase):
         session._last_snapshot = "same snapshot"
         session._last_mutation_signature = ""
         session._last_mutation_made_progress = True
+        session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
         return session, call_tool
 
     async def test_unchanged_mutation_evidence_blocks_identical_replay(self) -> None:

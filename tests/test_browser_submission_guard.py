@@ -57,6 +57,7 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         session._last_snapshot = "review state"
         session._last_observation = None
         session._browser_revision = 0
+        session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
         return session, backend.call_tool
 
     async def _approve(self, session: BrowserSession, target: str = "e10") -> None:
@@ -69,6 +70,15 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(BrowserToolExecutionError, "submission is locked"):
             await session.call_tool("browser_click", {"target": "e10"})
+
+        call_tool.assert_not_awaited()
+
+    async def test_file_upload_trigger_click_is_rejected_before_native_chooser(self) -> None:
+        session, call_tool = self._session(is_submit=False)
+        session._is_file_upload_trigger = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(BrowserToolExecutionError, "Native file chooser"):
+            await session.call_tool("browser_click", {"target": "e-upload"})
 
         call_tool.assert_not_awaited()
 

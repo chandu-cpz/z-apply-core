@@ -35,6 +35,38 @@ from z_apply_core.browser_tools import (
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
 CORE_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
+FILE_INPUT_RESOLUTION_SCRIPT = r"""element => {
+    const isFileInput = candidate =>
+        candidate instanceof HTMLInputElement && candidate.type === 'file';
+    if (isFileInput(element)) return element;
+
+    const uniqueFileInput = container => {
+        if (!container || !container.querySelectorAll) return null;
+        const inputs = [...container.querySelectorAll('input[type="file"]')];
+        return inputs.length === 1 ? inputs[0] : null;
+    };
+
+    const label = element.closest('label');
+    if (label && isFileInput(label.control)) return label.control;
+
+    const controlledIds = [element.getAttribute('for'), element.getAttribute('aria-controls')]
+        .filter(Boolean).flatMap(value => value.trim().split(/\s+/));
+    for (const id of controlledIds) {
+        const controlled = element.ownerDocument.getElementById(id);
+        if (isFileInput(controlled)) return controlled;
+    }
+
+    let container = element;
+    while (container) {
+        const input = uniqueFileInput(container);
+        if (input) return input;
+        container = container.parentElement;
+    }
+
+    const rootInput = uniqueFileInput(element.getRootNode());
+    if (rootInput) return rootInput;
+    return uniqueFileInput(element.ownerDocument);
+}"""
 
 
 class BrowserToolExecutionError(ToolException):
@@ -138,6 +170,12 @@ class BrowserSession:
         page_title = ""
         async with self._operation_scope():
             guarded_submit = False
+            if name == "browser_click" and await self._is_file_upload_trigger(normalized):
+                raise BrowserToolExecutionError(
+                    "Native file chooser click rejected. Attach the configured file "
+                    "atomically with browser_click_upload(target, paths); never click "
+                    "a file input or its upload trigger."
+                )
             if self._submission_guard_active:
                 if name == "browser_click":
                     guarded_submit = (
@@ -251,42 +289,7 @@ class BrowserSession:
             tab = await self._backend._ensure_tab()
             resolved = await tab.resolve_target(target=target)
             locator = resolved.locator
-            handle = await locator.evaluate_handle(
-                r"""element => {
-                const isFileInput = candidate =>
-                    candidate instanceof HTMLInputElement && candidate.type === 'file';
-                if (isFileInput(element)) return element;
-
-                const uniqueFileInput = container => {
-                    if (!container || !container.querySelectorAll) return null;
-                    const inputs = [...container.querySelectorAll('input[type="file"]')];
-                    return inputs.length === 1 ? inputs[0] : null;
-                };
-
-                const label = element.closest('label');
-                if (label && isFileInput(label.control)) return label.control;
-
-                const controlledIds = [element.getAttribute('for'),
-                    element.getAttribute('aria-controls')]
-                    .filter(Boolean)
-                    .flatMap(value => value.trim().split(/\s+/));
-                for (const id of controlledIds) {
-                    const controlled = element.ownerDocument.getElementById(id);
-                    if (isFileInput(controlled)) return controlled;
-                }
-
-                let container = element;
-                while (container) {
-                    const input = uniqueFileInput(container);
-                    if (input) return input;
-                    container = container.parentElement;
-                }
-
-                const rootInput = uniqueFileInput(element.getRootNode());
-                if (rootInput) return rootInput;
-                return uniqueFileInput(element.ownerDocument);
-            }"""
-            )
+            handle = await locator.evaluate_handle(FILE_INPUT_RESOLUTION_SCRIPT)
             file_input = handle.as_element()
             if file_input is None:
                 await handle.dispose()
@@ -310,6 +313,18 @@ class BrowserSession:
             changed=changed,
             result="Files attached directly to the resolved upload control.",
         ).render()
+
+    async def _is_file_upload_trigger(self, arguments: dict[str, Any]) -> bool:
+        target = arguments.get("target")
+        if not isinstance(target, str) or not target:
+            return False
+        tab = await self._backend._ensure_tab()
+        resolved = await tab.resolve_target(target=target)
+        handle = await resolved.locator.evaluate_handle(FILE_INPUT_RESOLUTION_SCRIPT)
+        try:
+            return handle.as_element() is not None
+        finally:
+            await handle.dispose()
 
     async def capture_human_challenge(self, target: str) -> Path:
         """Capture one visible challenge into the run-owned artifact directory."""

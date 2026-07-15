@@ -71,6 +71,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
             backend_pool=SimpleNamespace(tools=[]),
         )
         session = BrowserSession(server, run_id="test-run")
+        session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
         await session.call_tool("browser_click", {"target": "ref=e112"})
         await session.call_tool("browser_type", {"target": "[ref=e45]", "text": "Ada"})
