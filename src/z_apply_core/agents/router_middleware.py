@@ -77,10 +77,8 @@ def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
             normalized.append(message)
             continue
 
-        reasoning = message.additional_kwargs.get("reasoning_content")
         normalized.append(message)
-        if isinstance(reasoning, str) and reasoning.strip():
-            missing_final = True
+        missing_final = True
 
     if not changed:
         return response, missing_final

@@ -15,6 +15,29 @@ from z_apply_core.agents.router_middleware import NimRouterMiddleware
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rejects_empty_response_without_reasoning_or_tool_calls(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        model = MagicMock()
+        router.lease = AsyncMock(
+            return_value=cast(
+                Any,
+                SimpleNamespace(info=SimpleNamespace(id="empty/model"), llm=model),
+            )
+        )
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        request.override.return_value = sentinel.overridden_request
+        handler = AsyncMock(
+            return_value=ModelResponse(result=[AIMessage(content="", tool_calls=[])])
+        )
+
+        with self.assertRaises(ToolProtocolViolation):
+            await NimRouterMiddleware(
+                router, role="AuthenticationSpecialist"
+            ).awrap_model_call(request, handler)
+
+        router.record_failure.assert_called_once()
+        router.cooldown_model.assert_called_once_with("empty/model", 20.0)
+
     async def test_rejects_reasoning_without_a_final_answer(self) -> None:
         router = MagicMock(spec=NimRouter)
         model = MagicMock()
