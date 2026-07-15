@@ -28,10 +28,14 @@ class BrowserMutationProgressTests(unittest.IsolatedAsyncioTestCase):
     async def test_unchanged_mutation_evidence_blocks_identical_replay(self) -> None:
         session, call_tool = self._session()
 
-        self.assertEqual(
-            await session.call_tool_with_inline_snapshot("browser_click", {"target": "e6"}),
-            "same snapshot",
+        receipt = await session.call_tool_with_inline_snapshot(
+            "browser_click", {"target": "e6"}
         )
+        self.assertIn("BROWSER ACTION RECEIPT", receipt)
+        self.assertIn("before_revision: 1", receipt)
+        self.assertIn("after_revision: 1", receipt)
+        self.assertIn("changed: false", receipt)
+        self.assertIn("same snapshot", receipt)
         with self.assertRaisesRegex(BrowserToolExecutionError, "Duplicate mutation prevented"):
             await session.call_tool_with_inline_snapshot("browser_click", {"target": "e6"})
 
@@ -46,7 +50,10 @@ class BrowserMutationProgressTests(unittest.IsolatedAsyncioTestCase):
             {"target": "e208"},
         )
 
-        self.assertEqual(result, "changed snapshot")
+        self.assertIn("before_revision: 1", result)
+        self.assertIn("after_revision: 2", result)
+        self.assertIn("changed: true", result)
+        self.assertIn("changed snapshot", result)
         self.assertEqual(call_tool.await_count, 4)
 
 

@@ -11,6 +11,7 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
 FileUploader = Callable[[str, list[str]], Awaitable[str]]
+BrowserObserver = Callable[[], Awaitable[str]]
 AuthSubmitter = Callable[[str], Awaitable[str]]
 VerificationLinkOpener = Callable[[str], Awaitable[str]]
 _AGENT_TOOL_DESCRIPTIONS: dict[str, str] = {}
@@ -172,6 +173,22 @@ def make_click_upload_tool(uploader: FileUploader) -> BaseTool:
 
     browser_click_upload.handle_tool_error = True
     return browser_click_upload
+
+
+def make_observe_tool(observer: BrowserObserver) -> BaseTool:
+    """Build the Core-only revisioned browser observation operation."""
+
+    @tool
+    async def browser_observe() -> str:
+        """Inspect the current page and return revisioned accessibility evidence.
+
+        Prefer this for normal current-state inspection. Use browser_snapshot only
+        when the observation is insufficient for an ambiguous DOM or shadow-DOM task.
+        """
+        return await observer()
+
+    browser_observe.handle_tool_error = True
+    return browser_observe
 
 
 def make_auth_submit_tool(submitter: AuthSubmitter) -> BaseTool:

@@ -7,7 +7,11 @@ from langchain_core.runnables.config import RunnableConfig
 
 from z_apply_core.agents.context_inbox import ContextInbox
 from z_apply_core.browser_session import BrowserSession
-from z_apply_core.browser_tools import INITIAL_AGENT_BROWSER_TOOLS, make_click_upload_tool
+from z_apply_core.browser_tools import (
+    INITIAL_AGENT_BROWSER_TOOLS,
+    make_click_upload_tool,
+    make_observe_tool,
+)
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.live_view import LiveView
 from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -92,5 +96,6 @@ def _agent_browser_tools(browser: BrowserSession) -> list[object]:
     safe_names = tuple(name for name in INITIAL_AGENT_BROWSER_TOOLS if name != "browser_tabs")
     return [
         *browser.tools.langchain_tools(safe_names),
+        make_observe_tool(browser.observe),
         make_click_upload_tool(browser.upload_files),
     ]

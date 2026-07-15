@@ -11,6 +11,7 @@ from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
 
 from z_apply_core.browser_config import build_browser_config
+from z_apply_core.browser_observation import ActionReceipt, BrowserObservation
 from z_apply_core.browser_readiness import (
     FORM_READINESS_SCRIPT,
     REQUIRED_FILE_UPLOAD_PENDING_SCRIPT,
@@ -63,6 +64,8 @@ class BrowserSession:
         self._submission_guard_active = False
         self._approved_submissions = 0
         self._last_snapshot = ""
+        self._last_observation: BrowserObservation | None = None
+        self._browser_revision = 0
         self._last_mutation_signature = ""
         self._last_mutation_made_progress = True
         self._last_auth_submit_target = ""
@@ -113,6 +116,8 @@ class BrowserSession:
         normalized = normalize_browser_arguments(arguments)
         if name == "browser_snapshot" and "target" not in normalized:
             normalized["target"] = "html"
+        page_url = ""
+        page_title = ""
         async with self._operation_scope():
             guarded_submit = False
             if self._submission_guard_active:
@@ -132,13 +137,24 @@ class BrowserSession:
             )
             if name in BROWSER_CHANGING_TOOL_NAMES:
                 await self._discover_owned_popups()
+            if name == "browser_snapshot":
+                page_url, page_title = await self._page_identity()
         _raise_for_tool_error(name, result)
         if guarded_submit:
             self._approved_submissions -= 1
         text = _text_content(result)
         if name == "browser_snapshot":
             self._last_snapshot = text
+            self._record_observation(text, url=page_url, title=page_title)
         return text
+
+    async def observe(self) -> str:
+        """Return one revisioned browser observation for the active page."""
+        await self.call_tool("browser_snapshot")
+        observation = self._last_observation
+        if observation is None:
+            raise BrowserToolExecutionError("The browser did not produce current evidence.")
+        return observation.render()
 
     async def call_tool_content(
         self,
@@ -172,7 +188,7 @@ class BrowserSession:
                 "Duplicate mutation prevented: the identical previous action left the "
                 "browser snapshot unchanged. Choose a different action."
             )
-        before_snapshot = self._last_snapshot
+        before_observation = self._current_observation()
         mutation = await self.call_tool(name, arguments)
         try:
             evidence = await self.call_tool("browser_snapshot")
@@ -180,12 +196,22 @@ class BrowserSession:
             self._last_mutation_signature = signature
             self._last_mutation_made_progress = True
             return f"{mutation}\nPost-action inline snapshot unavailable: {exc}"
+        after = self._last_observation or self._record_observation(evidence)
+        changed = before_observation.signature != after.signature
         self._last_mutation_signature = signature
-        self._last_mutation_made_progress = not before_snapshot or evidence != before_snapshot
-        return evidence
+        self._last_mutation_made_progress = changed
+        return ActionReceipt(
+            tool=name,
+            arguments=normalized,
+            before_revision=before_observation.revision,
+            after=after,
+            changed=changed,
+            result=mutation,
+        ).render()
 
     async def upload_files(self, target: str, paths: list[str]) -> str:
         """Resolve an upload trigger to its file input without opening a chooser."""
+        before = self._current_observation()
         async with self._operation_scope():
             tab = await self._backend._ensure_tab()
             resolved = await tab.resolve_target(target=target)
@@ -239,7 +265,16 @@ class BrowserSession:
             finally:
                 await handle.dispose()
         evidence = await self.call_tool("browser_snapshot")
-        return "Files attached directly to the resolved upload control.\n" + evidence
+        after = self._last_observation or self._record_observation(evidence)
+        changed = before.signature != after.signature
+        return ActionReceipt(
+            tool="browser_click_upload",
+            arguments={"target": target, "paths": paths},
+            before_revision=before.revision,
+            after=after,
+            changed=changed,
+            result="Files attached directly to the resolved upload control.",
+        ).render()
 
     async def capture_human_challenge(self, target: str) -> Path:
         """Capture one visible challenge into the run-owned artifact directory."""
@@ -441,11 +476,70 @@ class BrowserSession:
         """Return the run-owned path used by browser capture tools."""
         return (self._capture_workspace / filename).resolve()
 
+    @property
+    def current_observation(self) -> BrowserObservation | None:
+        observation = getattr(self, "_last_observation", None)
+        return observation if isinstance(observation, BrowserObservation) else None
+
+    def _current_observation(self) -> BrowserObservation:
+        observation = getattr(self, "_last_observation", None)
+        if isinstance(observation, BrowserObservation):
+            return observation
+        snapshot = getattr(self, "_last_snapshot", "")
+        return self._record_observation(snapshot if isinstance(snapshot, str) else "")
+
+    def _record_observation(
+        self,
+        evidence: str,
+        *,
+        url: str = "",
+        title: str = "",
+    ) -> BrowserObservation:
+        previous = getattr(self, "_last_observation", None)
+        if not isinstance(previous, BrowserObservation):
+            previous = None
+        current_revision = getattr(self, "_browser_revision", 0)
+        if not isinstance(current_revision, int):
+            current_revision = 0
+        candidate = BrowserObservation.create(
+            revision=current_revision,
+            url=url or (previous.url if previous is not None else ""),
+            title=title or (previous.title if previous is not None else ""),
+            evidence=evidence,
+        )
+        if previous is not None and candidate.signature == previous.signature:
+            return previous
+        revision = current_revision + 1
+        observation = BrowserObservation.create(
+            revision=revision,
+            url=candidate.url,
+            title=candidate.title,
+            evidence=evidence,
+        )
+        self._browser_revision = revision
+        self._last_observation = observation
+        return observation
+
     def _call_meta(self, name: str) -> dict[str, object]:
         meta: dict[str, object] = {"raw": True}
         if name in INLINE_CAPTURE_TOOLS:
             meta["cwd"] = str(self._capture_workspace)
         return meta
+
+    async def _page_identity(self) -> tuple[str, str]:
+        """Read non-critical page identity without making snapshots fail."""
+        ensure_tab = getattr(self._backend, "_ensure_tab", None)
+        if not callable(ensure_tab):
+            return "", ""
+        try:
+            tab = await ensure_tab()
+            page = getattr(tab, "page", None)
+            if page is None:
+                return "", ""
+            title = getattr(page, "title", None)
+            return str(getattr(page, "url", "")), str(await title()) if callable(title) else ""
+        except Exception:
+            return "", ""
 
     @asynccontextmanager
     async def _operation_scope(self) -> AsyncIterator[None]:
