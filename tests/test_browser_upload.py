@@ -48,6 +48,19 @@ class BrowserUploadTests(unittest.TestCase):
         disposer.assert_awaited_once()
         session.call_tool.assert_not_awaited()
 
+    def test_upload_consumes_intercepted_chooser_without_resolving_trigger(self) -> None:
+        chooser = SimpleNamespace(set_files=AsyncMock())
+        session, resolver, _disposer = self._session(file_input=None)
+        session._pending_atomic_upload_target = "e610"
+        session._pending_file_chooser = chooser
+
+        result = asyncio.run(session.upload_files("e610", ["/resume.pdf"]))
+
+        chooser.set_files.assert_awaited_once_with(["/resume.pdf"])
+        resolver.assert_not_awaited()
+        self.assertEqual(session.pending_atomic_upload_target, "")
+        self.assertIn("Files attached directly", result)
+
 
 class FileChooserGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_indirect_upload_click_is_intercepted_without_native_picker(self) -> None:
@@ -90,6 +103,7 @@ class FileChooserGuardTests(unittest.IsolatedAsyncioTestCase):
 
         page.on.assert_called_once_with("filechooser", ANY)
         page.remove_listener.assert_called_once_with("filechooser", ANY)
+        self.assertEqual(session.pending_atomic_upload_target, "e610")
 
     async def test_ordinary_click_executes_with_temporary_filechooser_listener(self) -> None:
         page = MagicMock()

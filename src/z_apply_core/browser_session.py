@@ -134,6 +134,8 @@ class BrowserSession:
         self._last_mutation_made_progress = True
         self._last_auth_submit_target = ""
         self._last_auth_submit_snapshot = ""
+        self._pending_atomic_upload_target = ""
+        self._pending_file_chooser: Any | None = None
         self._capture_workspace = ARTIFACT_ROOT / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(tools if tools is not None else server.backend_pool.tools),
@@ -186,6 +188,7 @@ class BrowserSession:
         async with self._operation_scope():
             guarded_submit = False
             if name == "browser_click" and await self._is_file_upload_trigger(normalized):
+                self._pending_atomic_upload_target = str(normalized.get("target", ""))
                 raise BrowserToolExecutionError(
                     "Native file chooser click rejected. Attach the configured file "
                     "atomically with browser_click_upload(target, paths); never click "
@@ -228,11 +231,11 @@ class BrowserSession:
 
         tab = await self._backend._ensure_tab()
         page = tab.page
-        chooser_opened = False
+        pending_chooser: Any | None = None
 
-        def record_file_chooser(_chooser: Any) -> None:
-            nonlocal chooser_opened
-            chooser_opened = True
+        def record_file_chooser(chooser: Any) -> None:
+            nonlocal pending_chooser
+            pending_chooser = chooser
 
         page.on("filechooser", record_file_chooser)
         try:
@@ -245,7 +248,9 @@ class BrowserSession:
         finally:
             page.remove_listener("filechooser", record_file_chooser)
 
-        if chooser_opened:
+        if pending_chooser is not None:
+            self._pending_atomic_upload_target = str(arguments.get("target", ""))
+            self._pending_file_chooser = pending_chooser
             raise BrowserToolExecutionError(
                 "Native file chooser activation intercepted. Attach the configured "
                 "file atomically with browser_click_upload(target, paths); never use "
@@ -332,26 +337,33 @@ class BrowserSession:
     async def upload_files(self, target: str, paths: list[str]) -> str:
         """Resolve an upload trigger to its file input without opening a chooser."""
         before = self._current_observation()
+        pending_chooser = getattr(self, "_pending_file_chooser", None)
         async with self._operation_scope():
-            tab = await self._backend._ensure_tab()
-            resolved = await tab.resolve_target(target=target)
-            locator = resolved.locator
-            handle = await locator.evaluate_handle(FILE_INPUT_RESOLUTION_SCRIPT)
-            file_input = handle.as_element()
-            if file_input is None:
-                await handle.dispose()
-                raise BrowserToolExecutionError(
-                    f"Upload target {target!r} could not be associated with exactly one "
-                    "file input. Capture fresh evidence and call browser_click_upload on "
-                    "the upload control; never click it to open a native chooser."
-                )
-            try:
-                await file_input.set_input_files(paths)
-            finally:
-                await handle.dispose()
+            if pending_chooser is not None and target == self._pending_atomic_upload_target:
+                await pending_chooser.set_files(paths)
+            else:
+                tab = await self._backend._ensure_tab()
+                resolved = await tab.resolve_target(target=target)
+                locator = resolved.locator
+                handle = await locator.evaluate_handle(FILE_INPUT_RESOLUTION_SCRIPT)
+                file_input = handle.as_element()
+                if file_input is None:
+                    await handle.dispose()
+                    raise BrowserToolExecutionError(
+                        f"Upload target {target!r} could not be associated with exactly "
+                        "one file input. Capture fresh evidence and call "
+                        "browser_click_upload on the upload control; never click it to "
+                        "open a native chooser."
+                    )
+                try:
+                    await file_input.set_input_files(paths)
+                finally:
+                    await handle.dispose()
         evidence = await self.call_tool("browser_snapshot")
         after = self._last_observation or self._record_observation(evidence)
         changed = before.signature != after.signature
+        self._pending_atomic_upload_target = ""
+        self._pending_file_chooser = None
         return ActionReceipt(
             tool="browser_click_upload",
             arguments={"target": target, "paths": paths},
@@ -360,6 +372,11 @@ class BrowserSession:
             changed=changed,
             result="Files attached directly to the resolved upload control.",
         ).render()
+
+    @property
+    def pending_atomic_upload_target(self) -> str:
+        """Target whose activation proved that an atomic upload is required."""
+        return self._pending_atomic_upload_target
 
     async def _is_file_upload_trigger(self, arguments: dict[str, Any]) -> bool:
         target = arguments.get("target")

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from z_apply_core.browser_session import (
     BrowserSession,
@@ -38,7 +38,8 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
             return SimpleNamespace(locator=locator)
 
         tab = SimpleNamespace(
-            resolve_target=AsyncMock(side_effect=resolve_target)
+            page=MagicMock(),
+            resolve_target=AsyncMock(side_effect=resolve_target),
         )
 
         async def call_backend(name: str, *_args: object, **_kwargs: object) -> str:

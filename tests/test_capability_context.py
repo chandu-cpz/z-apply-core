@@ -107,6 +107,15 @@ class CapabilityContextTests(unittest.TestCase):
             ],
         )
 
+    def test_intercepted_file_chooser_exposes_only_atomic_upload(self) -> None:
+        tools = CapabilityContextMiddleware._filter_tools(
+            self.tools,
+            BrowserCapabilities(editable_controls_visible=True),
+            atomic_upload_pending=True,
+        )
+
+        self.assertEqual([tool.name for tool in tools], ["browser_click_upload"])
+
     def test_ordinary_form_excludes_deepagents_filesystem_tools(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
             self.tools,

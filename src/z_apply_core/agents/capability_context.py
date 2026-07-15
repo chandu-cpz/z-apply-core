@@ -63,13 +63,27 @@ class CapabilityContextMiddleware(
         except Exception:
             capabilities = None
 
-        tools = self._filter_tools(request.tools, capabilities)
+        pending_upload_target = browser.pending_atomic_upload_target
+        tools = self._filter_tools(
+            request.tools,
+            capabilities,
+            atomic_upload_pending=bool(pending_upload_target),
+        )
         observation = browser.current_observation
         revision = observation.revision if observation is not None else 0
         available = ", ".join(_tool_name(tool) for tool in tools)
         current_evidence = (
             "\nCURRENT BROWSER EVIDENCE\n" + observation.compact_render()
             if observation is not None
+            else ""
+        )
+        upload_context = (
+            "pending_atomic_upload_target="
+            f"{pending_upload_target}\n"
+            "The last click activated a native file chooser. Your next action must "
+            "call browser_click_upload with this exact target and the configured "
+            "resume path. Do not observe or click again.\n"
+            if pending_upload_target
             else ""
         )
         context = HumanMessage(
@@ -80,6 +94,7 @@ class CapabilityContextMiddleware(
                 f"browser_revision={revision}\n"
                 f"{capabilities.render() if capabilities is not None else 'capability_inspection=unavailable'}\n"
                 f"available_tools={available or '(none)'}\n"
+                f"{upload_context}"
                 "Use current browser evidence and choose one legal native action. "
                 "These are compositional structural facts, not a workflow phase."
                 f"{current_evidence}"
@@ -96,6 +111,8 @@ class CapabilityContextMiddleware(
     def _filter_tools(
         tools: list[BaseTool | dict[str, Any]],
         capabilities: BrowserCapabilities | None,
+        *,
+        atomic_upload_pending: bool = False,
     ) -> list[BaseTool | dict[str, Any]]:
         tools = [
             tool
@@ -103,6 +120,8 @@ class CapabilityContextMiddleware(
             if _tool_name(tool).startswith("browser_")
             or _tool_name(tool) in _ORCHESTRATOR_CONTROL_TOOLS
         ]
+        if atomic_upload_pending:
+            return [tool for tool in tools if _tool_name(tool) == "browser_click_upload"]
         if capabilities is None:
             safe = _READ_BROWSER_TOOLS | frozenset(
                 {"browser_wait_for", "application_blocked"}
