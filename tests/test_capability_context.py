@@ -79,13 +79,13 @@ class CapabilityContextTests(unittest.TestCase):
             ls,
         ]
 
-    def test_auth_gate_keeps_read_and_delegation_but_hides_mutations(self) -> None:
+    def test_auth_gate_exposes_only_authentication_delegation(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
             self.tools,
             BrowserCapabilities(auth_gate_visible=True),
         )
 
-        self.assertEqual([tool.name for tool in tools], ["browser_observe", "task"])
+        self.assertEqual([tool.name for tool in tools], ["task"])
 
     def test_required_upload_hides_delegation_and_submission(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(

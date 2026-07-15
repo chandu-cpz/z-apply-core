@@ -130,7 +130,11 @@ class CapabilityContextMiddleware(
             )
             return [tool for tool in tools if _tool_name(tool) in safe]
         if capabilities.auth_gate_visible:
-            allowed = _READ_BROWSER_TOOLS | _ALWAYS_AVAILABLE
+            # The specialist owns fresh inspection and every stateful auth action.
+            # Once the live DOM proves an auth gate, another parent observation
+            # cannot advance the application and only gives small models an escape
+            # from the required semantic handoff.
+            allowed = frozenset({"task"})
             return [tool for tool in tools if _tool_name(tool) in allowed]
         if capabilities.empty_file_upload_present:
             allowed = _READ_BROWSER_TOOLS | frozenset(
