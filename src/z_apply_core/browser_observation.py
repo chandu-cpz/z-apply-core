@@ -156,7 +156,7 @@ class BrowserObservation:
             f"{self.evidence}"
         )
 
-    def compact_render(self, *, max_chars: int = 12_000) -> str:
+    def compact_render(self, *, max_chars: int = 8_000) -> str:
         """Render bounded, interaction-focused evidence for a model turn.
 
         The complete observation remains available from browser tools and artifacts.
@@ -235,7 +235,7 @@ class ActionReceipt:
             f"after_revision: {self.after.revision}\n"
             f"changed: {'true' if self.changed else 'false'}\n"
             f"executor_result: {self.result or '(no separate result)'}\n"
-            f"{self.after.render()}"
+            f"{self.after.compact_render()}"
         )
 
 

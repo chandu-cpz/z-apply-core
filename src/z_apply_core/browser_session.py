@@ -219,7 +219,7 @@ class BrowserSession:
             raise BrowserToolExecutionError(
                 "The bounded wait completed but current browser evidence is unavailable."
             )
-        return f"{result}\n{observation.render()}"
+        return f"{result}\n{observation.compact_render()}"
 
     async def observe(self) -> str:
         """Return one revisioned browser observation for the active page."""

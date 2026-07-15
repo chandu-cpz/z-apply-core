@@ -242,11 +242,11 @@ async def run_orchestrator(
             SummarizationMiddleware(
                 model=selection.llm,
                 backend=deepagent_backend,
-                trigger=[("tokens", 45_000), ("messages", 60)],
-                keep=("messages", 16),
+                trigger=[("tokens", 24_000), ("messages", 36)],
+                keep=("messages", 12),
                 truncate_args_settings={
-                    "trigger": ("messages", 20),
-                    "keep": ("messages", 12),
+                    "trigger": ("messages", 16),
+                    "keep": ("messages", 8),
                 },
             ),
             model_retry_middleware(),
