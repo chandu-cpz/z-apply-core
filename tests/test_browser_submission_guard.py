@@ -109,6 +109,14 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("review state", evidence)
         self.assertIsNone(session.submission_capability)
 
+    async def test_component_auth_scope_can_submit_without_native_form(self) -> None:
+        session, call_tool = self._session(is_submit=True)
+
+        evidence = await session.submit_auth_form("e10")
+
+        self.assertIn("review state", evidence)
+        self.assertEqual(call_tool.await_args_list[0].args[0], "browser_click")
+
     async def test_auth_submit_classifies_pointer_interception_as_recoverable(self) -> None:
         session, call_tool = self._session(is_submit=True)
         tab = session._backend._ensure_tab.return_value

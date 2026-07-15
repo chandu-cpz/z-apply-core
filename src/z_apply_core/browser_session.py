@@ -366,17 +366,39 @@ class BrowserSession:
                     const type = control.getAttribute('type');
                     if (type !== 'submit' && !(type === null && control.form)) return false;
                 }
-                const form = control.form || control.closest('form');
-                if (!(form instanceof HTMLFormElement)) return false;
-                const authInputs = form.querySelectorAll('input');
-                return Array.from(authInputs).some(input => {
+                const isAuthInput = input => {
                     const type = (input.getAttribute('type') || 'text').toLowerCase();
                     const autocomplete = (input.getAttribute('autocomplete') || '')
                         .toLowerCase();
                     return type === 'email' || type === 'password' ||
                         ['username', 'email', 'current-password', 'new-password',
                          'one-time-code'].includes(autocomplete);
-                });
+                };
+                const isStrongAuthInput = input => {
+                    const type = (input.getAttribute('type') || 'text').toLowerCase();
+                    const autocomplete = (input.getAttribute('autocomplete') || '')
+                        .toLowerCase();
+                    return type === 'password' ||
+                        ['current-password', 'new-password', 'one-time-code']
+                            .includes(autocomplete);
+                };
+
+                const form = control.form || control.closest('form');
+                if (form instanceof HTMLFormElement) {
+                    return Array.from(form.querySelectorAll('input')).some(isAuthInput);
+                }
+
+                // Component frameworks sometimes implement authentication forms
+                // without a native HTMLFormElement. Accept only the nearest bounded
+                // ancestor that owns a strong password/OTP control; an ordinary job
+                // application section containing only email/username cannot qualify.
+                let scope = control.parentElement;
+                while (scope && scope !== control.ownerDocument.body) {
+                    const inputs = Array.from(scope.querySelectorAll('input'));
+                    if (inputs.some(isStrongAuthInput)) return true;
+                    scope = scope.parentElement;
+                }
+                return false;
             }"""
                 )
                 if not is_auth_submit:
