@@ -344,10 +344,10 @@ class BrowserSession:
                 locator = (await tab.resolve_target(target=target)).locator
                 control_handle = await locator.evaluate_handle(
                     """element => {
-                    const selector = 'button, input[type="submit"], input[type="image"]';
+                    const selector =
+                        'button, input[type="submit"], input[type="image"], [role="button"]';
                     const direct = element.closest(selector);
-                    const clickLayer = element.closest('[role="button"]');
-                    const anchor = direct || clickLayer;
+                    const anchor = direct;
                     if (!anchor) return null;
                     const box = anchor.getBoundingClientRect();
                     const x = box.left + box.width / 2;
@@ -368,7 +368,8 @@ class BrowserSession:
                 try:
                     is_auth_submit = await submit_control.evaluate(
                 """element => {
-                const selector = 'button, input[type="submit"], input[type="image"]';
+                const selector =
+                    'button, input[type="submit"], input[type="image"], [role="button"]';
                 let control = element.closest(selector);
                 if (!control) {
                     const clickLayer = element.closest('[role="button"]');
@@ -382,8 +383,10 @@ class BrowserSession:
                                 candidate.matches(selector)) || null;
                     }
                 }
+                const isComponentButton =
+                    control instanceof HTMLElement && control.getAttribute('role') === 'button';
                 if (!(control instanceof HTMLButtonElement ||
-                      control instanceof HTMLInputElement)) return false;
+                      control instanceof HTMLInputElement || isComponentButton)) return false;
                 if (control instanceof HTMLInputElement &&
                     control.type !== 'submit' && control.type !== 'image') return false;
                 if (control instanceof HTMLButtonElement) {
