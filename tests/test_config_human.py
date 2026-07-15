@@ -173,6 +173,25 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(approval, {"submit_approval": "approved"})
 
+    async def test_duplicate_field_question_reuses_completed_human_answer(self) -> None:
+        channel = SimpleNamespace(ask=AsyncMock(return_value="No"))
+        ask_human, _ = make_human_tools(channel)
+        request = {
+            "question": "Have you worked here before?",
+            "reason": "missing_candidate_fact",
+            "field_label": "Previous employment",
+            "field_evidence": "Yes and No are unselected",
+            "options": ["Yes", "No"],
+        }
+
+        first = await ask_human.ainvoke(request)
+        repeated = await ask_human.ainvoke(request)
+
+        channel.ask.assert_awaited_once()
+        self.assertEqual(first["human_answer"], "No")
+        self.assertEqual(repeated["human_answer"], "No")
+        self.assertEqual(repeated["human_request_reused"], "true")
+
     async def test_human_challenge_uses_runtime_owned_image_path(self) -> None:
         capture = AsyncMock(return_value=Path("/runtime/captcha.png"))
         ask_human, _ = make_human_tools(

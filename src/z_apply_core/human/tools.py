@@ -61,6 +61,8 @@ def make_human_tools(
     | None = None,
     capture_human_challenge: Callable[[str], Awaitable[Path]] | None = None,
 ) -> list[BaseTool]:
+    answered_fields: dict[str, str] = {}
+
     @tool
     async def ask_human(
         question: str,
@@ -81,6 +83,15 @@ def make_human_tools(
         field_evidence: current browser evidence showing the field is unresolved.
         challenge_target: current browser ref for a visible human challenge.
         """
+        field_key = field_label.strip().casefold()
+        if field_key and field_key in answered_fields:
+            logger.info("Reusing the answered human request for field %r", field_label)
+            return {
+                "human_answer": answered_fields[field_key],
+                "candidate_memory_stored": "true",
+                "human_request_reused": "true",
+            }
+
         resolved_image_path = ""
         if reason == "human_challenge":
             if capture_human_challenge is None:
@@ -97,6 +108,8 @@ def make_human_tools(
         )
         if on_answer is not None:
             on_answer(field_label)
+        if field_key:
+            answered_fields[field_key] = answer
         stored = False
         if candidate_memory is not None and reason == "missing_candidate_fact":
             stored = await candidate_memory.remember_human_answer(
