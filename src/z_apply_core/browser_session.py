@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from collections.abc import AsyncIterator, Sequence
@@ -200,11 +201,7 @@ class BrowserSession:
                     guarded_submit = True
                 if guarded_submit:
                     await self._require_submission_capability_locked(normalized)
-            result = await self._backend.call_tool(
-                name,
-                normalized,
-                meta=self._call_meta(name),
-            )
+            result = await self._call_backend_tool(name, normalized)
             if name in BROWSER_CHANGING_TOOL_NAMES:
                 await self._discover_owned_popups()
             if name == "browser_snapshot":
@@ -219,6 +216,42 @@ class BrowserSession:
             self._last_snapshot = text
             self._record_observation(text, url=page_url, title=page_title)
         return text
+
+    async def _call_backend_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        """Execute one backend tool while suppressing native file chooser UI."""
+        if name != "browser_click":
+            return await self._backend.call_tool(
+                name,
+                arguments,
+                meta=self._call_meta(name),
+            )
+
+        tab = await self._backend._ensure_tab()
+        page = tab.page
+        chooser_opened = False
+
+        def record_file_chooser(_chooser: Any) -> None:
+            nonlocal chooser_opened
+            chooser_opened = True
+
+        page.on("filechooser", record_file_chooser)
+        try:
+            result = await self._backend.call_tool(
+                name,
+                arguments,
+                meta=self._call_meta(name),
+            )
+            await asyncio.sleep(0)
+        finally:
+            page.remove_listener("filechooser", record_file_chooser)
+
+        if chooser_opened:
+            raise BrowserToolExecutionError(
+                "Native file chooser activation intercepted. Attach the configured "
+                "file atomically with browser_click_upload(target, paths); never use "
+                "browser_click for an upload trigger."
+            )
+        return result
 
     async def call_bounded_wait(
         self,
