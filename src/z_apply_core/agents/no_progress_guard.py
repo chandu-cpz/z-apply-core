@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -8,10 +9,13 @@ from langchain.agents.middleware.types import (
     AgentMiddleware,
     AgentState,
     ContextT,
+    ModelRequest,
+    ModelResponse,
     ResponseT,
     ToolCallRequest,
 )
 from langchain_core.messages import ToolMessage
+from langchain_core.messages import AIMessage
 from langgraph.types import Command
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
@@ -19,6 +23,8 @@ from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
 
 if TYPE_CHECKING:
     from z_apply_core.browser_session import BrowserSession
+
+logger = logging.getLogger(__name__)
 
 _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {
     "application_blocked",
@@ -43,7 +49,8 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         max_identical_denials: int = 2,
         max_non_progress: int = 3,
         max_state_action_failures: int = 3,
-        max_stagnant_tool_calls: int = 6,
+        max_stagnant_tool_calls: int | None = None,
+        max_stagnant_model_responses: int | None = None,
         browser: BrowserSession | None = None,
         on_no_progress: Callable[[ToolProtocolViolation], None] | None = None,
     ) -> None:
@@ -52,6 +59,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._max_non_progress = max_non_progress
         self._max_state_action_failures = max_state_action_failures
         self._max_stagnant_tool_calls = max_stagnant_tool_calls
+        self._max_stagnant_model_responses = max_stagnant_model_responses
         self._browser = browser
         self._last_denial = ""
         self._same_denials = 0
@@ -62,6 +70,52 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._state_action_failures: dict[str, int] = {}
         self._blocked_state_actions: set[str] = set()
         self._stagnant_tool_calls = 0
+        self._stagnant_model_responses = 0
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
+    ) -> ModelResponse[ResponseT]:
+        """End a root turn that repeatedly chooses only bookkeeping tools."""
+        result = await handler(request)
+        limit = self._max_stagnant_model_responses
+        if limit is None:
+            return result
+
+        tool_names = {
+            str(call.get("name", ""))
+            for message in result.result
+            if isinstance(message, AIMessage)
+            for call in message.tool_calls
+        }
+        if tool_names & _PROGRESS_TOOL_NAMES:
+            self._stagnant_model_responses = 0
+            return result
+        if not tool_names:
+            return result
+
+        self._stagnant_model_responses += 1
+        logger.warning(
+            "Model selected only non-progress tools against unchanged state "
+            "(%s/%s): %s",
+            self._stagnant_model_responses,
+            limit,
+            ", ".join(sorted(tool_names)),
+        )
+        if self._stagnant_model_responses < limit:
+            return result
+
+        failure = ToolProtocolViolation(
+            "no_progress: model repeatedly selected only bookkeeping or read tools"
+        )
+        if self._on_no_progress is not None:
+            self._on_no_progress(failure)
+        self._stagnant_model_responses = 0
+        raise NoProgressCircuitOpen(
+            "Model repeatedly chose tools that cannot advance the application; "
+            "ending this turn for persistent-goal recovery."
+        )
 
     async def awrap_tool_call(
         self,
@@ -148,7 +202,10 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
             self._last_denial = ""
             self._same_denials = 0
             self._non_progress = 0
-        if self._stagnant_tool_calls >= self._max_stagnant_tool_calls:
+        if (
+            self._max_stagnant_tool_calls is not None
+            and self._stagnant_tool_calls >= self._max_stagnant_tool_calls
+        ):
             failure = ToolProtocolViolation(
                 "no_progress: tool calls repeatedly completed without changing the "
                 "browser revision"
@@ -171,6 +228,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._state_action_failures.clear()
         self._blocked_state_actions.clear()
         self._stagnant_tool_calls = 0
+        self._stagnant_model_responses = 0
 
     def _state_action_signature(self, request: ToolCallRequest) -> str:
         name = str(request.tool_call.get("name", ""))

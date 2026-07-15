@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import ToolMessage
+from langchain.agents.middleware.types import ModelResponse
+from langchain_core.messages import AIMessage
 
 from z_apply_core.agents.no_progress_guard import (
     NoProgressCircuitOpen,
@@ -94,6 +96,78 @@ async def test_browser_revision_change_resets_stagnant_tool_counter() -> None:
     result = await middleware.awrap_tool_call(another_read, success)  # type: ignore[arg-type]
 
     assert result.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_repeated_bookkeeping_model_choices_end_root_turn() -> None:
+    failures: list[Exception] = []
+    middleware = NoProgressGuardMiddleware(
+        max_stagnant_model_responses=2,
+        on_no_progress=failures.append,
+    )
+    request = SimpleNamespace()
+
+    async def bookkeeping(_request: object) -> ModelResponse:
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": "write_todos",
+                            "args": {"todos": []},
+                            "id": "call-1",
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(request, bookkeeping)  # type: ignore[arg-type]
+    with pytest.raises(NoProgressCircuitOpen):
+        await middleware.awrap_model_call(request, bookkeeping)  # type: ignore[arg-type]
+
+    assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_progress_model_choice_resets_bookkeeping_counter() -> None:
+    middleware = NoProgressGuardMiddleware(max_stagnant_model_responses=2)
+    request = SimpleNamespace()
+
+    def response(tool_name: str) -> ModelResponse:
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "name": tool_name,
+                            "args": {},
+                            "id": tool_name,
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(  # type: ignore[arg-type]
+        request, lambda _request: _async_result(response("write_todos"))
+    )
+    await middleware.awrap_model_call(  # type: ignore[arg-type]
+        request, lambda _request: _async_result(response("browser_click"))
+    )
+    result = await middleware.awrap_model_call(  # type: ignore[arg-type]
+        request, lambda _request: _async_result(response("write_todos"))
+    )
+
+    assert result.result[0].tool_calls[0]["name"] == "write_todos"  # type: ignore[union-attr]
+
+
+async def _async_result(value: ModelResponse) -> ModelResponse:
+    return value
 
 
 @pytest.mark.asyncio
