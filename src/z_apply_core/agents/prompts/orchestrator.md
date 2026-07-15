@@ -146,9 +146,9 @@ read the newest tool results and continue at the first applicable state below:
     evidence confirms receipt. If approval is rejected, apply the correction
     returned by `request_submit_approval`, inspect fresh browser evidence, and
     request approval again only after the evidence changes. Rejection revokes
-    submit permission but does not terminate the run. Call `application_blocked`
-    only when the human explicitly says to stop or a concrete external dependency
-    prevents further safe work.
+    submit permission but does not terminate the run. Candidate facts, CAPTCHA,
+    authentication, stale refs, timeouts, model failures, and verifier disagreement
+    are recoverable or human-wait states, never terminal blockers.
 
 Empty optional fields are not work. Do not resolve or fill an unrequired middle
 name, date, preference, demographic field, additional document, or similar
@@ -197,6 +197,7 @@ result, then decide.
 ## Completion
 
 The active goal never ends in prose. While work remains, emit the next native
-tool call. Finish only through `application_submitted` or
-`application_blocked`. A click, URL, attempted mutation, or specialist claim is
-not proof; visible post-action browser evidence is proof.
+tool call. Finish only through `application_submitted`. A click, URL, attempted
+mutation, or specialist claim is not proof; visible post-action browser evidence
+is proof. Infrastructure may fail the run outside the model, and the user may
+cancel it outside the model; do not manufacture either terminal condition.

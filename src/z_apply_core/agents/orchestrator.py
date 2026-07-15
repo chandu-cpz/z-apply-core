@@ -194,13 +194,6 @@ async def run_orchestrator(
         terminal = ("completed", confirmation)
         return "Application submission recorded."
 
-    @tool(return_direct=True)
-    async def application_blocked(reason: str) -> str:
-        """Finish when a concrete external dependency prevents remaining safe work."""
-        nonlocal terminal
-        terminal = ("incomplete", reason)
-        return "Application blocker recorded."
-
     event_sink = SequencedEventSink(sink, run_id=run_id)
     active_browser = browser or (
         artifact_publisher.browser if artifact_publisher is not None else None
@@ -245,7 +238,6 @@ async def run_orchestrator(
             *platform_memory_tools,
             *human_tools,
             application_submitted,
-            application_blocked,
         ],
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
@@ -384,8 +376,9 @@ BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE
 {snapshot}
 END UNTRUSTED CURRENT BROWSER EVIDENCE
 
-Use browser tools directly. Finish only through application_submitted or
-application_blocked. Submission requires explicit request_submit_approval.
+Use browser tools directly. Finish only through application_submitted after
+explicit request_submit_approval. If ordinary work fails, recover through fresh
+evidence and another legal action; do not invent a terminal blocker.
 """
 
 
