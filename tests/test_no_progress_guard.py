@@ -5,11 +5,14 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import ToolMessage
 
-from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
+from z_apply_core.agents.no_progress_guard import (
+    NoProgressCircuitOpen,
+    NoProgressGuardMiddleware,
+)
 
 
 @pytest.mark.asyncio
-async def test_repeated_denials_rotate_model_without_escaping_agent() -> None:
+async def test_repeated_denials_end_turn_for_persistent_recovery() -> None:
     failures: list[Exception] = []
     middleware = NoProgressGuardMiddleware(on_no_progress=failures.append)
     request = SimpleNamespace(tool_call={"name": "ls", "args": {"path": "/"}, "id": "call-1"})
@@ -23,11 +26,74 @@ async def test_repeated_denials_rotate_model_without_escaping_agent() -> None:
         )
 
     first = await middleware.awrap_tool_call(request, denied)  # type: ignore[arg-type]
-    second = await middleware.awrap_tool_call(request, denied)  # type: ignore[arg-type]
+    with pytest.raises(NoProgressCircuitOpen):
+        await middleware.awrap_tool_call(request, denied)  # type: ignore[arg-type]
 
     assert first.content == "Error: permission denied for read on /"
-    assert "active model was rotated" in str(second.content)
     assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_tool_churn_ends_turn_when_browser_does_not_advance() -> None:
+    failures: list[Exception] = []
+    browser = SimpleNamespace(current_observation=SimpleNamespace(signature="page-a"))
+    middleware = NoProgressGuardMiddleware(
+        browser=browser,
+        max_stagnant_tool_calls=3,
+        on_no_progress=failures.append,
+    )
+
+    async def success(request: object) -> ToolMessage:
+        call = request.tool_call  # type: ignore[attr-defined]
+        return ToolMessage(
+            content="updated internal plan",
+            name=str(call["name"]),
+            tool_call_id=str(call["id"]),
+        )
+
+    for index in range(2):
+        request = SimpleNamespace(
+            tool_call={"name": "write_todos", "args": {"step": index}, "id": str(index)}
+        )
+        await middleware.awrap_tool_call(request, success)  # type: ignore[arg-type]
+
+    request = SimpleNamespace(
+        tool_call={"name": "write_todos", "args": {"step": 3}, "id": "3"}
+    )
+    with pytest.raises(NoProgressCircuitOpen):
+        await middleware.awrap_tool_call(request, success)  # type: ignore[arg-type]
+
+    assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_revision_change_resets_stagnant_tool_counter() -> None:
+    browser = SimpleNamespace(current_observation=SimpleNamespace(signature="page-a"))
+    middleware = NoProgressGuardMiddleware(browser=browser, max_stagnant_tool_calls=2)
+
+    async def success(request: object) -> ToolMessage:
+        call = request.tool_call  # type: ignore[attr-defined]
+        if call["name"] == "browser_click":
+            browser.current_observation = SimpleNamespace(signature="page-b")
+        return ToolMessage(
+            content="success",
+            name=str(call["name"]),
+            tool_call_id=str(call["id"]),
+        )
+
+    read = SimpleNamespace(tool_call={"name": "browser_find", "args": {}, "id": "1"})
+    click = SimpleNamespace(
+        tool_call={"name": "browser_click", "args": {"target": "e1"}, "id": "2"}
+    )
+    another_read = SimpleNamespace(
+        tool_call={"name": "browser_snapshot", "args": {}, "id": "3"}
+    )
+
+    await middleware.awrap_tool_call(read, success)  # type: ignore[arg-type]
+    await middleware.awrap_tool_call(click, success)  # type: ignore[arg-type]
+    result = await middleware.awrap_tool_call(another_read, success)  # type: ignore[arg-type]
+
+    assert result.status == "success"
 
 
 @pytest.mark.asyncio

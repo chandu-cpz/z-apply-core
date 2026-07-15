@@ -43,6 +43,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         max_identical_denials: int = 2,
         max_non_progress: int = 3,
         max_state_action_failures: int = 3,
+        max_stagnant_tool_calls: int = 6,
         browser: BrowserSession | None = None,
         on_no_progress: Callable[[ToolProtocolViolation], None] | None = None,
     ) -> None:
@@ -50,6 +51,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._max_identical_denials = max_identical_denials
         self._max_non_progress = max_non_progress
         self._max_state_action_failures = max_state_action_failures
+        self._max_stagnant_tool_calls = max_stagnant_tool_calls
         self._browser = browser
         self._last_denial = ""
         self._same_denials = 0
@@ -59,6 +61,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._browser_signature: str | None = None
         self._state_action_failures: dict[str, int] = {}
         self._blocked_state_actions: set[str] = set()
+        self._stagnant_tool_calls = 0
 
     async def awrap_tool_call(
         self,
@@ -66,6 +69,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         self._refresh_browser_state()
+        before_browser_signature = self._browser_signature
         state_action = self._state_action_signature(request)
         read_signature = _read_signature(request)
         if state_action in self._blocked_state_actions:
@@ -94,7 +98,19 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         else:
             result = await handler(request)
 
+        self._refresh_browser_state()
+        browser_advanced = self._browser_signature != before_browser_signature
+
         tool_name = str(request.tool_call.get("name", ""))
+        if browser_advanced or tool_name in {
+            "application_blocked",
+            "application_submitted",
+            "ask_human",
+            "request_submit_approval",
+        }:
+            self._stagnant_tool_calls = 0
+        else:
+            self._stagnant_tool_calls += 1
         if _tool_succeeded(result):
             if tool_name in _PROGRESS_TOOL_NAMES:
                 self._last_read_signature = None
@@ -124,20 +140,26 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 self._last_denial = ""
                 self._same_denials = 0
                 self._non_progress = 0
-                return ToolMessage(
-                    content=(
-                        "RUNTIME NO-PROGRESS RECOVERY: the repeated action was denied and "
-                        "the active model was rotated. Do not retry it. Use the newest "
-                        "browser evidence and choose a different authorized tool action."
-                    ),
-                    name=str(request.tool_call.get("name", "runtime")),
-                    tool_call_id=str(request.tool_call.get("id", "")),
-                    status="error",
+                raise NoProgressCircuitOpen(
+                    "Repeated denied or non-progress tool calls ended this agent turn; "
+                    "resume from fresh browser evidence with a different action."
                 )
         else:
             self._last_denial = ""
             self._same_denials = 0
             self._non_progress = 0
+        if self._stagnant_tool_calls >= self._max_stagnant_tool_calls:
+            failure = ToolProtocolViolation(
+                "no_progress: tool calls repeatedly completed without changing the "
+                "browser revision"
+            )
+            if self._on_no_progress is not None:
+                self._on_no_progress(failure)
+            self._stagnant_tool_calls = 0
+            raise NoProgressCircuitOpen(
+                "Tool activity did not advance the browser state; ending this agent "
+                "turn so the persistent goal can recover from fresh evidence."
+            )
         return result
 
     def _refresh_browser_state(self) -> None:
@@ -148,6 +170,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._browser_signature = signature
         self._state_action_failures.clear()
         self._blocked_state_actions.clear()
+        self._stagnant_tool_calls = 0
 
     def _state_action_signature(self, request: ToolCallRequest) -> str:
         name = str(request.tool_call.get("name", ""))
