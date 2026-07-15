@@ -204,6 +204,15 @@ class StripEmptyArgsTests(unittest.TestCase):
 
         self.assertIn("no longer current", result)
 
+    def test_auth_submit_adapter_accepts_provider_null_optional_element(self) -> None:
+        submitter = AsyncMock(return_value="authenticated")
+        tool = make_auth_submit_tool(submitter)
+
+        result = self._run(tool.ainvoke({"target": "e341", "element": None}))
+
+        submitter.assert_awaited_once_with("e341")
+        self.assertEqual(result, "authenticated")
+
     def test_verification_link_tool_uses_atomic_lifecycle(self) -> None:
         opener = AsyncMock(return_value="temporary tab closed; original restored")
         tool = make_verification_link_tool(opener)

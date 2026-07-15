@@ -19,7 +19,10 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         async def resolve_target(*, target: str) -> SimpleNamespace:
             submit = target in targets if targets is not None else is_submit
-            locator = SimpleNamespace(evaluate=AsyncMock(return_value=submit))
+            locator = SimpleNamespace(
+                evaluate=AsyncMock(return_value=submit),
+                click=AsyncMock(),
+            )
             return SimpleNamespace(locator=locator)
 
         tab = SimpleNamespace(
@@ -106,6 +109,24 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("review state", evidence)
         self.assertIsNone(session.submission_capability)
 
+    async def test_auth_submit_classifies_pointer_interception_as_recoverable(self) -> None:
+        session, call_tool = self._session(is_submit=True)
+        tab = session._backend._ensure_tab.return_value
+        locator = SimpleNamespace(
+            evaluate=AsyncMock(return_value=True),
+            click=AsyncMock(side_effect=TimeoutError("pointer interception")),
+        )
+        tab.resolve_target.side_effect = None
+        tab.resolve_target.return_value = SimpleNamespace(locator=locator)
+
+        with self.assertRaisesRegex(
+            BrowserToolExecutionError,
+            "recoverable browser actionability state",
+        ):
+            await session.submit_auth_form("e10")
+
+        call_tool.assert_not_awaited()
+
     async def test_approval_is_revoked_when_reviewed_page_changes(self) -> None:
         session, call_tool = self._session(is_submit=True)
         session.activate_submission_guard()
@@ -163,7 +184,10 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
             "stale ref"
         )
 
-        with self.assertRaisesRegex(BrowserToolExecutionError, "stale or unavailable"):
+        with self.assertRaisesRegex(
+            BrowserToolExecutionError,
+            "recoverable browser actionability state",
+        ):
             await session.submit_auth_form("e510")
 
         call_tool.assert_not_awaited()

@@ -61,6 +61,13 @@ state.
   The auth-submit executor cannot authorize final job-application submission.
 - After submission, use the returned post-action evidence. Do not repeat the
   submit. Take another snapshot only if the returned evidence is insufficient.
+- A click interception, loading mask, disabled-while-loading control, stale ref,
+  or ordinary actionability timeout is not a CAPTCHA, anti-bot challenge, or
+  reason for manual authentication. Wait briefly, inspect fresh evidence, and
+  retry the current auth action once with its fresh ref. Call
+  `request_manual_auth` only when fresh browser evidence visibly identifies a
+  CAPTCHA, OTP the available email tools cannot resolve, identity choice, or
+  comparable human-only security action.
 
 ## Email or OTP verification
 

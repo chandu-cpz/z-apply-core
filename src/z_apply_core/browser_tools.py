@@ -224,7 +224,7 @@ def make_auth_submit_tool(submitter: AuthSubmitter) -> BaseTool:
     @tool
     async def browser_auth_submit(
         target: str,
-        element: str = "authentication form submit control",
+        element: str | None = "authentication form submit control",
     ) -> str:
         """Submit a structurally verified login or verification form.
 
@@ -234,7 +234,10 @@ def make_auth_submit_tool(submitter: AuthSubmitter) -> BaseTool:
         """
         try:
             normalized_target = normalize_browser_arguments(
-                {"target": target, "element": element}
+                {
+                    "target": target,
+                    "element": element or "authentication form submit control",
+                }
             ).get("target")
             if not isinstance(normalized_target, str) or not normalized_target:
                 raise ToolException("browser_auth_submit requires a resolvable target.")

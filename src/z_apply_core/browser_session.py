@@ -384,6 +384,7 @@ class BrowserSession:
                         "Authentication submit rejected: the target is not a submit "
                         "control in a structurally identifiable login or verification form."
                     )
+                await locator.click(trial=True, timeout=15_000)
                 result = await self._backend.call_tool(
                     "browser_click",
                     {"target": target},
@@ -394,8 +395,10 @@ class BrowserSession:
             raise
         except Exception as exc:
             raise BrowserToolExecutionError(
-                "Authentication control is stale or unavailable. Capture a fresh "
-                "snapshot and continue from current page evidence."
+                "Authentication control is stale, loading, or temporarily covered by "
+                "another page element. This is recoverable browser actionability state, "
+                "not evidence of a CAPTCHA or security challenge. Wait briefly, capture "
+                "fresh evidence, and retry the current auth submit once."
             ) from exc
         _raise_for_tool_error("browser_click", result)
         try:
