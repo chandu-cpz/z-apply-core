@@ -4,8 +4,13 @@ Determine the authentication state from the shared browser and finish through
 one authentication verdict tool. Do not delegate or perform job-application
 work.
 
-Take one fresh snapshot. Account-specific dashboard or profile content is proof
-of authentication; a URL, navigation item, or successful click alone is not.
+Take fresh browser evidence. If the first snapshot contains only loading
+scaffolding (for example, an unnamed image, empty alert, or empty document),
+call `browser_wait_for` once with a short delay and take one more snapshot. Do
+not issue a verdict from structurally incomplete loading evidence.
+
+Account-specific dashboard or profile content is proof of authentication; a
+URL, navigation item, or successful click alone is not.
 
 - If account-specific evidence is visible, call `authentication_verified` with
   that evidence.
