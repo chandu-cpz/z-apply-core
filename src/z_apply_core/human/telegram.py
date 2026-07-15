@@ -287,7 +287,7 @@ class TelegramHumanChannel:
 
     async def stop(self) -> None:
         async with self._start_lock:
-            await self._close_created_topics()
+            await self._delete_created_topics()
             app = self._app
             if app is None:
                 return
@@ -374,15 +374,15 @@ class TelegramHumanChannel:
             return None
         return artifact
 
-    async def _close_created_topics(self) -> None:
+    async def _delete_created_topics(self) -> None:
         for topic_id in tuple(self._created_topic_ids):
             try:
-                await self.bot.close_forum_topic(
+                await self.bot.delete_forum_topic(
                     chat_id=self.chat_id,
                     message_thread_id=topic_id,
                 )
             except Exception:
-                logger.exception("Failed to close Telegram forum topic %s", topic_id)
+                logger.exception("Failed to delete Telegram forum topic %s", topic_id)
         self._created_topic_ids.clear()
         self._active_topics.clear()
 

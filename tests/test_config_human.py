@@ -58,7 +58,7 @@ class FakeBot:
         self.messages: list[dict[str, Any]] = []
         self.photos: list[dict[str, Any]] = []
         self.documents: list[dict[str, Any]] = []
-        self.closed_topics: list[int] = []
+        self.deleted_topics: list[int] = []
         self.created_topics: list[dict[str, Any]] = []
 
     async def send_message(self, **kwargs: Any) -> FakeSentMessage:
@@ -78,8 +78,8 @@ class FakeBot:
         self.created_topics.append(kwargs)
         return SimpleNamespace(message_thread_id=777)
 
-    async def close_forum_topic(self, **kwargs: Any) -> None:
-        self.closed_topics.append(kwargs["message_thread_id"])
+    async def delete_forum_topic(self, **kwargs: Any) -> None:
+        self.deleted_topics.append(kwargs["message_thread_id"])
 
 
 class SettingsTests(unittest.TestCase):
@@ -421,8 +421,8 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(await task, "1234")
 
         self.assertEqual(len(bot.photos), 1)
-        await channel._close_created_topics()
-        self.assertEqual(bot.closed_topics, [777])
+        await channel._delete_created_topics()
+        self.assertEqual(bot.deleted_topics, [777])
 
 
 if __name__ == "__main__":
