@@ -12,6 +12,10 @@ options, and validation evidence. Independent fields may be launched together,
 up to eight. The parent must consume all returned `<field> = <value>` results with
 browser mutations before launching any more tasks.
 
+Use `subagent_type="VisionSpecialist"` only when the current typed browser
+context says `visual_only_surface_visible=true` and one specific visual question
+cannot be answered from ARIA/DOM. The runtime rejects ordinary-page delegation.
+
 Use `subagent_type="AuthenticationSpecialist"` for one currently visible login,
 email-verification, OTP, or identity gate. Include the current URL and exact
 visible gate evidence. It may mutate only that auth flow and must return fresh

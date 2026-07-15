@@ -1,11 +1,20 @@
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
-from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
-from langchain_core.messages import AIMessage
+from langchain.agents.middleware.types import (
+    AgentState,
+    ContextT,
+    ModelResponse,
+    ResponseT,
+    ToolCallRequest,
+)
+from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Command
+
+from z_apply_core.browser_session import BrowserSession
 
 
 class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -17,10 +26,44 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
     execution, keeping browser authority inside BrowserSpecialist.
     """
 
-    def __init__(self, subagent_types: Iterable[str], *, resume_path: str = "") -> None:
+    def __init__(
+        self,
+        subagent_types: Iterable[str],
+        *,
+        resume_path: str = "",
+        browser: BrowserSession | None = None,
+    ) -> None:
         super().__init__()
         self._subagent_types = frozenset(subagent_types)
         self._resume_path = resume_path
+        self._browser = browser
+
+    async def awrap_tool_call(
+        self,
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
+    ) -> ToolMessage | Command[Any]:
+        args = request.tool_call.get("args", {})
+        if (
+            request.tool_call.get("name") == "task"
+            and isinstance(args, dict)
+            and args.get("subagent_type") == "VisionSpecialist"
+        ):
+            browser = self._browser
+            capabilities = await browser.inspect_capabilities() if browser is not None else None
+            if capabilities is None or not capabilities.visual_only_surface_visible:
+                return ToolMessage(
+                    content=(
+                        "Vision delegation denied: current browser-owned capabilities do "
+                        "not show a visual-only surface. Continue with current ARIA/DOM "
+                        "evidence and browser tools. Visual CAPTCHA or identity challenges "
+                        "go directly to human HITL."
+                    ),
+                    name="task",
+                    tool_call_id=str(request.tool_call.get("id", "")),
+                    status="error",
+                )
+        return await handler(request)
 
     async def awrap_model_call(
         self,

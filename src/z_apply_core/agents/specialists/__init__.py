@@ -17,6 +17,8 @@ from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
+from z_apply_core.agents.specialists.vision import build_vision_specialist
+from z_apply_core.agents.vision_message_compat import VisionToolMessageCompatibilityMiddleware
 from z_apply_core.memory.applicant_memory import CandidateMemory, build_answer_writer_memory_tools
 from z_apply_core.stream_events import FrameworkEventSink
 
@@ -55,7 +57,6 @@ async def build_specialists(
     authentication_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
 ) -> list[SubAgent]:
-    del browser_tools
     return [
         _with_routing(
             build_authentication_specialist(authentication_tools),
@@ -66,6 +67,14 @@ async def build_specialists(
                 SafeToolBatchMiddleware(),
                 HumanEscalationGuardMiddleware(allowed_reasons=frozenset({"human_challenge"})),
             ],
+            sink=sink,
+        ),
+        _with_routing(
+            build_vision_specialist(browser_tools),
+            router=router,
+            role="VisionSpecialist",
+            model=fallback_model,
+            extra_middleware=[VisionToolMessageCompatibilityMiddleware()],
             sink=sink,
         ),
         _with_routing(

@@ -31,11 +31,22 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
         'button[type="submit"], input[type="submit"], input[type="image"], form button:not([type])'
     )].filter(visible).filter(element => !element.disabled &&
         element.getAttribute('aria-disabled') !== 'true');
+    const actionControls = [...document.querySelectorAll(
+        'button, a[href], input, select, textarea, [role="button"], [role="link"], [role="combobox"]'
+    )].filter(visible).filter(element => !element.disabled &&
+        element.getAttribute('aria-disabled') !== 'true');
+    const minimumVisualArea = Math.max(40000, innerWidth * innerHeight * 0.2);
+    const largeVisualSurface = [...document.querySelectorAll('canvas, video, iframe, img')]
+        .filter(visible).some(element => {
+            const box = element.getBoundingClientRect();
+            return box.width * box.height >= minimumVisualArea;
+        });
     return {
         editable_controls_visible: controls.length > 0,
         auth_gate_visible: authGate,
         required_file_upload_pending: requiredUploadPending,
         enabled_form_submit_visible: submitControls.length > 0,
+        visual_only_surface_visible: largeVisualSurface && actionControls.length === 0,
     };
 }"""
 
@@ -48,6 +59,7 @@ class BrowserCapabilities:
     auth_gate_visible: bool = False
     required_file_upload_pending: bool = False
     enabled_form_submit_visible: bool = False
+    visual_only_surface_visible: bool = False
 
     @classmethod
     def from_browser_payload(cls, payload: Any) -> BrowserCapabilities:
@@ -57,6 +69,7 @@ class BrowserCapabilities:
             auth_gate_visible=bool(data.get("auth_gate_visible")),
             required_file_upload_pending=bool(data.get("required_file_upload_pending")),
             enabled_form_submit_visible=bool(data.get("enabled_form_submit_visible")),
+            visual_only_surface_visible=bool(data.get("visual_only_surface_visible")),
         )
 
     def render(self) -> str:
@@ -68,6 +81,8 @@ class BrowserCapabilities:
                 f"{str(self.required_file_upload_pending).lower()}",
                 "enabled_form_submit_visible="
                 f"{str(self.enabled_form_submit_visible).lower()}",
+                "visual_only_surface_visible="
+                f"{str(self.visual_only_surface_visible).lower()}",
             )
         )
 

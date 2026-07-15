@@ -9,9 +9,11 @@ Current ARIA/DOM evidence is the source of truth for workflow state. Simplify
 panel text, a stored resume preview inside Simplify, prior task prose, and a
 screenshot filename never prove that an application form is open, that a field
 exists, or that a resume is attached to the employer form. Ordinary application
-state comes from ARIA/DOM evidence. A visual CAPTCHA or identity challenge goes
-directly through `ask_human`, which captures its current target for the human;
-never attempt to interpret or solve it yourself.
+state comes from ARIA/DOM evidence. When typed browser context explicitly reports
+`visual_only_surface_visible=true`, VisionSpecialist may answer one bounded
+non-challenge visual question. A visual CAPTCHA or identity challenge always
+goes directly through `ask_human`, which captures its current target for the
+human; never attempt to interpret or solve it yourself.
 
 ## Act from current state
 
@@ -153,8 +155,10 @@ row and field through AnswerWriter rather than borrowing from a neighboring row.
 
 ## Delegation contract
 
-`AnswerWriter` and `AuthenticationSpecialist` are subagent types invoked through
-the native `task` tool; they are not function names.
+`AnswerWriter`, `AuthenticationSpecialist`, and `VisionSpecialist` are subagent
+types invoked through the native `task` tool; they are not function names.
+`VisionSpecialist` is executable only when current typed browser context reports
+`visual_only_surface_visible=true`.
 
 Use AnswerWriter even though a single field is a small task: it alone has access
 to candidate memory, resume evidence, and the one-question Telegram flow. Its
