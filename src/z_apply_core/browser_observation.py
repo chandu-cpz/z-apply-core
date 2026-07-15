@@ -48,10 +48,13 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
         element.getAttribute('aria-invalid') === 'true' ||
         ('validity' in element && !element.validity.valid)
     );
-    const submitControls = [...document.querySelectorAll(
+    const allSubmitControls = [...document.querySelectorAll(
         'button[type="submit"], input[type="submit"], input[type="image"], form button:not([type])'
-    )].filter(visible).filter(element => !element.disabled &&
+    )].filter(visible);
+    const submitControls = allSubmitControls.filter(element => !element.disabled &&
         element.getAttribute('aria-disabled') !== 'true');
+    const disabledSubmitControls = allSubmitControls.filter(element => element.disabled ||
+        element.getAttribute('aria-disabled') === 'true');
     const actionControls = [...document.querySelectorAll(
         'button, a[href], input, select, textarea, [role="button"], [role="link"], [role="combobox"]'
     )].filter(visible).filter(element => !element.disabled &&
@@ -70,6 +73,7 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
         empty_file_upload_present: emptyFileUploadPresent,
         required_file_upload_pending: requiredUploadPending,
         enabled_form_submit_visible: submitControls.length > 0,
+        disabled_form_submit_visible: disabledSubmitControls.length > 0,
         visual_only_surface_visible: largeVisualSurface && actionControls.length === 0,
     };
 }"""
@@ -86,6 +90,7 @@ class BrowserCapabilities:
     empty_file_upload_present: bool = False
     required_file_upload_pending: bool = False
     enabled_form_submit_visible: bool = False
+    disabled_form_submit_visible: bool = False
     visual_only_surface_visible: bool = False
 
     @classmethod
@@ -101,6 +106,9 @@ class BrowserCapabilities:
             empty_file_upload_present=bool(data.get("empty_file_upload_present")),
             required_file_upload_pending=bool(data.get("required_file_upload_pending")),
             enabled_form_submit_visible=bool(data.get("enabled_form_submit_visible")),
+            disabled_form_submit_visible=bool(
+                data.get("disabled_form_submit_visible")
+            ),
             visual_only_surface_visible=bool(data.get("visual_only_surface_visible")),
         )
 
@@ -117,6 +125,8 @@ class BrowserCapabilities:
                 f"{str(self.required_file_upload_pending).lower()}",
                 "enabled_form_submit_visible="
                 f"{str(self.enabled_form_submit_visible).lower()}",
+                "disabled_form_submit_visible="
+                f"{str(self.disabled_form_submit_visible).lower()}",
                 "visual_only_surface_visible="
                 f"{str(self.visual_only_surface_visible).lower()}",
             )

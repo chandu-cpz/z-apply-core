@@ -157,6 +157,17 @@ class CapabilityContextTests(unittest.TestCase):
 
         self.assertIn("task", [tool.name for tool in tools])
 
+    def test_disabled_submit_exposes_semantic_repair_delegation(self) -> None:
+        tools = CapabilityContextMiddleware._filter_tools(
+            self.tools,
+            BrowserCapabilities(
+                editable_controls_visible=True,
+                disabled_form_submit_visible=True,
+            ),
+        )
+
+        self.assertIn("task", [tool.name for tool in tools])
+
     def test_job_detail_page_hides_form_mutations_and_human_delegation(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
             self.tools,

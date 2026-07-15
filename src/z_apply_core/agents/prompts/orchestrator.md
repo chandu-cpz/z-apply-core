@@ -120,14 +120,22 @@ read the newest tool results and continue at the first applicable state below:
    never applies to identity, employment history, authorization, compensation,
    availability, dates, demographics, legal attestations, or consent. Do not
    delegate consent or infer candidate facts.
-11. **Only a CAPTCHA, OTP, or identity challenge remains outside an auth gate:**
+11. **The page reports no empty/invalid required controls but its next or save
+   control is disabled:** this is unresolved form work, not a reason to observe
+   the unchanged page again. Inspect the visible material values and custom
+   choice controls for a value that has not been committed or is inconsistent
+   with its visible constraint. Delegate only the exact suspicious candidate
+   field when candidate evidence is needed, then apply one supported correction
+   or re-commit that control and inspect the resulting receipt. Never invent a
+   value merely to enable the button.
+12. **Only a CAPTCHA, OTP, or identity challenge remains outside an auth gate:**
    defer it until all
    unrelated safe work is complete. For a visual challenge, call `ask_human`
    exactly once with reason `human_challenge` and `challenge_target` set to the
    current ref of the challenge. The tool atomically captures that target and
    delivers the image; never provide or invent an image path. Fill the returned
    answer and observe the result.
-12. **The application is review-ready:** take fresh browser evidence and confirm
+13. **The application is review-ready:** take fresh browser evidence and confirm
    the resume, required values, consent, and absence of validation errors. Call
    `request_submit_approval` once with `submission_target` set to the current
    ref of the exact final submit control and a concise review of material values. For
@@ -141,7 +149,7 @@ read the newest tool results and continue at the first applicable state below:
    supported by explicit page state, and request approval again after evidence
    changes. Never repeat a mutation against unchanged evidence. A verifier
    disagreement is not an external blocker.
-13. **Submission was approved:** activate the final submit exactly once, inspect
+14. **Submission was approved:** activate the final submit exactly once, inspect
     the resulting page, and call `application_submitted` only when visible
     evidence confirms receipt. If approval is rejected, apply the correction
     returned by `request_submit_approval`, inspect fresh browser evidence, and

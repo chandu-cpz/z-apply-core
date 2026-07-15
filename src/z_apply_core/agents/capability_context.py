@@ -152,7 +152,9 @@ class CapabilityContextMiddleware(
                 not in {"request_submit_approval", "application_submitted", "task"}
             ]
         candidate_resolution_needed = bool(
-            capabilities.unresolved_required_controls or capabilities.invalid_controls
+            capabilities.unresolved_required_controls
+            or capabilities.invalid_controls
+            or capabilities.disabled_form_submit_visible
         )
         if not candidate_resolution_needed and not capabilities.visual_only_surface_visible:
             return [tool for tool in tools if _tool_name(tool) != "task"]
