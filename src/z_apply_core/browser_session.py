@@ -346,15 +346,16 @@ class BrowserSession:
                     """element => {
                     const selector = 'button, input[type="submit"], input[type="image"]';
                     const direct = element.closest(selector);
-                    if (direct) return direct;
                     const clickLayer = element.closest('[role="button"]');
-                    if (!clickLayer) return null;
-                    const box = clickLayer.getBoundingClientRect();
+                    const anchor = direct || clickLayer;
+                    if (!anchor) return null;
+                    const box = anchor.getBoundingClientRect();
                     const x = box.left + box.width / 2;
                     const y = box.top + box.height / 2;
-                    return clickLayer.ownerDocument.elementsFromPoint(x, y)
-                        .find(candidate => candidate !== clickLayer &&
-                            candidate.matches(selector)) || null;
+                    const hitControl = anchor.ownerDocument.elementsFromPoint(x, y)
+                        .map(candidate => candidate.closest(selector))
+                        .find(candidate => candidate !== null);
+                    return hitControl || direct;
                 }"""
                 )
                 submit_control = control_handle.as_element()
@@ -442,7 +443,8 @@ class BrowserSession:
                 "Authentication control is stale, loading, or temporarily covered by "
                 "another page element. This is recoverable browser actionability state, "
                 "not evidence of a CAPTCHA or security challenge. Wait briefly, capture "
-                "fresh evidence, and retry the current auth submit once."
+                "fresh evidence, and retry the current auth submit once. Executor cause: "
+                f"{type(exc).__name__}: {exc}"
             ) from exc
         _raise_for_tool_error("browser_click", result)
         try:
