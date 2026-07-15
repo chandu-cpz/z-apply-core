@@ -31,13 +31,18 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
     sink = _sink_from_config(config)
     router = _router_from_config(config)
     runtime = _runtime(state)
+    initial_snapshot = str(state.get("snapshot", ""))
     if runtime is not None:
+        try:
+            initial_snapshot = await runtime.browser.observe()
+        except Exception as exc:  # noqa: BLE001 - the agent can recover by observing again
+            _log.warning("Orchestrator handoff observation unavailable: %s", exc)
         runtime.browser.activate_submission_guard()
     authentication_tools = _authentication_tools(state, runtime)
     run = await run_orchestrator(
         job_url=str(state["job_url"]),
         task=str(state["task"]),
-        snapshot=str(state.get("snapshot", "")),
+        snapshot=initial_snapshot,
         browser_tools=state.get("browser_tools", ()),
         authentication_tools=authentication_tools,
         config=config,
