@@ -31,6 +31,7 @@ def _with_routing(
     role: str,
     model: BaseChatModel,
     extra_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
+    preserve_task_context: bool = False,
     sink: FrameworkEventSink | None = None,
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
@@ -38,7 +39,7 @@ def _with_routing(
     router_middleware = NimRouterMiddleware(router, role=role, sink=sink)
     enriched["middleware"] = [
         *extra_middleware,
-        SpecialistTaskContextMiddleware(),
+        *([SpecialistTaskContextMiddleware()] if preserve_task_context else []),
         NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
         model_retry_middleware(),
         router_middleware,
@@ -90,6 +91,7 @@ async def build_specialists(
             router=router,
             role="AnswerWriter",
             model=fallback_model,
+            preserve_task_context=True,
             extra_middleware=answer_writer_middleware,
             sink=sink,
         ),

@@ -61,6 +61,10 @@ state.
   The auth-submit executor cannot authorize final job-application submission.
 - After submission, use the returned post-action evidence. Do not repeat the
   submit. Take another snapshot only if the returned evidence is insufficient.
+- The delegated task describes the gate at handoff time; fresh post-action
+  browser evidence is authoritative when the page changes. If Create Account
+  becomes Sign In, follow the visible Sign In controls. If account-specific
+  authenticated UI appears, stop browser work and return that fresh evidence.
 - A click interception, loading mask, disabled-while-loading control, stale ref,
   or ordinary actionability timeout is not a CAPTCHA, anti-bot challenge, or
   reason for manual authentication. Wait briefly, inspect fresh evidence, and
