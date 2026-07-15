@@ -15,6 +15,7 @@ from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
+from z_apply_core.agents.specialist_task_context import SpecialistTaskContextMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
 from z_apply_core.agents.specialists.vision import build_vision_specialist
@@ -37,6 +38,7 @@ def _with_routing(
     router_middleware = NimRouterMiddleware(router, role=role, sink=sink)
     enriched["middleware"] = [
         *extra_middleware,
+        SpecialistTaskContextMiddleware(),
         NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
         model_retry_middleware(),
         router_middleware,
