@@ -53,3 +53,14 @@ BLOCKED_MODEL_IDS_BELOW_120B: tuple[str, ...] = (
     "nv-mistralai/mistral-nemo-12b-instruct",
     "ibm/granite-3.3-8b-instruct",
 )
+
+# NIM models must satisfy the 120B floor and pass a local native-tool-call
+# probe before they may drive a job application. Keep this at the router-policy
+# boundary; agents continue to request capabilities rather than model IDs.
+VERIFIED_LARGE_TOOL_MODEL_IDS: tuple[str, ...] = (
+    "nvidia/nemotron-3-ultra-550b-a55b",
+    "stepfun-ai/step-3.5-flash",
+    "stepfun-ai/step-3.7-flash",
+    "mistralai/mistral-medium-3.5-128b",
+    "qwen/qwen3.5-122b-a10b",
+)
