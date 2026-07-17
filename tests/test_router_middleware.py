@@ -6,7 +6,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, sentinel
 
 from langchain.agents.middleware.types import ModelResponse
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from nim_router import NimRouter
 from nim_router.schemas import ModelSelection
 
@@ -18,6 +18,60 @@ from z_apply_core.agents.router_middleware import (
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
+    async def test_removes_orphan_tool_result_before_model_handoff(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        model = MagicMock()
+        selection = cast(
+            Any,
+            SimpleNamespace(info=SimpleNamespace(id="strict/model"), llm=model),
+        )
+        request = MagicMock(
+            tools=[sentinel.tool],
+            response_format=None,
+            messages=[
+                HumanMessage(content="Continue the application."),
+                ToolMessage(content="stale result", tool_call_id="call-orphan"),
+            ],
+        )
+        request.override.side_effect = lambda **values: SimpleNamespace(**values)
+        handler = AsyncMock(return_value=sentinel.response)
+
+        await NimRouterMiddleware(
+            router,
+            role="orchestrator",
+            initial_selection=selection,
+        ).awrap_model_call(request, handler)
+
+        forwarded = handler.await_args.args[0]
+        self.assertEqual([type(message) for message in forwarded.messages], [HumanMessage])
+
+    async def test_preserves_tool_result_with_matching_assistant_call(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        model = MagicMock()
+        selection = cast(
+            Any,
+            SimpleNamespace(info=SimpleNamespace(id="strict/model"), llm=model),
+        )
+        assistant_call = AIMessage(
+            content="",
+            tool_calls=[{"name": "lookup", "args": {}, "id": "call-valid"}],
+        )
+        request = MagicMock(
+            tools=[sentinel.tool],
+            response_format=None,
+            messages=[assistant_call, ToolMessage(content="fact", tool_call_id="call-valid")],
+        )
+        request.override.side_effect = lambda **values: SimpleNamespace(**values)
+        handler = AsyncMock(return_value=sentinel.response)
+
+        await NimRouterMiddleware(
+            router,
+            role="orchestrator",
+            initial_selection=selection,
+        ).awrap_model_call(request, handler)
+
+        request.override.assert_called_once_with(model=model)
+
     async def test_rejects_empty_response_without_reasoning_or_tool_calls(self) -> None:
         router = MagicMock(spec=NimRouter)
         model = MagicMock()

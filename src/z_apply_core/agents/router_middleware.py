@@ -15,7 +15,7 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AnyMessage
+from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
 from nim_router import NimRouter
 from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
@@ -109,6 +109,29 @@ def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
         ),
         missing_final,
     )
+
+
+def _drop_orphan_tool_messages(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
+    """Preserve only tool results backed by a structured assistant tool call."""
+    seen_tool_call_ids: set[str] = set()
+    normalized: list[AnyMessage] = []
+    removed = 0
+    for message in messages:
+        if isinstance(message, AIMessage):
+            seen_tool_call_ids.update(
+                call_id
+                for call in message.tool_calls
+                if isinstance((call_id := call.get("id")), str) and call_id
+            )
+            normalized.append(message)
+            continue
+        if isinstance(message, ToolMessage) and message.tool_call_id not in seen_tool_call_ids:
+            removed += 1
+            continue
+        normalized.append(message)
+    if removed:
+        logger.warning("Removed %d orphan tool result message(s) before model handoff", removed)
+    return normalized
 
 
 class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -249,7 +272,11 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         start = time.monotonic()
         try:
             leased_model: BaseChatModel = selection.llm
-            result: ModelResponse[ResponseT] = await handler(request.override(model=leased_model))
+            sanitized_messages = _drop_orphan_tool_messages(request.messages)
+            override: dict[str, Any] = {"model": leased_model}
+            if len(sanitized_messages) != len(request.messages):
+                override["messages"] = sanitized_messages
+            result: ModelResponse[ResponseT] = await handler(request.override(**override))
         except BaseException as exc:  # noqa: BLE001 - re-raised after recording
             logger.warning(
                 "router %s model %s failed: %s",
