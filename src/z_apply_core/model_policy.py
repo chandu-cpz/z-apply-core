@@ -54,13 +54,32 @@ BLOCKED_MODEL_IDS_BELOW_120B: tuple[str, ...] = (
     "ibm/granite-3.3-8b-instruct",
 )
 
-# NIM models must satisfy the 120B floor and pass a local native-tool-call
-# probe before they may drive a job application. Keep this at the router-policy
-# boundary; agents continue to request capabilities rather than model IDs.
+# NIM models must satisfy the 120B floor (except the user-approved Laguna
+# exception) and pass a local native-tool-call probe before they may drive a
+# job application. Keep this at the router-policy boundary; agents continue to
+# request capabilities rather than model IDs.
 VERIFIED_LARGE_TOOL_MODEL_IDS: tuple[str, ...] = (
     "nvidia/nemotron-3-ultra-550b-a55b",
+    "thinkingmachines/inkling",
+    "z-ai/glm-5.2",
+    "minimaxai/minimax-m3",
+    "minimaxai/minimax-m2.7",
+    "deepseek-ai/deepseek-v4-flash",
+    "poolside/laguna-xs-2.1",
     "stepfun-ai/step-3.5-flash",
     "stepfun-ai/step-3.7-flash",
     "mistralai/mistral-medium-3.5-128b",
     "qwen/qwen3.5-122b-a10b",
 )
+
+# NVIDIA's free-tier catalog can report unknown or false tool capability for
+# endpoints that have passed the native tool probe above. These explicit facts
+# override only that stale provider metadata; they do not permit unprobed
+# models into the fixed application pool.
+PROBED_TOOL_CAPABILITY_OVERRIDES: dict[str, dict[str, bool]] = {
+    "thinkingmachines/inkling": {"tools": True},
+    "z-ai/glm-5.2": {"tools": True},
+    "minimaxai/minimax-m3": {"tools": True},
+    "minimaxai/minimax-m2.7": {"tools": True},
+    "poolside/laguna-xs-2.1": {"tools": True},
+}

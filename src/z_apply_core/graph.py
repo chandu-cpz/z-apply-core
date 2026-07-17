@@ -10,6 +10,7 @@ from nim_router.config import RouterConfig
 from z_apply_core.agents.context_inbox import ContextInbox
 from z_apply_core.model_policy import (
     BLOCKED_MODEL_IDS_BELOW_120B,
+    PROBED_TOOL_CAPABILITY_OVERRIDES,
     VERIFIED_LARGE_TOOL_MODEL_IDS,
 )
 from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
@@ -77,6 +78,11 @@ def make_router() -> NimRouter:
         dict.fromkeys([*router_config.excluded_models, *BLOCKED_MODEL_IDS_BELOW_120B])
     )
     router_config.model_pool = list(VERIFIED_LARGE_TOOL_MODEL_IDS)
+    router_config.capabilities_overrides = {
+        **router_config.capabilities_overrides,
+        **PROBED_TOOL_CAPABILITY_OVERRIDES,
+    }
+    router_config.allow_undiscovered_models = True
     router_config.stats_path = str(ROUTER_STATS_PATH)
     router_config.exploration_interval_seconds = min(
         router_config.exploration_interval_seconds,
