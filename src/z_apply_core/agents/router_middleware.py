@@ -112,22 +112,27 @@ def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
 
 
 def _drop_orphan_tool_messages(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
-    """Preserve only tool results backed by a structured assistant tool call."""
-    seen_tool_call_ids: set[str] = set()
+    """Preserve only tool results adjacent to their structured assistant call."""
+    pending_tool_call_ids: set[str] = set()
     normalized: list[AnyMessage] = []
     removed = 0
     for message in messages:
         if isinstance(message, AIMessage):
-            seen_tool_call_ids.update(
+            pending_tool_call_ids = {
                 call_id
                 for call in message.tool_calls
                 if isinstance((call_id := call.get("id")), str) and call_id
-            )
+            }
             normalized.append(message)
             continue
-        if isinstance(message, ToolMessage) and message.tool_call_id not in seen_tool_call_ids:
-            removed += 1
+        if isinstance(message, ToolMessage):
+            if message.tool_call_id not in pending_tool_call_ids:
+                removed += 1
+                continue
+            pending_tool_call_ids.remove(message.tool_call_id)
+            normalized.append(message)
             continue
+        pending_tool_call_ids.clear()
         normalized.append(message)
     if removed:
         logger.warning("Removed %d orphan tool result message(s) before model handoff", removed)
