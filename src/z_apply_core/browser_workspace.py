@@ -14,6 +14,8 @@ from z_apply_core.browser_session import ARTIFACT_ROOT, BrowserSession, BrowserT
 from z_apply_core.live_view import LiveView
 from z_apply_core.virtual_display import VirtualDisplaySession
 
+_RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS = 15.0
+
 
 class BrowserControlGate:
     """Workspace-global exclusion gate for browser mutations and VNC control."""
@@ -215,7 +217,19 @@ class BrowserWorkspace:
     async def return_agent_control(self, run_id: str) -> str:
         lease = self._require_lease(run_id)
         await lease.focus()
-        evidence = await lease.session.call_tool("browser_snapshot")
+        try:
+            async with asyncio.timeout(_RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS):
+                evidence = await lease.session.call_tool("browser_snapshot")
+        except TimeoutError:
+            await lease.stop_loading()
+            try:
+                async with asyncio.timeout(_RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS):
+                    evidence = await lease.session.call_tool("browser_snapshot")
+            except TimeoutError as exc:
+                raise BrowserToolExecutionError(
+                    "The browser did not produce fresh evidence after stopping a stalled "
+                    "page load; human control remains active."
+                ) from exc
         await self.gate.release()
         return evidence
 

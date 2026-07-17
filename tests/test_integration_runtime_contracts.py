@@ -118,6 +118,38 @@ async def test_browser_gate_serializes_operations_across_run_sessions() -> None:
 
 
 @pytest.mark.asyncio
+async def test_return_control_stops_stalled_load_and_retries_snapshot() -> None:
+    workspace = BrowserWorkspace()
+    calls = 0
+
+    async def snapshot(_name: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            await asyncio.Event().wait()
+        return "fresh evidence"
+
+    lease = SimpleNamespace(
+        closed=False,
+        focus=AsyncMock(),
+        session=SimpleNamespace(call_tool=snapshot),
+        stop_loading=AsyncMock(),
+    )
+    workspace._leases["run-1"] = lease
+    await workspace.gate.take()
+
+    with patch(
+        "z_apply_core.browser_workspace._RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS",
+        0.01,
+    ):
+        evidence = await workspace.return_agent_control("run-1")
+
+    assert evidence == "fresh evidence"
+    assert not workspace.gate.human_control
+    lease.stop_loading.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
     workspace = BrowserWorkspace()
     tabs = [SimpleNamespace(page=object()), SimpleNamespace(page=object())]
