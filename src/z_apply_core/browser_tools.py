@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
+from pathlib import Path
 from typing import Annotated, Any, Protocol, cast, get_origin
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
@@ -199,6 +200,11 @@ def make_click_upload_tool(
     ) -> str:
         """Attach the configured resume directly to a file control without a native chooser."""
         resolved_paths = paths or configured_paths
+        if len(resolved_paths) == 1 and len(configured_paths) == 1:
+            requested = Path(resolved_paths[0])
+            configured = Path(configured_paths[0])
+            if not requested.is_absolute() and requested.name == configured.name:
+                resolved_paths = configured_paths
         if not resolved_paths or any(
             not isinstance(path, str) or not path for path in resolved_paths
         ):

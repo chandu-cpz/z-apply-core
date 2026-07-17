@@ -205,6 +205,25 @@ class StripEmptyArgsTests(unittest.TestCase):
         uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
         self.assertEqual(result, "resume attached")
 
+    def test_atomic_click_upload_resolves_configured_resume_basename(self) -> None:
+        uploader = AsyncMock(return_value="resume attached")
+        tool = make_click_upload_tool(
+            uploader,
+            default_paths=("/profiles/candidate/Chandrakanth-V-Resume.pdf",),
+        )
+
+        result = self._run(
+            tool.ainvoke(
+                {"target": "e40", "paths": ["Chandrakanth-V-Resume.pdf"]}
+            )
+        )
+
+        uploader.assert_awaited_once_with(
+            "e40",
+            ["/profiles/candidate/Chandrakanth-V-Resume.pdf"],
+        )
+        self.assertEqual(result, "resume attached")
+
     def test_auth_submit_adapter_returns_stale_ref_failure_to_agent(self) -> None:
         submitter = AsyncMock(side_effect=ValueError("stale ref"))
         tool = make_auth_submit_tool(submitter)
