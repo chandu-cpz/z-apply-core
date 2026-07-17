@@ -51,6 +51,7 @@ class BrowserConfigTests(unittest.TestCase):
             config["browser"]["camoufoxOptions"]["browser"],
             "official/150.0.2-alpha.26",
         )
+        self.assertEqual(config["timeouts"]["navigation"], 120_000)
 
 
 if __name__ == "__main__":

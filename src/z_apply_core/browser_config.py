@@ -32,6 +32,7 @@ def build_browser_config(run_id: str = "manual") -> dict[str, Any]:
                 "addons": [str(addon_path)],
             },
         },
+        "timeouts": {"navigation": 120_000},
         "outputDir": str(output_dir),
         "outputMode": "stdout",
     }
