@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-# Static router exclusions for models that are undersized, retired, rate-limit
-# constrained, or observed repeatedly violating native tool-call contracts.
-BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
+# Static router exclusions for models below the 120B routing floor, specialized
+# non-agent models, or retired endpoints. Larger eligible models are selected by
+# the NIM router from its live catalog and runtime history.
+BLOCKED_MODEL_IDS_BELOW_120B: tuple[str, ...] = (
     "bytedance/seed-oss-36b-instruct",
     "google/codegemma-7b",
     "google/gemma-2-2b-it",
@@ -23,21 +24,15 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "microsoft/phi-3-vision-128k-instruct",
     "microsoft/phi-4-mini-instruct",
     "microsoft/phi-4-multimodal-instruct",
-    "minimaxai/minimax-m2",
     "mistralai/mistral-small-3.1-24b-instruct-2503",
-    "moonshotai/kimi-k2-instruct-0905",
-    "moonshotai/kimi-k2-instruct",
-    "moonshotai/kimi-k2-thinking",
     "mistralai/codestral-22b-instruct-v0.1",
     "mistralai/mathstral-7b-v0.1",
     "mistralai/ministral-14b-instruct-2512",
     "mistralai/ministral-3-14b-instruct-2512",
     "mistralai/mistral-7b-instruct-v0.3",
-    "mistralai/mistral-medium-3.5-128b",
     "mistralai/mistral-nemotron",
     "nvidia/llama-3.1-nemoguard-8b-content-safety",
     "nvidia/llama-3.1-nemoguard-8b-topic-control",
-    "nvidia/llama-3.1-nemotron-ultra-253b-v1",
     "nvidia/llama-3.1-nemotron-nano-8b-v1",
     "nvidia/llama-3.1-nemotron-nano-4b-v1.1",
     "nvidia/llama-3.1-nemotron-nano-vl-8b-v1",
@@ -48,22 +43,13 @@ BANNED_MODEL_IDS_UNDER_30B: tuple[str, ...] = (
     "nvidia/nemotron-nano-12b-v2-vl",
     "nvidia/nvclip",
     "nvidia/nvidia-nemotron-nano-9b-v2",
-    "nvidia/nemotron-3-ultra-550b-a55b",
-    "openai/gpt-oss-20b",
     "nvidia/nemotron-3-nano-30b-a3b",
+    "openai/gpt-oss-20b",
     "qwen/qwen3-next-80b-a3b-instruct",
     "qwen/qwen3-next-80b-a3b-thinking",
     "qwen/qwq-32b",
-    "deepseek-ai/deepseek-v3.1-terminus",
-    "deepseek-ai/deepseek-v3.2",
     "upstage/solar-10.7b-instruct",
     "zyphra/zamba2-7b-instruct",
-    "z-ai/glm-5.1",
-    "z-ai/glm4.7",
-    "z-ai/glm5",
-    "deepseek-ai/deepseek-r1-0528",
-    "meta/llama-3.1-405b-instruct",
-    "moonshotai/kimi-k2.5",
     "nv-mistralai/mistral-nemo-12b-instruct",
     "ibm/granite-3.3-8b-instruct",
 )
