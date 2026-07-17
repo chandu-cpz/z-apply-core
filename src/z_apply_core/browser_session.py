@@ -282,6 +282,16 @@ class BrowserSession:
             raise BrowserToolExecutionError("The browser did not produce current evidence.")
         return observation.render()
 
+    async def capture_control_return_evidence(self) -> str:
+        """Capture fresh evidence while the workspace gate still blocks agent operations."""
+        result = await self._call_backend_tool("browser_snapshot", {"target": "html"})
+        _raise_for_tool_error("browser_snapshot", result)
+        page_url, page_title = await self._page_identity()
+        text = _text_content(result)
+        self._last_snapshot = text
+        self._record_observation(text, url=page_url, title=page_title)
+        return text
+
     async def call_tool_content(
         self,
         name: str,

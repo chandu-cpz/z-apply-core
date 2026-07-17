@@ -122,7 +122,7 @@ async def test_return_control_stops_stalled_load_and_retries_snapshot() -> None:
     workspace = BrowserWorkspace()
     calls = 0
 
-    async def snapshot(_name: str) -> str:
+    async def snapshot() -> str:
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -132,7 +132,7 @@ async def test_return_control_stops_stalled_load_and_retries_snapshot() -> None:
     lease = SimpleNamespace(
         closed=False,
         focus=AsyncMock(),
-        session=SimpleNamespace(call_tool=snapshot),
+        session=SimpleNamespace(capture_control_return_evidence=snapshot),
         stop_loading=AsyncMock(),
     )
     workspace._leases["run-1"] = lease

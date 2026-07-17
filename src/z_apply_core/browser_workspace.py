@@ -219,12 +219,12 @@ class BrowserWorkspace:
         await lease.focus()
         try:
             async with asyncio.timeout(_RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS):
-                evidence = await lease.session.call_tool("browser_snapshot")
+                evidence = await lease.session.capture_control_return_evidence()
         except TimeoutError:
             await lease.stop_loading()
             try:
                 async with asyncio.timeout(_RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS):
-                    evidence = await lease.session.call_tool("browser_snapshot")
+                    evidence = await lease.session.capture_control_return_evidence()
             except TimeoutError as exc:
                 raise BrowserToolExecutionError(
                     "The browser did not produce fresh evidence after stopping a stalled "
