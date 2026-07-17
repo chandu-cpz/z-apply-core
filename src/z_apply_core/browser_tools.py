@@ -181,24 +181,34 @@ def _provider_compatible_annotation(annotation: Any) -> Any:
     return Annotated[annotation, BeforeValidator(_decode_json_container)]
 
 
-def make_click_upload_tool(uploader: FileUploader) -> BaseTool:
+def make_click_upload_tool(
+    uploader: FileUploader,
+    *,
+    default_paths: Sequence[str] = (),
+) -> BaseTool:
     """Build a core-only direct file-input upload operation."""
+    configured_paths = list(default_paths)
+    if any(not isinstance(path, str) or not path for path in configured_paths):
+        raise ValueError("Configured upload paths must be non-empty strings.")
 
     @tool
     async def browser_click_upload(
         target: str,
-        paths: Annotated[list[str], BeforeValidator(_decode_json_container)],
+        paths: Annotated[list[str] | None, BeforeValidator(_decode_json_container)] = None,
         element: str = "file upload control",
     ) -> str:
-        """Attach paths directly to a file control without a native chooser round trip."""
-        if not paths or any(not isinstance(path, str) or not path for path in paths):
+        """Attach the configured resume directly to a file control without a native chooser."""
+        resolved_paths = paths or configured_paths
+        if not resolved_paths or any(
+            not isinstance(path, str) or not path for path in resolved_paths
+        ):
             raise ValueError("browser_click_upload requires at least one non-empty path.")
         normalized_target = normalize_browser_arguments({"target": target, "element": element}).get(
             "target"
         )
         if not isinstance(normalized_target, str) or not normalized_target:
             raise ValueError("browser_click_upload requires a resolvable target.")
-        return await uploader(normalized_target, paths)
+        return await uploader(normalized_target, resolved_paths)
 
     browser_click_upload.handle_tool_error = True
     return browser_click_upload

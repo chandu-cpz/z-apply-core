@@ -196,6 +196,15 @@ class StripEmptyArgsTests(unittest.TestCase):
         self.assertIn("resume attached", result)
         self.assertIn("current form snapshot", result)
 
+    def test_atomic_click_upload_uses_configured_resume_when_model_sends_empty_paths(self) -> None:
+        uploader = AsyncMock(return_value="resume attached")
+        tool = make_click_upload_tool(uploader, default_paths=("/resume.pdf",))
+
+        result = self._run(tool.ainvoke({"target": "e40", "paths": []}))
+
+        uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
+        self.assertEqual(result, "resume attached")
+
     def test_auth_submit_adapter_returns_stale_ref_failure_to_agent(self) -> None:
         submitter = AsyncMock(side_effect=ValueError("stale ref"))
         tool = make_auth_submit_tool(submitter)
