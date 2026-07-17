@@ -24,6 +24,7 @@ BROWSER_CAPABILITY_SCRIPT = r"""() => {
             autocomplete === 'new-password' || autocomplete === 'one-time-code';
     });
     const fileInputs = [...document.querySelectorAll('input[type="file"]')]
+        .filter(visible)
         .filter(element => !element.disabled);
     const emptyFileUploadPresent = fileInputs.some(element => element.files.length === 0);
     const requiredUploadPending = fileInputs.some(element =>
