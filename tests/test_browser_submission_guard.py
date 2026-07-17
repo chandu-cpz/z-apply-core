@@ -37,8 +37,11 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
             )
             return SimpleNamespace(locator=locator)
 
+        page = MagicMock()
+        page.add_init_script = AsyncMock()
+        page.evaluate = AsyncMock(return_value=True)
         tab = SimpleNamespace(
-            page=MagicMock(),
+            page=page,
             resolve_target=AsyncMock(side_effect=resolve_target),
         )
 
@@ -55,6 +58,7 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         session._capture_workspace = Path("/tmp/guard-test")
         session._submission_guard_active = False
         session._submission_capability = None
+        session._submission_interlock_pages = set()
         session._last_snapshot = "review state"
         session._last_observation = None
         session._browser_revision = 0
@@ -64,6 +68,16 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
     async def _approve(self, session: BrowserSession, target: str = "e10") -> None:
         await session.prepare_submission_review(target, "Reviewed candidate values")
         session.set_submit_approval(True)
+
+    async def test_installs_interlock_for_current_and_future_documents(self) -> None:
+        session, _ = self._session(is_submit=True)
+        page = session._backend._ensure_tab.return_value.page
+
+        await session.install_submission_interlock()
+        await session.install_submission_interlock()
+
+        page.add_init_script.assert_awaited_once()
+        self.assertEqual(page.evaluate.await_count, 2)
 
     async def test_submit_control_is_blocked_before_browser_mutation(self) -> None:
         session, call_tool = self._session(is_submit=True)

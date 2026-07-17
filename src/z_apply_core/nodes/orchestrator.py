@@ -38,6 +38,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         except Exception as exc:  # noqa: BLE001 - the agent can recover by observing again
             _log.warning("Orchestrator handoff observation unavailable: %s", exc)
         runtime.browser.activate_submission_guard()
+        await runtime.browser.install_submission_interlock()
     authentication_tools = _authentication_tools(state, runtime)
     run = await run_orchestrator(
         job_url=str(state["job_url"]),

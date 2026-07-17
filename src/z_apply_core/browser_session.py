@@ -82,6 +82,74 @@ DIRECT_FILE_INPUT_TRIGGER_SCRIPT = r"""element => {
         isFileInput(element.ownerDocument.getElementById(id))
     );
 }"""
+SUBMISSION_INTERLOCK_SCRIPT = r"""() => {
+    const key = '__zApplySubmissionInterlockV1';
+    if (globalThis[key]) return true;
+
+    const nativeRequestSubmit = HTMLFormElement.prototype.requestSubmit;
+    let approvedControl = null;
+
+    const submitControl = candidate => {
+        if (!(candidate instanceof Element)) return null;
+        const control = candidate.closest(
+            'button, input[type="submit"], input[type="image"]'
+        );
+        if (!(control instanceof HTMLButtonElement) &&
+            !(control instanceof HTMLInputElement)) return null;
+        const form = control.form || control.closest('form');
+        if (!form) return null;
+        if (form.getAttribute('role') === 'search' ||
+            form.querySelector('input[type="search"]')) return null;
+        return control;
+    };
+
+    const isSearchForm = form => form.getAttribute('role') === 'search' ||
+        form.querySelector('input[type="search"]');
+
+    const block = event => {
+        const form = event.target instanceof HTMLFormElement ? event.target : null;
+        if (!form || isSearchForm(form)) return;
+        const control = submitControl(event.submitter);
+        if (control && control.form === form && control === approvedControl) {
+            approvedControl = null;
+            return;
+        }
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    };
+
+    document.addEventListener('submit', block, true);
+    HTMLFormElement.prototype.requestSubmit = function(submitter) {
+        const control = submitControl(submitter);
+        if (!control || control !== approvedControl || control.form !== this) return;
+        return nativeRequestSubmit.call(this, control);
+    };
+    HTMLFormElement.prototype.submit = function() {
+        return;
+    };
+
+    globalThis[key] = Object.freeze({
+        arm(candidate) {
+            const control = submitControl(candidate);
+            if (!control) return false;
+            approvedControl = control;
+            return true;
+        },
+        disarm() {
+            approvedControl = null;
+        },
+    });
+    return true;
+}"""
+ARM_SUBMISSION_INTERLOCK_SCRIPT = r"""element => {
+    const view = element.ownerDocument && element.ownerDocument.defaultView;
+    const interlock = view && view.__zApplySubmissionInterlockV1;
+    return Boolean(interlock && interlock.arm(element));
+}"""
+DISARM_SUBMISSION_INTERLOCK_SCRIPT = r"""() => {
+    const interlock = globalThis.__zApplySubmissionInterlockV1;
+    if (interlock) interlock.disarm();
+}"""
 
 
 class BrowserToolExecutionError(ToolException):
@@ -127,6 +195,7 @@ class BrowserSession:
         self.run_id = run_id
         self._submission_guard_active = False
         self._submission_capability: SubmissionCapability | None = None
+        self._submission_interlock_pages: set[Any] = set()
         self._last_snapshot = ""
         self._last_observation: BrowserObservation | None = None
         self._last_action_receipt: ActionReceipt | None = None
@@ -205,11 +274,15 @@ class BrowserSession:
                     guarded_submit = True
                 if guarded_submit:
                     await self._require_submission_capability_locked(normalized)
-            result = await self._call_backend_tool(name, normalized)
-            if name in BROWSER_CHANGING_TOOL_NAMES:
-                await self._discover_owned_popups()
-            if name == "browser_snapshot":
-                page_url, page_title = await self._page_identity()
+            try:
+                result = await self._call_backend_tool(name, normalized)
+                if name in BROWSER_CHANGING_TOOL_NAMES:
+                    await self._discover_owned_popups()
+                if name == "browser_snapshot":
+                    page_url, page_title = await self._page_identity()
+            finally:
+                if guarded_submit:
+                    await self._disarm_submission_interlock()
         _raise_for_tool_error(name, result)
         if guarded_submit:
             capability = self._submission_capability
@@ -612,6 +685,23 @@ class BrowserSession:
         self._submission_guard_active = True
         self._submission_capability = None
 
+    async def install_submission_interlock(self) -> None:
+        """Block page-owned form submissions outside the reviewed one-use capability."""
+        tab = await self._backend._ensure_tab()
+        page = tab.page
+        installed_pages = getattr(self, "_submission_interlock_pages", None)
+        if not isinstance(installed_pages, set):
+            installed_pages = set()
+            self._submission_interlock_pages = installed_pages
+        if page not in installed_pages:
+            await page.add_init_script(script=SUBMISSION_INTERLOCK_SCRIPT)
+            installed_pages.add(page)
+        installed = await page.evaluate(SUBMISSION_INTERLOCK_SCRIPT)
+        if installed is not True:
+            raise BrowserToolExecutionError(
+                "Browser submission interlock could not be installed."
+            )
+
     def set_submit_approval(self, approved: bool) -> None:
         """Approve the pending reviewed capability or revoke it."""
         capability = self._submission_capability
@@ -692,6 +782,22 @@ class BrowserSession:
                 "Submission approval was revoked because the reviewed browser state changed. "
                 "Inspect, review, and request approval again."
             )
+        tab = await self._backend._ensure_tab()
+        locator = (await tab.resolve_target(target=str(target))).locator
+        if await locator.evaluate(ARM_SUBMISSION_INTERLOCK_SCRIPT) is not True:
+            self._submission_capability = None
+            raise BrowserToolExecutionError(
+                "Submission approval could not arm the exact reviewed submit control."
+            )
+
+    async def _disarm_submission_interlock(self) -> None:
+        try:
+            tab = await self._backend._ensure_tab()
+            await tab.page.evaluate(DISARM_SUBMISSION_INTERLOCK_SCRIPT)
+        except Exception:
+            # A successful submit may replace or close the document. Every new document
+            # starts locked again through add_init_script.
+            return
 
     async def _classify_submit_control(
         self,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from z_apply_core.browser_observation import BrowserObservation
 from z_apply_core.browser_session import BrowserSession, BrowserToolExecutionError
@@ -14,7 +14,10 @@ class BrowserMutationProgressTests(unittest.IsolatedAsyncioTestCase):
         call_tool = AsyncMock(
             side_effect=["clicked", "same snapshot", "clicked elsewhere", "changed snapshot"]
         )
-        backend = SimpleNamespace(call_tool=call_tool)
+        backend = SimpleNamespace(
+            call_tool=call_tool,
+            _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
+        )
         session = object.__new__(BrowserSession)
         session._backend = backend
         session.run_id = "mutation-progress"

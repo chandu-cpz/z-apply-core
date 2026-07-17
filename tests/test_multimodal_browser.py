@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from langchain_core.tools import BaseTool
 from mcp.types import ImageContent, TextContent
@@ -65,6 +65,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
         backend = SimpleNamespace(
             call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),
             close=AsyncMock(),
+            _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
         )
         server = SimpleNamespace(
             backend=backend,
