@@ -116,16 +116,18 @@ class CapabilityContextTests(unittest.TestCase):
 
         self.assertEqual([tool.name for tool in tools], ["browser_click_upload"])
 
-    def test_hidden_empty_file_input_hides_generic_click(self) -> None:
+    def test_optional_empty_file_input_does_not_hide_form_work(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
             self.tools,
-            BrowserCapabilities(empty_file_upload_present=True),
+            BrowserCapabilities(
+                editable_controls_visible=True,
+                empty_file_upload_present=True,
+                unresolved_required_controls=1,
+            ),
         )
 
-        self.assertEqual(
-            [tool.name for tool in tools],
-            ["browser_observe", "browser_click_upload"],
-        )
+        self.assertIn("browser_fill_form", [tool.name for tool in tools])
+        self.assertIn("task", [tool.name for tool in tools])
 
     def test_ordinary_form_excludes_deepagents_filesystem_tools(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
