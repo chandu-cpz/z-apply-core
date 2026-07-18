@@ -27,12 +27,13 @@ and historical playbooks.
    no-op after that wait, fill directly.
 5. Attach the required resume with `browser_click_upload` on the current upload
    target. Never open a native file chooser.
-6. For each unresolved required candidate field, call
+6. For every required candidate field and every material field filled by
+   Simplify, call
    `resolve_candidate_field` once with the current browser revision, exact
    label/question, ref, value, control type, and all visible options. Do not call
    `task` for AnswerWriter and do not include a proposed value. The runtime
-   applies a validated result atomically; continue from its action receipt and
-   never apply the same result again.
+   confirms an accurate existing value or applies the corrected value atomically;
+   continue from its receipt and never apply the same result again.
 7. Complete required page-owned controls such as privacy consent directly.
    Empty optional fields are not work.
 8. When only a CAPTCHA or human identity action remains, call `ask_human` once
@@ -51,10 +52,12 @@ locations, dates, preferences, compensation, authorization, and demographics
 all require an immediately preceding structured AnswerWriter result for that
 exact field and current ref. Preserve its value exactly, including `0`.
 
-For repeated education, employment, or certification sections, keep evidence
-bound to the visible row identity. Do not copy a value between rows merely
-because labels match. Autofilled repeated rows must be reconciled against
-candidate evidence before review.
+Treat Simplify output as unverified browser state. Reconcile material identity,
+contact, location, employment, education, authorization, compensation,
+availability, and demographic values through AnswerWriter even when those
+controls are non-empty. For repeated education, employment, or certification
+sections, keep evidence bound to the visible row identity. Do not copy a value
+between rows merely because labels match.
 
 For a choice field, expose its actual options before delegating. A human may
 delegate a harmless source/referral choice, but never identity, history,

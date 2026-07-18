@@ -36,7 +36,7 @@ class CandidateFieldAnswer(BaseModel):
 
 
 class CandidateFieldRequest(BaseModel):
-    """One unresolved browser field bound to the evidence revision that exposed it."""
+    """One candidate field bound to the evidence revision that exposed it."""
 
     browser_revision: int = Field(ge=1, description="Current browser revision from runtime context")
     field_label: str = Field(
@@ -66,7 +66,7 @@ def make_candidate_field_tool() -> BaseTool:
         control_type: str,
         visible_options: list[str],
     ) -> str:
-        """Resolve exactly one unresolved candidate field through AnswerWriter.
+        """Resolve exactly one candidate field through AnswerWriter.
 
         Copy only current browser evidence into this request. Do not propose an
         answer. The runtime rejects stale, already-filled, disabled, or invalid

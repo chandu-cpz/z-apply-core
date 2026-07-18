@@ -129,7 +129,7 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
                     return (
                         "CANDIDATE DELEGATION ERROR: free-text AnswerWriter handoffs "
                         f"are forbidden. Call {CANDIDATE_FIELD_TOOL_NAME} with exactly "
-                        "one current unresolved field and no proposed answer."
+                        "one current candidate field and no proposed answer."
                     )
                 if call.get("name") != CANDIDATE_FIELD_TOOL_NAME:
                     continue

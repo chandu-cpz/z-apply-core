@@ -42,11 +42,6 @@ async def candidate_browser_violation(
             "CANDIDATE DELEGATION ERROR: the target is disabled and cannot accept "
             "an answer. Inspect the current form dependency instead."
         )
-    if control.has_value and not control.invalid:
-        return (
-            "CANDIDATE DELEGATION ERROR: the live target is already resolved. Do "
-            "not delegate or overwrite it; continue with an unresolved field."
-        )
     if request.current_value != control.value:
         return (
             "CANDIDATE DELEGATION ERROR: current_value does not match the live "
@@ -117,6 +112,21 @@ class CandidateFieldExecutor:
                 result,
                 tool_call_id,
                 "The browser field changed before its answer could be applied.",
+            )
+        current = await browser.inspect_control_state(request.target)
+        if current.value == answer.value and current.has_value and not current.invalid:
+            return _replace_result(
+                result,
+                ToolMessage(
+                    content=(
+                        "CANDIDATE_FIELD_CONFIRMED\n"
+                        f"{answer.model_dump_json()}\n"
+                        "The browser already contains this exact evidence-backed value. "
+                        "Do not rewrite or delegate it again."
+                    ),
+                    name="task",
+                    tool_call_id=tool_call_id,
+                ),
             )
         if request.control_type in {"checkbox", "radio"} and answer.value not in {
             "true",

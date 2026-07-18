@@ -80,7 +80,7 @@ async def test_free_text_answer_writer_handoff_is_corrected_to_typed_request() -
 
 
 @pytest.mark.asyncio
-async def test_already_resolved_target_is_rejected_before_answer_writer_runs() -> None:
+async def test_prefilled_target_can_be_reconciled_by_answer_writer() -> None:
     browser = SimpleNamespace(
         current_observation=BrowserObservation.create(
             revision=7,
@@ -93,25 +93,17 @@ async def test_already_resolved_target_is_rejected_before_answer_writer_runs() -
         ),
     )
     middleware = CandidateFieldMiddleware(browser)
+    call = _candidate_call()
+    call["args"]["current_value"] = "V"
     handler = AsyncMock(
-        side_effect=[
-            ModelResponse(result=[AIMessage(content="", tool_calls=[_candidate_call()])]),
-            ModelResponse(
-                result=[
-                    AIMessage(
-                        content="",
-                        tool_calls=[{"name": "browser_observe", "id": "observe-1", "args": {}}],
-                    )
-                ]
-            ),
-        ]
+        return_value=ModelResponse(result=[AIMessage(content="", tool_calls=[call])])
     )
 
     result = await middleware.awrap_model_call(_request(), handler)
 
-    assert result.result[0].tool_calls[0]["name"] == "browser_observe"
-    correction = handler.await_args_list[1].args[0].messages[-1]
-    assert "already resolved" in correction.content
+    assert result.result[0].tool_calls[0]["name"] == "task"
+    assert '"current_value": "V"' in result.result[0].tool_calls[0]["args"]["description"]
+    assert handler.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -125,6 +117,7 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
         ),
         inspect_control_state=AsyncMock(
             side_effect=[
+                BrowserControlState(),
                 BrowserControlState(),
                 BrowserControlState(value="LinkedIn", has_value=True),
             ]
@@ -203,6 +196,7 @@ async def test_human_required_outcome_requests_value_before_browser_mutation() -
         inspect_control_state=AsyncMock(
             side_effect=[
                 BrowserControlState(),
+                BrowserControlState(),
                 BrowserControlState(value="candidate@example.com", has_value=True),
             ]
         ),
@@ -264,7 +258,11 @@ async def test_combobox_value_must_survive_the_browser_mutation() -> None:
             evidence='combobox "Location (City)" [ref=e96]',
         ),
         inspect_control_state=AsyncMock(
-            side_effect=[BrowserControlState(), BrowserControlState()]
+            side_effect=[
+                BrowserControlState(),
+                BrowserControlState(),
+                BrowserControlState(),
+            ]
         ),
         call_tool_with_inline_snapshot=AsyncMock(return_value="changed: false"),
         observe=AsyncMock(return_value="BROWSER OBSERVATION revision: 8"),
@@ -326,7 +324,7 @@ async def test_repeated_candidate_violation_reports_the_rejected_browser_fact() 
         )
     )
 
-    with pytest.raises(ToolProtocolViolation, match="already resolved"):
+    with pytest.raises(ToolProtocolViolation, match="does not match"):
         await middleware.awrap_model_call(_request(), handler)
 
     assert handler.await_count == 2
