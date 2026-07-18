@@ -30,7 +30,6 @@ _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {
     "application_submitted",
     "ask_human",
     "request_submit_approval",
-    "remember_platform_lesson",
     "task",
 }
 _REPEATABLE_READ_TOOL_NAMES = frozenset({"browser_wait_for"})

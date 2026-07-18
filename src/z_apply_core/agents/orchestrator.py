@@ -221,7 +221,6 @@ async def run_orchestrator(
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
     platform_playbooks = PlatformPlaybooks()
-    platform_playbook = platform_playbooks.read_for_url(job_url)
     platform_memory_tools = (
         [
             make_platform_memory_tool(
@@ -245,7 +244,11 @@ async def run_orchestrator(
         system_prompt=load_prompt("orchestrator.md"),
         middleware=[
             *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
-            CapabilityContextMiddleware(active_browser),
+            CapabilityContextMiddleware(
+                active_browser,
+                platform_playbooks=platform_playbooks,
+                job_url=job_url,
+            ),
             SafeToolBatchMiddleware(),
             OrchestratorActionOrderMiddleware(
                 active_browser
@@ -306,7 +309,6 @@ async def run_orchestrator(
         snapshot=snapshot,
         resume_path=resume_path,
         run_id=run_id,
-        platform_playbook=platform_playbook,
     )
     try:
         await run_persistent_goal(
@@ -341,7 +343,6 @@ def _task_prompt(
     snapshot: str,
     resume_path: str,
     run_id: str,
-    platform_playbook: str,
 ) -> str:
     captcha_path = _captcha_path(run_id)
     return f"""Complete this job application in the already-open browser.
@@ -349,28 +350,6 @@ def _task_prompt(
 Job URL: {job_url}
 Configured resume: {resume_path}
 CAPTCHA artifact path: {captcha_path}
-
-HISTORICAL PLATFORM PLAYBOOK
-This is evidence-backed memory from earlier runs, not current browser truth.
-Use it to choose a faster likely path, but discard any lesson that conflicts
-with current ARIA/DOM evidence. Never reuse old refs, values, or completion state.
-
-{platform_playbook}
-END HISTORICAL PLATFORM PLAYBOOK
-
-Simplify policy:
-The Simplify addon is natively loaded in the persistent browser. Trigger its
-explicit Autofill action once on every newly rendered editable application-form
-step, before direct resume/fact filling. A job description, login page, cookie
-banner, landing page, or confirmation page is not a form step; reach visible
-editable application controls first. A button-only choice dialog is not a form
-step: require an actual textbox, combobox, checkbox, radio, or file input before
-Autofill. A multi-step form may render a new step
-without changing the URL. Never click the generic Simplify panel/header,
-Profile, job tracker, referral, tailoring, or keyword controls as Autofill, and
-never trigger twice on the same unchanged controls. Observe the actual form
-after every attempt and trust only visible field values. Unsupported sites and
-steps are normal; after one bounded inspection, continue direct filling.
 
 Objective:
 {task}

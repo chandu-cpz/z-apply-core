@@ -10,6 +10,7 @@ from langchain_core.tools import BaseTool
 
 from z_apply_core.browser_observation import BrowserCapabilities
 from z_apply_core.browser_session import BrowserSession
+from z_apply_core.memory.platform_playbooks import PlatformPlaybooks
 
 CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
 _READ_BROWSER_TOOLS = frozenset({"browser_observe", "browser_snapshot", "browser_find"})
@@ -45,9 +46,17 @@ class CapabilityContextMiddleware(
 ):
     """Narrow model-visible actions using trusted compositional browser facts."""
 
-    def __init__(self, browser: BrowserSession | None) -> None:
+    def __init__(
+        self,
+        browser: BrowserSession | None,
+        *,
+        platform_playbooks: PlatformPlaybooks | None = None,
+        job_url: str = "",
+    ) -> None:
         super().__init__()
         self._browser = browser
+        self._platform_playbooks = platform_playbooks
+        self._job_url = job_url
 
     async def awrap_model_call(
         self,
@@ -88,6 +97,13 @@ class CapabilityContextMiddleware(
             if pending_upload_target
             else ""
         )
+        platform_context = ""
+        if self._platform_playbooks is not None and self._job_url:
+            platform_context = (
+                "\nCURRENT APPLICABLE PLATFORM PLAYBOOK\n"
+                f"{self._platform_playbooks.read_for_url(self._job_url)}\n"
+                "END CURRENT APPLICABLE PLATFORM PLAYBOOK\n"
+            )
         context = HumanMessage(
             name=CAPABILITY_CONTEXT_SOURCE,
             additional_kwargs={"lc_source": CAPABILITY_CONTEXT_SOURCE},
@@ -99,6 +115,7 @@ class CapabilityContextMiddleware(
                 f"{upload_context}"
                 "Use current browser evidence and choose one legal native action. "
                 "These are compositional structural facts, not a workflow phase."
+                f"{platform_context}"
                 f"{current_evidence}"
             ),
         )

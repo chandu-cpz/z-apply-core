@@ -35,19 +35,26 @@ class PlatformPlaybookTests(unittest.TestCase):
 
             first = playbooks.remember(
                 job_url="https://other.myworkdayjobs.com/job/1",
-                lesson="Use the atomic upload action on the resume-only step.",
+                situation="A required resume upload is visible.",
+                action="Use the atomic upload action on the upload control.",
+                expected_outcome="The attached file is visible on the employer form.",
+                recovery="Inspect fresh evidence and retry the current upload control.",
                 receipt=receipt,
             )
             second = playbooks.remember(
                 job_url="https://other.myworkdayjobs.com/job/2",
-                lesson="Use the atomic upload action on the resume-only step.",
+                situation="A required resume upload is visible.",
+                action="Use the atomic upload action on the upload control.",
+                expected_outcome="The attached file is visible on the employer form.",
+                recovery="Inspect fresh evidence and retry the current upload control.",
                 receipt=receipt,
             )
 
             rendered = playbooks.read_for_url("https://third.myworkdayjobs.com/job/3")
-            self.assertIn("Stored one verified lesson", first)
-            self.assertEqual(second, "Platform lesson was already known.")
-            self.assertEqual(rendered.count("- Lesson:"), 1)
+            self.assertIn("Stored one evidence-backed procedure", first)
+            self.assertIn("Added independent browser evidence", second)
+            self.assertEqual(rendered.count("- Situation:"), 1)
+            self.assertEqual(rendered.count("- Browser evidence:"), 2)
             self.assertNotIn("e10", rendered)
             self.assertNotIn("resume.pdf", rendered)
 
@@ -67,10 +74,13 @@ class PlatformPlaybookTests(unittest.TestCase):
                 changed=False,
             )
 
-            with self.assertRaisesRegex(ToolException, "successful state change"):
+            with self.assertRaisesRegex(ToolException, "observed state change"):
                 playbooks.remember(
                     job_url="https://example.com/job",
-                    lesson="Click the control twice.",
+                    situation="A consent control is visible.",
+                    action="Activate the consent control.",
+                    expected_outcome="The control is selected.",
+                    recovery="Inspect fresh evidence.",
                     receipt=receipt,
                 )
 

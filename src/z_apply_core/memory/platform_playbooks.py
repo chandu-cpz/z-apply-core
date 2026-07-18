@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
@@ -13,7 +14,7 @@ from z_apply_core.browser_session import BrowserSession
 CORE_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PLAYBOOK_ROOT = CORE_ROOT / ".z-apply" / "platform-memory"
 _MAX_ACTIVE_PLAYBOOK_CHARS = 6_000
-_MAX_LESSON_CHARS = 500
+_MAX_EPISODE_PART_CHARS = 400
 
 
 class PlatformPlaybooks:
@@ -26,28 +27,43 @@ class PlatformPlaybooks:
     def read_for_url(self, url: str) -> str:
         path = self.path_for_url(url)
         if not path.is_file():
-            return "No verified platform lessons have been recorded yet."
+            return "No evidence-backed platform procedures have been recorded yet."
         content = path.read_text(encoding="utf-8")
         if len(content) <= _MAX_ACTIVE_PLAYBOOK_CHARS:
             return content
         return "# Earlier lessons omitted\n\n" + content[-_MAX_ACTIVE_PLAYBOOK_CHARS:]
 
-    def remember(self, *, job_url: str, lesson: str, receipt: ActionReceipt | None) -> str:
-        normalized = " ".join(lesson.split())
+    def remember(
+        self,
+        *,
+        job_url: str,
+        situation: str,
+        action: str,
+        expected_outcome: str,
+        recovery: str,
+        receipt: ActionReceipt | None,
+    ) -> str:
+        episode = {
+            "Situation": _normalize_episode_part(situation),
+            "Action": _normalize_episode_part(action),
+            "Expected outcome": _normalize_episode_part(expected_outcome),
+            "Recovery": _normalize_episode_part(recovery),
+        }
         if receipt is None or not receipt.changed:
             raise ToolException(
-                "A platform lesson requires the latest typed browser action receipt "
-                "to prove a successful state change."
+                "A platform episode requires the latest typed browser action receipt "
+                "to prove an observed state change."
             )
-        if not normalized or len(normalized) > _MAX_LESSON_CHARS:
-            raise ToolException(
-                f"Platform lesson must be 1-{_MAX_LESSON_CHARS} characters."
-            )
-        if _contains_private_or_ephemeral_data(normalized):
-            raise ToolException(
-                "Platform lessons cannot contain secrets, candidate facts, file paths, "
-                "or ephemeral browser references."
-            )
+        for label, value in episode.items():
+            if not value or len(value) > _MAX_EPISODE_PART_CHARS:
+                raise ToolException(
+                    f"{label} must be 1-{_MAX_EPISODE_PART_CHARS} characters."
+                )
+            if _contains_private_or_ephemeral_data(value):
+                raise ToolException(
+                    "Platform episodes cannot contain secrets, candidate facts, file "
+                    "paths, or ephemeral browser references."
+                )
         expected_family = site_family(job_url)
         observed_family = site_family(receipt.after.url)
         if not expected_family or expected_family != observed_family:
@@ -61,23 +77,49 @@ class PlatformPlaybooks:
             f"{receipt.tool} changed browser revision "
             f"{receipt.before_revision} → {receipt.after.revision}"
         )
+        procedure_key = hashlib.sha256(
+            "\n".join(episode.values()).encode()
+        ).hexdigest()[:12]
+        evidence_key = hashlib.sha256(
+            (
+                f"{job_url}\n{receipt.tool}\n{receipt.before_revision}\n"
+                f"{receipt.after.revision}\n{receipt.after.signature}"
+            ).encode()
+        ).hexdigest()[:12]
+        heading = f"## Procedure {procedure_key}"
+        evidence_line = f"- Browser evidence: {evidence}. <!-- {evidence_key} -->"
         entry = (
-            f"\n## {datetime.now(UTC).isoformat(timespec='seconds')}\n\n"
-            f"- Lesson: {normalized}\n"
-            f"- Verified evidence: {evidence}.\n"
+            f"\n{heading}\n\n"
+            f"- Recorded: {datetime.now(UTC).isoformat(timespec='seconds')}\n"
+            + "".join(f"- {label}: {value}\n" for label, value in episode.items())
+            + f"{evidence_line}\n"
         )
         with self._lock:
             existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-            if f"- Lesson: {normalized}\n" in existing:
-                return "Platform lesson was already known."
+            if f"<!-- {evidence_key} -->" in existing:
+                return "This browser transition was already recorded."
+            if heading in existing:
+                next_heading = existing.find("\n## ", existing.index(heading) + len(heading))
+                insertion = len(existing) if next_heading < 0 else next_heading
+                updated = (
+                    existing[:insertion].rstrip()
+                    + "\n"
+                    + evidence_line
+                    + "\n"
+                    + existing[insertion:].lstrip("\n")
+                )
+                path.write_text(updated, encoding="utf-8")
+                return "Added independent browser evidence to a known procedure."
             if not existing:
                 existing = (
                     f"# {expected_family} operational playbook\n\n"
-                    "Historical hints only. Current ARIA/DOM evidence always wins. "
-                    "Never reuse browser refs, field values, or submission state.\n"
+                    "Evidence-backed procedures from earlier runs. Current ARIA/DOM "
+                    "evidence always wins. Never reuse browser refs, field values, or "
+                    "submission state. Prefer procedures with repeated browser "
+                    "evidence.\n"
                 )
             path.write_text(existing.rstrip() + "\n" + entry, encoding="utf-8")
-        return f"Stored one verified lesson in {path.name}."
+        return f"Stored one evidence-backed procedure in {path.name}."
 
     def path_for_url(self, url: str) -> Path:
         family = site_family(url)
@@ -94,16 +136,24 @@ def make_platform_memory_tool(
     browser: BrowserSession,
 ) -> BaseTool:
     @tool
-    async def remember_platform_lesson(lesson: str) -> str:
-        """Persist one reusable platform lesson proved by the latest successful action.
+    async def remember_platform_lesson(
+        situation: str,
+        action: str,
+        expected_outcome: str,
+        recovery: str,
+    ) -> str:
+        """Record one reusable procedure bound to the latest changed browser receipt.
 
-        Use sparingly after discovering a durable interaction pattern that can make a
-        later application faster. Never store refs, values, secrets, paths, or candidate
-        facts. Current browser evidence always overrides historical lessons.
+        Describe the structural situation, reusable action, expected observable
+        outcome, and safe recovery. Never store refs, values, secrets, paths, candidate
+        facts, or submission state. Current browser evidence always wins.
         """
         return playbooks.remember(
             job_url=job_url,
-            lesson=lesson,
+            situation=situation,
+            action=action,
+            expected_outcome=expected_outcome,
+            recovery=recovery,
             receipt=browser.last_action_receipt,
         )
 
@@ -133,3 +183,7 @@ def _contains_private_or_ephemeral_data(lesson: str) -> bool:
         "@",
     )
     return any(marker in lowered for marker in forbidden)
+
+
+def _normalize_episode_part(value: str) -> str:
+    return " ".join(value.split())

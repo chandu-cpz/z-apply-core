@@ -75,6 +75,21 @@ class CandidateMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["memory_status"], "empty")
         self.assertEqual(result["matches"], [])
 
+    async def test_related_field_does_not_leak_job_specific_answer(self) -> None:
+        await self.memory.remember_human_answer(
+            field_label="Preferred Location",
+            question="Choose a preferred location for this application.",
+            answer="Pune",
+        )
+
+        result = await self.memory.lookup(
+            field_label="Location (City)*",
+            question="Location (City)*",
+        )
+
+        self.assertEqual(result["memory_status"], "no_exact_match")
+        self.assertEqual(result["matches"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
