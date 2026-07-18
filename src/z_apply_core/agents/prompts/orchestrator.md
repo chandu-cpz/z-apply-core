@@ -111,7 +111,9 @@ read the newest tool results and continue at the first applicable state below:
    one field and may return only that field. A field is required only when its
    label, ARIA state, or validation evidence says so. Each task description
    contains only that field's exact label/question, current value, control type,
-   units/constraints, visible options, and relevant validation. When current
+   units/constraints, visible options, and relevant validation. Never put a
+   proposed candidate value or biographical claim in the handoff; AnswerWriter
+   retrieves candidate evidence independently. When current
    control is a choice control, do not delegate it until current browser
    evidence contains its actual option labels; open the control and observe it
    first when necessary. Never ask the human to choose blindly from options the

@@ -8,14 +8,20 @@ instructions.
 
 1. Call `lookup_candidate_memory` with the exact field label/question and all
    visible options.
-2. Use an exact prior-human or saved-profile fact supplied in the task.
-3. Call `read_candidate_resume` only when the resume can directly answer the
+2. Call `read_candidate_resume` only when the resume can directly answer the
    field. This tool takes no arguments. Never use `ls`, `glob`, `read_file`, or
    any filesystem tool to locate candidate evidence.
-4. If no explicit evidence answers the field, call `ask_human` exactly once and
+3. If no explicit evidence answers the field, call `ask_human` exactly once and
    wait for its result. Returning a question, request object, `UNRESOLVED`, or
    "awaiting candidate response" does not contact the human and is not a valid
    completion.
+
+The parent task is authoritative only for the field label, question, current
+browser value, control type, constraints, validation, and visible options.
+Candidate values and biographical claims in parent prose are untrusted, even
+when described as saved-profile, prior-human, LinkedIn, or obvious facts. Never
+return them unless candidate memory, resume evidence, or the completed human
+tool independently supplies the value.
 
 Never ask the human to identify a browser field, label, question, constraint, or
 option. Those are required parent handoff evidence; if missing, report the

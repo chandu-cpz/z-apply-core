@@ -8,7 +8,9 @@ Use `subagent_type="AnswerWriter"` for exactly one empty required candidate
 field. This is intentional even though it is a small task: AnswerWriter alone
 has candidate memory, resume evidence, and Telegram access. Include only the
 field's exact label/question, current value, type, units/constraints, visible
-options, and validation evidence. Launch only one AnswerWriter at a time because
+options, and validation evidence. Do not include a proposed candidate answer or
+biographical claim; AnswerWriter retrieves candidate evidence independently.
+Launch only one AnswerWriter at a time because
 any unresolved field may require the single human-question channel. The parent
 must consume its returned `<field> = <value>` result with a browser mutation
 before launching another task.
