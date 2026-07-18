@@ -22,7 +22,12 @@ def response(name: str, args: dict[str, object]) -> ModelResponse:
 def answer_result(
     *, label: str = "Name", target: str = "e1", value: str = "Chandrakanth"
 ) -> Command:
-    answer = CandidateFieldAnswer(field_label=label, target=target, value=value)
+    answer = CandidateFieldAnswer(
+        outcome="resolved",
+        field_label=label,
+        target=target,
+        value=value,
+    )
     return Command(
         update={"messages": [ToolMessage(answer.model_dump_json(), tool_call_id="task")]}
     )

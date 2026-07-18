@@ -6,7 +6,7 @@ from typing import Literal, cast
 from deepagents import SubAgent
 from langchain.agents.structured_output import ToolStrategy
 from langchain_core.tools import BaseTool, ToolException, tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from z_apply_core.agents.prompts import load_prompt
 
@@ -14,13 +14,25 @@ CANDIDATE_FIELD_TOOL_NAME = "resolve_candidate_field"
 
 
 class CandidateFieldAnswer(BaseModel):
-    """One evidence-backed value bound to its current browser control."""
+    """One browser-bound candidate resolution or explicit human handoff."""
 
+    outcome: Literal["resolved", "needs_human"]
     field_label: str = Field(min_length=1, description="Exact current field label")
     target: str = Field(
         pattern=r"^e\d+$", description="Exact current browser target ref from the task"
     )
-    value: str = Field(min_length=1, description="Exact evidence-backed field value")
+    value: str = Field(
+        default="",
+        description="Exact evidence-backed field value; empty only when human input is required",
+    )
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> CandidateFieldAnswer:
+        if self.outcome == "resolved" and not self.value:
+            raise ValueError("resolved candidate fields require a non-empty value")
+        if self.outcome == "needs_human" and self.value:
+            raise ValueError("human-required candidate fields cannot carry a value")
+        return self
 
 
 class CandidateFieldRequest(BaseModel):
@@ -102,8 +114,8 @@ def build_answer_writer(
             "name": "AnswerWriter",
             "description": (
                 "Resolve exactly one application field from explicit candidate, saved-profile, "
-                "or prior-human evidence. When evidence is absent, ask the human through the "
-                "provided tool and wait for that answer before returning."
+                "or prior-human evidence. Return a typed human-required outcome when evidence "
+                "is absent; the runtime owns the human request."
             ),
             "system_prompt": (
                 f"{load_prompt('answer_writer.md')}\n\n"

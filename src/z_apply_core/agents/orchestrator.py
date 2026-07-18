@@ -212,9 +212,6 @@ async def run_orchestrator(
     orchestrator_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"human_challenge"})
     )
-    answer_writer_human_guard = HumanEscalationGuardMiddleware(
-        allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"}),
-    )
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
@@ -253,7 +250,11 @@ async def run_orchestrator(
             NoProgressGuardMiddleware(
                 on_no_progress=router_middleware.reject_active_response,
             ),
-            CandidateFieldMiddleware(active_browser, candidate_memory),
+            CandidateFieldMiddleware(
+                active_browser,
+                candidate_memory,
+                next((tool for tool in human_tools if tool.name == "ask_human"), None),
+            ),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
                 browser=active_browser,
@@ -279,8 +280,7 @@ async def run_orchestrator(
             browser_tools,
             fallback_model=selection.llm,
             candidate_resume=_candidate_resume_context(),
-            answer_writer_human_tools=[tool for tool in human_tools if tool.name == "ask_human"],
-            answer_writer_middleware=[answer_writer_human_guard],
+            answer_writer_human_tools=[],
             authentication_tools=[
                 *authentication_tools,
                 *manual_auth_tools,

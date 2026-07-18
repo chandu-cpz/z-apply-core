@@ -142,6 +142,7 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
     middleware = CandidateFieldMiddleware(browser, candidate_memory)
     normalized = middleware._normalize_call(_candidate_call())
     answer = CandidateFieldAnswer(
+        outcome="resolved",
         field_label="Where did you hear about us?",
         target="e96",
         value="LinkedIn",
@@ -189,6 +190,64 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
 
 
 @pytest.mark.asyncio
+async def test_human_required_outcome_requests_value_before_browser_mutation() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "Email" [ref=e96]',
+        ),
+        inspect_control_state=AsyncMock(return_value=BrowserControlState()),
+        call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
+    )
+    human_tool = SimpleNamespace(
+        ainvoke=AsyncMock(return_value={"human_answer": "candidate@example.com"})
+    )
+    middleware = CandidateFieldMiddleware(
+        browser,
+        human_tool=human_tool,  # type: ignore[arg-type]
+    )
+    normalized = middleware._normalize_call(_candidate_call())
+    answer = CandidateFieldAnswer(
+        outcome="needs_human",
+        field_label="Where did you hear about us?",
+        target="e96",
+    )
+
+    result = await middleware.awrap_tool_call(
+        ToolCallRequest(tool_call=normalized, tool=None, state={}, runtime=object()),  # type: ignore[arg-type]
+        AsyncMock(
+            return_value=Command(
+                update={
+                    "messages": [
+                        ToolMessage(answer.model_dump_json(), tool_call_id="candidate-1")
+                    ]
+                }
+            )
+        ),
+    )
+
+    human_tool.ainvoke.assert_awaited_once()
+    browser.call_tool_with_inline_snapshot.assert_awaited_once_with(
+        "browser_fill_form",
+        {
+            "fields": [
+                {
+                    "name": "Where did you hear about us?",
+                    "target": "e96",
+                    "type": "textbox",
+                    "value": "candidate@example.com",
+                }
+            ]
+        },
+    )
+    message = result.update["messages"][0]
+    assert "needs_human" not in message.text
+    assert "candidate@example.com" in message.text
+
+
+@pytest.mark.asyncio
 async def test_repeated_candidate_violation_reports_the_rejected_browser_fact() -> None:
     browser = SimpleNamespace(
         current_observation=BrowserObservation.create(
@@ -230,6 +289,7 @@ async def test_atomic_candidate_failure_returns_fresh_evidence_for_recovery() ->
     middleware = CandidateFieldMiddleware(browser)
     normalized = middleware._normalize_call(_candidate_call())
     answer = CandidateFieldAnswer(
+        outcome="resolved",
         field_label="Where did you hear about us?",
         target="e96",
         value="LinkedIn",

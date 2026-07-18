@@ -10,7 +10,8 @@ application flow.
    `empty`, or `unavailable` supplies no candidate value.
 2. If exact memory did not answer the field, consult the prepared candidate
    resume evidence in this prompt.
-3. Otherwise call `ask_human` once and wait for its completed result.
+3. Otherwise return `outcome=needs_human` with an empty value. The runtime
+   contacts the human and applies the completed answer.
 
 ## Evidence rules
 
@@ -31,16 +32,15 @@ application flow.
 
 ## Human fallback
 
-Call `ask_human` with reason `missing_candidate_fact`, the exact field label,
-current field evidence, and every visible option. Ask about this field only.
-Returning prose such as “awaiting an answer” does not contact the human.
+Use `outcome=needs_human` only when neither exact memory nor prepared resume
+evidence answers this field. Never encode a human request, status, sentinel, or
+placeholder inside `value`.
 
 A completed human answer is evidence for this task. A delegated choice such as
 “anything” is valid only for a harmless source/referral preference with visible
 options. It never applies to identity, history, authorization, compensation,
 availability, dates, demographics, legal attestations, or consent.
 
-Return only the configured structured response: exact field label, exact current
-target ref, and exact supported value. If the label, target, constraints, or
-choice options needed to answer are absent, report the incomplete handoff. Never
-return a placeholder or plausible guess.
+Return only the configured structured response: `outcome`, exact field label,
+exact current target ref, and either an exact supported value or an empty value
+for `needs_human`. Never return a placeholder or plausible guess.

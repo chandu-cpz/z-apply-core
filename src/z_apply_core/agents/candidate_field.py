@@ -13,6 +13,7 @@ from langchain.agents.middleware.types import (
     ToolCallRequest,
 )
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.types import Command
 from pydantic import ValidationError
 
@@ -38,11 +39,12 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
         self,
         browser: BrowserSession | None,
         candidate_memory: CandidateMemory | None = None,
+        human_tool: BaseTool | None = None,
     ) -> None:
         super().__init__()
         self._browser = browser
         self._candidate_memory = candidate_memory
-        self._executor = CandidateFieldExecutor(browser)
+        self._executor = CandidateFieldExecutor(browser, human_tool)
         self._requests: dict[str, CandidateFieldRequest] = {}
 
     async def awrap_model_call(

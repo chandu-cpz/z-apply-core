@@ -4,6 +4,7 @@ from typing import Any
 
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool
 from langgraph.types import Command
 
 from z_apply_core.agents.specialists.answer_writer import (
@@ -57,8 +58,13 @@ async def candidate_browser_violation(
 class CandidateFieldExecutor:
     """Apply one AnswerWriter result or return recoverable browser evidence."""
 
-    def __init__(self, browser: BrowserSession | None) -> None:
+    def __init__(
+        self,
+        browser: BrowserSession | None,
+        human_tool: BaseTool | None = None,
+    ) -> None:
         self._browser = browser
+        self._human_tool = human_tool
 
     async def apply(
         self,
@@ -90,6 +96,15 @@ class CandidateFieldExecutor:
                 "AnswerWriter changed the browser-bound target or field label. Discard "
                 "the answer and retry from fresh evidence.",
             )
+        if answer.outcome == "needs_human":
+            answer = await self._resolve_human_answer(
+                result,
+                tool_call_id,
+                request,
+                answer,
+            )
+            if not isinstance(answer, CandidateFieldAnswer):
+                return answer
         browser = self._browser
         if browser is None:
             return _error(
@@ -148,6 +163,54 @@ class CandidateFieldExecutor:
                 tool_call_id=tool_call_id,
             ),
         )
+
+    async def _resolve_human_answer(
+        self,
+        result: ToolMessage | Command[Any],
+        tool_call_id: str,
+        request: CandidateFieldRequest,
+        answer: CandidateFieldAnswer,
+    ) -> CandidateFieldAnswer | ToolMessage | Command[Any]:
+        human_tool = self._human_tool
+        if human_tool is None:
+            return _error(
+                result,
+                tool_call_id,
+                "AnswerWriter requires a human value, but the human channel is unavailable. "
+                "The browser was not changed.",
+            )
+        try:
+            response = await human_tool.ainvoke(
+                {
+                    "question": (
+                        f"What exact value should be entered for {request.field_label}? "
+                        "Reply with only the field value."
+                    ),
+                    "reason": "missing_candidate_fact",
+                    "field_label": request.field_label,
+                    "field_evidence": request.model_dump_json(),
+                    "context": (
+                        "This required application field was not found in exact candidate "
+                        "memory or prepared resume evidence."
+                    ),
+                    "options": request.visible_options,
+                }
+            )
+        except Exception as exc:
+            return _error(
+                result,
+                tool_call_id,
+                "The human request failed without changing the browser: "
+                f"{type(exc).__name__}: {exc}",
+            )
+        value = response.get("human_answer") if isinstance(response, dict) else None
+        if not isinstance(value, str) or not value:
+            return _error(
+                result,
+                tool_call_id,
+                "The human channel returned no field value. The browser was not changed.",
+            )
+        return answer.model_copy(update={"outcome": "resolved", "value": value})
 
     async def _recoverable_error(
         self,
