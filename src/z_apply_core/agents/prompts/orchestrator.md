@@ -41,8 +41,8 @@ read the newest tool results and continue at the first applicable state below:
    normal browser controls for it. Never open a native file chooser. The only
    valid file-attachment operation is `browser_click_upload`, which resolves the
    visible upload control to its file input and attaches the file atomically.
-2. **AnswerWriter results just returned:** immediately apply every supported
-   `<field> = <value>` result to its known browser ref. This takes priority over
+2. **AnswerWriter results just returned:** immediately apply every structured
+   field result to the exact browser ref returned with it. This takes priority over
    snapshots, planning, and more delegation. Preserve the exact value: `0`
    remains `0`. Never merge values from different results. Use one
    `browser_fill_form` for compatible text/spinbutton fields and serialize
@@ -110,8 +110,9 @@ read the newest tool results and continue at the first applicable state below:
    two or more fields into one task description: AnswerWriter resolves exactly
    one field and may return only that field. A field is required only when its
    label, ARIA state, or validation evidence says so. Each task description
-   contains only that field's exact label/question, current value, control type,
-   units/constraints, visible options, and relevant validation. Never put a
+   contains only that field's exact label/question, exact current browser target
+   ref, current value, control type, units/constraints, visible options, and
+   relevant validation. Never put a
    proposed candidate value or biographical claim in the handoff; AnswerWriter
    retrieves candidate evidence independently. When current
    control is a choice control, do not delegate it until current browser

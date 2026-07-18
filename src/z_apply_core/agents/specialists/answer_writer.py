@@ -4,9 +4,21 @@ from collections.abc import Sequence
 from typing import cast
 
 from deepagents import SubAgent
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
 from z_apply_core.agents.prompts import load_prompt
+
+
+class CandidateFieldAnswer(BaseModel):
+    """One evidence-backed value bound to its current browser control."""
+
+    field_label: str = Field(min_length=1, description="Exact current field label")
+    target: str = Field(
+        pattern=r"^e\d+$", description="Exact current browser target ref from the task"
+    )
+    value: str = Field(min_length=1, description="Exact evidence-backed field value")
 
 
 def build_resume_evidence_tool(candidate_resume: str) -> BaseTool:
@@ -44,5 +56,6 @@ def build_answer_writer(
             ),
             "system_prompt": load_prompt("answer_writer.md"),
             "tools": tools,
+            "response_format": ToolStrategy(schema=CandidateFieldAnswer),
         },
     )

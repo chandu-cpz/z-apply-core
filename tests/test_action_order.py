@@ -9,12 +9,22 @@ from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
+from z_apply_core.agents.specialists.answer_writer import CandidateFieldAnswer
 from z_apply_core.browser_observation import BrowserCapabilities
 
 
 def response(name: str, args: dict[str, object]) -> ModelResponse:
     return ModelResponse(
         result=[AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])]
+    )
+
+
+def answer_result(
+    *, label: str = "Name", target: str = "e1", value: str = "Chandrakanth"
+) -> Command:
+    answer = CandidateFieldAnswer(field_label=label, target=target, value=value)
+    return Command(
+        update={"messages": [ToolMessage(answer.model_dump_json(), tool_call_id="task")]}
     )
 
 
@@ -39,9 +49,15 @@ class ActionOrderTests(unittest.IsolatedAsyncioTestCase):
         browser = SimpleNamespace(required_file_upload_pending=AsyncMock(return_value=False))
         middleware = OrchestratorActionOrderMiddleware(browser)
         first = response("task", {"subagent_type": "AnswerWriter", "description": "Name"})
-        repeat = response("task", {"subagent_type": "AnswerWriter", "description": "Name"})
-        fill = response("browser_fill_form", {"fields": []})
-        handler = AsyncMock(side_effect=[first, repeat, fill])
+        wrong_fill = response(
+            "browser_fill_form",
+            {"fields": [{"target": "e2", "value": "Kanamarlapudi"}]},
+        )
+        fill = response(
+            "browser_fill_form",
+            {"fields": [{"target": "e1", "value": "Chandrakanth"}]},
+        )
+        handler = AsyncMock(side_effect=[first, wrong_fill, fill])
         request = SimpleNamespace(messages=[], override=lambda **values: SimpleNamespace(**values))
 
         self.assertIs(await middleware.awrap_model_call(request, handler), first)
@@ -54,15 +70,7 @@ class ActionOrderTests(unittest.IsolatedAsyncioTestCase):
         )
         await middleware.awrap_tool_call(
             task_request,
-            AsyncMock(
-                return_value=Command(
-                    update={
-                        "messages": [
-                            ToolMessage("Name = Chandrakanth", tool_call_id="task")
-                        ]
-                    }
-                )
-            ),
+            AsyncMock(return_value=answer_result()),
         )
         self.assertIs(await middleware.awrap_model_call(request, handler), fill)
         self.assertEqual(handler.await_count, 3)
@@ -80,9 +88,7 @@ class ActionOrderTests(unittest.IsolatedAsyncioTestCase):
         await middleware.awrap_tool_call(
             task_request,
             AsyncMock(
-                return_value=Command(
-                    update={"messages": [ToolMessage("", tool_call_id="task")]}
-                )
+                return_value=Command(update={"messages": [ToolMessage("", tool_call_id="task")]})
             ),
         )
         next_task = response(
