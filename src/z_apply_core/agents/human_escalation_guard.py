@@ -88,8 +88,6 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
             return await handler(request)
 
         field_label = arguments.get("field_label", "")
-        arguments.get("field_evidence", "")
-
         if not isinstance(field_label, str) or not field_label.strip():
             _log.info("HumanEscalationGuard: rejecting ask_human with no field_label")
             return ToolMessage(

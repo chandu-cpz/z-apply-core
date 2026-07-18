@@ -10,8 +10,8 @@ application flow.
    If the handoff has only a label, use the label as the question.
 2. Use a memory value only when `memory_status=exact`. `no_exact_match`,
    `empty`, or `unavailable` supplies no candidate value.
-3. If exact memory did not answer the field and the resume can answer it
-   directly, call `read_candidate_resume`.
+3. If exact memory did not answer the field, consult the prepared candidate
+   resume evidence in this prompt.
 4. Otherwise call `ask_human` once and wait for its completed result.
 
 ## Evidence rules

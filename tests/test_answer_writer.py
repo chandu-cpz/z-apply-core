@@ -1,20 +1,17 @@
 from __future__ import annotations
 
-import asyncio
 import unittest
 
-from z_apply_core.agents.specialists.answer_writer import build_resume_evidence_tool
+from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 
 
-class ResumeEvidenceToolTests(unittest.TestCase):
-    def test_returns_prepared_resume_without_path_input(self) -> None:
+class AnswerWriterEvidenceTests(unittest.TestCase):
+    def test_resume_is_available_without_a_second_evidence_tool_call(self) -> None:
         resume = "# Candidate\n\nFamily name: V"
-        resume_tool = build_resume_evidence_tool(resume)
+        specialist = build_answer_writer(candidate_resume=resume)
 
-        result = asyncio.run(resume_tool.ainvoke({}))
-
-        self.assertEqual(result, resume)
-        self.assertEqual(resume_tool.name, "read_candidate_resume")
+        self.assertIn(resume, specialist["system_prompt"])
+        self.assertNotIn("read_candidate_resume", [tool.name for tool in specialist["tools"]])
 
 
 if __name__ == "__main__":

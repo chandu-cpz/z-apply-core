@@ -39,24 +39,15 @@ class HumanEscalationGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_candidate_question_requires_configured_evidence_tools(self) -> None:
         handler = AsyncMock()
         guard = HumanEscalationGuardMiddleware(
-            required_prior_tools=frozenset(
-                {"lookup_candidate_memory", "read_candidate_resume"}
-            )
+            required_prior_tools=frozenset({"lookup_candidate_memory"})
         )
         request = _request(
             {"reason": "missing_candidate_fact", "field_label": "Location (City)"}
         )
-        request.state["messages"] = [
-            ToolMessage(
-                content="no match",
-                name="lookup_candidate_memory",
-                tool_call_id="memory",
-            )
-        ]
 
         result = await guard.awrap_tool_call(request, handler)
 
-        self.assertIn("read_candidate_resume", result.text)
+        self.assertIn("lookup_candidate_memory", result.text)
         handler.assert_not_awaited()
 
     async def test_allows_concrete_human_challenge_without_field_label(self) -> None:

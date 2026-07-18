@@ -214,7 +214,7 @@ async def run_orchestrator(
     )
     answer_writer_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"}),
-        required_prior_tools=frozenset({"lookup_candidate_memory", "read_candidate_resume"}),
+        required_prior_tools=frozenset({"lookup_candidate_memory"}),
     )
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
