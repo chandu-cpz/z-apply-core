@@ -9,7 +9,7 @@ def _call(name: str, index: int, **args: object) -> dict[str, object]:
     return {"name": name, "args": args, "id": f"call-{index}", "type": "tool_call"}
 
 
-def test_parallelizes_only_answer_writer_tasks() -> None:
+def test_serializes_answer_writer_and_mixed_tool_batches() -> None:
     middleware = SafeToolBatchMiddleware()
     tasks = [
         _call("task", index, subagent_type="AnswerWriter", description=f"field {index}")
@@ -24,5 +24,5 @@ def test_parallelizes_only_answer_writer_tasks() -> None:
         )
     )
 
-    assert len(answer_batch.tool_calls) == 5
+    assert len(answer_batch.tool_calls) == 1
     assert len(mixed_batch.tool_calls) == 1

@@ -106,7 +106,7 @@ read the newest tool results and continue at the first applicable state below:
    same current row ref immediately. Do not ask AnswerWriter to verify page-owned
    controls such as consent or CAPTCHA.
 9. **Empty required candidate fields are visible:** delegate one AnswerWriter
-   task call per field, maximum eight calls in one assistant message. Never put
+   task for one field at a time. Never put
    two or more fields into one task description: AnswerWriter resolves exactly
    one field and may return only that field. A field is required only when its
    label, ARIA state, or validation evidence says so. Each task description
@@ -204,9 +204,9 @@ After authentication redirects away from an unfinished application, use
 `browser_navigate` with the original caller-supplied job URL to resume it. Do not
 reconstruct the objective by scraping or paginating a job-search page.
 
-AnswerWriter tasks are the only tool calls that may run in parallel. Browser
-tools, human tools, approval, and terminal tools are one at a time: act, read the
-result, then decide.
+All tools run one at a time: act, read the result, then decide. This includes
+AnswerWriter because any unresolved field may open the single human-question
+channel.
 
 ## Completion
 
