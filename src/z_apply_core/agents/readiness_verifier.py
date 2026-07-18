@@ -39,18 +39,18 @@ async def require_submission_readiness(
 ) -> ReadinessVerdict:
     """Require an independent native tool verdict before exposing approval."""
     snapshot = await browser.call_tool("browser_snapshot")
-    browser_readiness = await browser.inspect_form_readiness()
-    if browser_readiness.blockers:
-        blockers = tuple(blocker.summary for blocker in browser_readiness.blockers)
-        verdict = ReadinessVerdict(
+    form_blockers = await browser.inspect_form_blockers()
+    if form_blockers:
+        blockers = tuple(blocker.summary for blocker in form_blockers)
+        blocked_verdict = ReadinessVerdict(
             ready=False,
             evidence=(
                 "The live browser reports unresolved form constraints: " + "; ".join(blockers)
             ),
             visible_errors=blockers,
         )
-        await _emit_verdict(sink, verdict)
-        return verdict
+        await _emit_verdict(sink, blocked_verdict)
+        return blocked_verdict
 
     selection = await router.lease(tools=True, priority="balanced")
     verdict: ReadinessVerdict | None = None

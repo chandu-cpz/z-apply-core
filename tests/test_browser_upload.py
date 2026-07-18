@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
@@ -15,8 +14,13 @@ class BrowserUploadTests(unittest.TestCase):
         tab = MagicMock()
         tab.resolve_target = AsyncMock(return_value=SimpleNamespace(locator=trigger))
 
-        session = object.__new__(BrowserSession)
-        session._backend = SimpleNamespace(_ensure_tab=AsyncMock(return_value=tab))
+        session = BrowserSession(
+            None,
+            run_id="upload-test",
+            backend=SimpleNamespace(_ensure_tab=AsyncMock(return_value=tab)),
+            tools=[],
+            owns_backend=False,
+        )
         session.call_tool = AsyncMock(return_value="current application snapshot")
         return session, tab.resolve_target
 
@@ -89,12 +93,13 @@ class FileChooserGuardTests(unittest.IsolatedAsyncioTestCase):
             _ensure_tab=AsyncMock(return_value=tab),
             call_tool=AsyncMock(side_effect=call_tool),
         )
-        session = object.__new__(BrowserSession)
-        session._backend = backend
-        session._mutation_gate = None
-        session._lease = None
-        session._submission_guard_active = False
-        session._capture_workspace = Path("/tmp/file-chooser-guard")
+        session = BrowserSession(
+            None,
+            run_id="file-chooser-guard",
+            backend=backend,
+            tools=[],
+            owns_backend=False,
+        )
         session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
         with self.assertRaisesRegex(
@@ -114,12 +119,13 @@ class FileChooserGuardTests(unittest.IsolatedAsyncioTestCase):
             _ensure_tab=AsyncMock(return_value=tab),
             call_tool=AsyncMock(return_value="clicked"),
         )
-        session = object.__new__(BrowserSession)
-        session._backend = backend
-        session._mutation_gate = None
-        session._lease = None
-        session._submission_guard_active = False
-        session._capture_workspace = Path("/tmp/file-chooser-guard")
+        session = BrowserSession(
+            None,
+            run_id="file-chooser-guard",
+            backend=backend,
+            tools=[],
+            owns_backend=False,
+        )
         session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
 
         result = await session.call_tool("browser_click", {"target": "e7"})

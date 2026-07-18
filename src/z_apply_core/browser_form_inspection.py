@@ -1,13 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from playwright.async_api import Locator, Page
 
 from z_apply_core.browser_observation import BrowserCapabilities, BrowserControlState
-from z_apply_core.browser_readiness import (
-    BrowserFormReadiness,
-    FormControlBlocker,
-    SubmitControlState,
-)
 
 CONTROL_SELECTOR = (
     'input:not([type="hidden"]), select, textarea, [contenteditable="true"], [role="combobox"]'
@@ -22,6 +19,16 @@ STRONG_AUTH_INPUT_SELECTOR = (
     'input[type="password"], input[autocomplete="current-password"], '
     'input[autocomplete="new-password"], input[autocomplete="one-time-code"]'
 )
+
+
+@dataclass(frozen=True, slots=True)
+class FormControlBlocker:
+    control: str
+    reasons: tuple[str, ...]
+
+    @property
+    def summary(self) -> str:
+        return f"{self.control}: {', '.join(self.reasons)}"
 
 
 async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
@@ -66,7 +73,7 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
     )
 
 
-async def inspect_page_readiness(page: Page) -> BrowserFormReadiness:
+async def inspect_page_blockers(page: Page) -> tuple[FormControlBlocker, ...]:
     blockers: list[FormControlBlocker] = []
     for control in await _visible_enabled(page.locator(CONTROL_SELECTOR)):
         reasons: list[str] = []
@@ -85,27 +92,14 @@ async def inspect_page_readiness(page: Page) -> BrowserFormReadiness:
                 )
             )
 
-    submit_controls: list[SubmitControlState] = []
-    for control in await _visible(page.locator(SUBMIT_SELECTOR)):
-        submit_controls.append(
-            SubmitControlState(
-                control=await _control_name(control),
-                disabled=await _is_disabled(control),
-            )
-        )
-    return BrowserFormReadiness(
-        blockers=tuple(blockers),
-        submit_controls=tuple(submit_controls),
-    )
+    return tuple(blockers)
 
 
-async def inspect_control(page: Page, locator: Locator, target: str) -> BrowserControlState:
+async def inspect_control(page: Page, locator: Locator) -> BrowserControlState:
     value = await _control_value(locator)
     return BrowserControlState(
-        target=target,
         value=value,
         has_value=await _has_value(locator),
-        required=await _is_required(locator),
         invalid=await _is_invalid(page, locator),
         disabled=await _is_disabled(locator),
     )

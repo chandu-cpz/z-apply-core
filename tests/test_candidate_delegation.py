@@ -46,7 +46,7 @@ async def test_free_text_answer_writer_handoff_is_corrected_to_typed_request() -
             title="Apply",
             evidence='textbox "Type your response" [ref=e96]',
         ),
-        inspect_control_state=AsyncMock(return_value=BrowserControlState(target="e96")),
+        inspect_control_state=AsyncMock(return_value=BrowserControlState()),
     )
     middleware = CandidateFieldMiddleware(browser)
     responses = [
@@ -91,11 +91,7 @@ async def test_already_resolved_target_is_rejected_before_answer_writer_runs() -
             evidence='textbox "Last Name" [ref=e96]: V',
         ),
         inspect_control_state=AsyncMock(
-            return_value=BrowserControlState(
-                target="e96",
-                value="V",
-                has_value=True,
-            )
+            return_value=BrowserControlState(value="V", has_value=True)
         ),
     )
     middleware = CandidateFieldMiddleware(browser)
@@ -129,7 +125,7 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
             title="Apply",
             evidence='textbox "First Name" [ref=e96]',
         ),
-        inspect_control_state=AsyncMock(return_value=BrowserControlState(target="e96")),
+        inspect_control_state=AsyncMock(return_value=BrowserControlState()),
         call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
     )
     middleware = CandidateFieldMiddleware(browser)
@@ -183,7 +179,7 @@ async def test_atomic_candidate_failure_returns_fresh_evidence_for_recovery() ->
             title="Apply",
             evidence='textbox "First Name" [ref=e96]',
         ),
-        inspect_control_state=AsyncMock(return_value=BrowserControlState(target="e96")),
+        inspect_control_state=AsyncMock(return_value=BrowserControlState()),
         call_tool_with_inline_snapshot=AsyncMock(side_effect=RuntimeError("control detached")),
         observe=AsyncMock(return_value="BROWSER OBSERVATION revision: 8"),
     )

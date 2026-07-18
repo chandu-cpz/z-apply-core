@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -40,15 +39,14 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
             _ensure_tab=AsyncMock(return_value=tab),
             call_tool=AsyncMock(side_effect=call_backend),
         )
-        session = object.__new__(BrowserSession)
-        session._backend = backend
-        session.run_id = "guard-test"
-        session._capture_workspace = Path("/tmp/guard-test")
-        session._submission_guard_active = False
-        session._submission_capability = None
+        session = BrowserSession(
+            None,
+            run_id="guard-test",
+            backend=backend,
+            tools=[],
+            owns_backend=False,
+        )
         session._last_snapshot = "review state"
-        session._last_observation = None
-        session._browser_revision = 0
         session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
         session._classify_submit_control = AsyncMock(  # type: ignore[method-assign]
             side_effect=lambda arguments: (
@@ -60,7 +58,7 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         return session, backend.call_tool
 
     async def _approve(self, session: BrowserSession, target: str = "e10") -> None:
-        await session.prepare_submission_review(target, "Reviewed candidate values")
+        await session.prepare_submission_review(target)
         session.set_submit_approval(True)
 
     async def test_submit_control_is_blocked_before_browser_mutation(self) -> None:
@@ -107,15 +105,14 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
             await session.call_tool("browser_click", {"target": "e10"})
 
     async def test_reversible_click_does_not_consume_submit_approval(self) -> None:
-        session, _ = self._session(is_submit=False, submit_targets={"e10"})
+        session, call_tool = self._session(is_submit=False, submit_targets={"e10"})
         session.activate_submission_guard()
         await self._approve(session)
 
         await session.call_tool("browser_click", {"target": "e5"})
+        await session.call_tool("browser_click", {"target": "e10"})
 
-        capability = session.submission_capability
-        self.assertIsNotNone(capability)
-        self.assertFalse(capability.consumed if capability is not None else True)
+        self.assertEqual(call_tool.await_count, 3)
 
     async def test_structural_search_submit_is_not_treated_as_final_application(self) -> None:
         session, call_tool = self._session(is_submit=True)
@@ -158,7 +155,6 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_tool.await_count, 1)
         self.assertEqual(call_tool.await_args_list[0].args[0], "browser_snapshot")
         self.assertIn("review state", evidence)
-        self.assertIsNone(session.submission_capability)
 
     async def test_auth_submit_classifies_pointer_interception_as_recoverable(self) -> None:
         session, call_tool = self._session(is_submit=True)
@@ -192,7 +188,9 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(BrowserToolExecutionError, "was revoked"):
             await session.call_tool("browser_click", {"target": "e10"})
 
-        self.assertIsNone(session.submission_capability)
+        with self.assertRaisesRegex(BrowserToolExecutionError, "submission is locked"):
+            await session.call_tool("browser_click", {"target": "e10"})
+        self.assertEqual(call_tool.await_count, 1)
 
     async def test_approval_rejects_a_different_submit_target(self) -> None:
         session, call_tool = self._session(

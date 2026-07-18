@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -18,24 +17,21 @@ class BrowserMutationProgressTests(unittest.IsolatedAsyncioTestCase):
             call_tool=call_tool,
             _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
         )
-        session = object.__new__(BrowserSession)
-        session._backend = backend
-        session.run_id = "mutation-progress"
-        session._capture_workspace = Path("/tmp/mutation-progress")
-        session._submission_guard_active = False
-        session._approved_submissions = 0
+        session = BrowserSession(
+            None,
+            run_id="mutation-progress",
+            backend=backend,
+            tools=[],
+            owns_backend=False,
+        )
         session._last_snapshot = "same snapshot"
-        session._last_mutation_signature = ""
-        session._last_mutation_made_progress = True
         session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
         return session, call_tool
 
     async def test_unchanged_mutation_evidence_blocks_identical_replay(self) -> None:
         session, call_tool = self._session()
 
-        receipt = await session.call_tool_with_inline_snapshot(
-            "browser_click", {"target": "e6"}
-        )
+        receipt = await session.call_tool_with_inline_snapshot("browser_click", {"target": "e6"})
         self.assertIn("BROWSER ACTION RECEIPT", receipt)
         self.assertIn("before_revision: 1", receipt)
         self.assertIn("after_revision: 1", receipt)

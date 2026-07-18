@@ -9,10 +9,8 @@ from typing import Any
 class BrowserControlState:
     """Exact structural state of one browser-resolved form target."""
 
-    target: str
     value: str = ""
     has_value: bool = False
-    required: bool = False
     invalid: bool = False
     disabled: bool = False
 
@@ -171,16 +169,3 @@ class ActionReceipt:
             f"executor_result: {self.result or '(no separate result)'}\n"
             f"{self.after.compact_render()}"
         )
-
-
-@dataclass(slots=True)
-class SubmissionCapability:
-    """One human authorization bound to an exact reviewed browser state."""
-
-    run_id: str
-    browser_revision: int
-    page_signature: str
-    target: str
-    review_digest: str
-    approved: bool = False
-    consumed: bool = False

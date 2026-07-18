@@ -147,7 +147,6 @@ async def run_orchestrator(
             if verdict.ready:
                 await publisher.browser.prepare_submission_review(
                     submission_target,
-                    final_review,
                 )
             else:
                 publisher.browser.set_submit_approval(False)
