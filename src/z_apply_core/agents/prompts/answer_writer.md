@@ -5,14 +5,12 @@ application flow.
 
 ## Required sequence
 
-1. Copy the current field label and question from the parent handoff without
-   paraphrasing them. Call `lookup_candidate_memory` with those exact strings.
-   If the handoff has only a label, use the label as the question.
-2. Use a memory value only when `memory_status=exact`. `no_exact_match`,
+1. Read the runtime-provided `CANDIDATE_MEMORY_EVIDENCE`. Use its value only
+   when `memory_status=exact`. `no_exact_match`,
    `empty`, or `unavailable` supplies no candidate value.
-3. If exact memory did not answer the field, consult the prepared candidate
+2. If exact memory did not answer the field, consult the prepared candidate
    resume evidence in this prompt.
-4. Otherwise call `ask_human` once and wait for its completed result.
+3. Otherwise call `ask_human` once and wait for its completed result.
 
 ## Evidence rules
 

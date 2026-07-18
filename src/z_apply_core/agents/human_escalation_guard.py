@@ -32,11 +32,9 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
         _legacy_progress: object | None = None,
         *,
         allowed_reasons: frozenset[str] | None = None,
-        required_prior_tools: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__()
         self._allowed_reasons = allowed_reasons or _VALID_REASONS
-        self._required_prior_tools = required_prior_tools
 
     async def awrap_tool_call(
         self,
@@ -94,23 +92,6 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
                 content=(
                     "Human escalation denied: no specific field identified. "
                     "Provide field_label naming the exact required field(s)."
-                ),
-                name="ask_human",
-                tool_call_id=str(request.tool_call.get("id", "")),
-            )
-
-        completed_tools = {
-            message.name
-            for message in request.state.get("messages", [])
-            if isinstance(message, ToolMessage) and message.name
-        }
-        missing_tools = self._required_prior_tools - completed_tools
-        if missing_tools:
-            required = ", ".join(sorted(missing_tools))
-            return ToolMessage(
-                content=(
-                    "Human escalation denied: candidate evidence is not exhausted. "
-                    f"Complete these evidence tools before asking the human: {required}."
                 ),
                 name="ask_human",
                 tool_call_id=str(request.tool_call.get("id", "")),

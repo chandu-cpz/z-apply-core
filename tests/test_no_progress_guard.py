@@ -174,8 +174,8 @@ async def test_identical_successful_read_is_not_executed_twice() -> None:
     middleware = NoProgressGuardMiddleware()
     request = SimpleNamespace(
         tool_call={
-            "name": "lookup_candidate_memory",
-            "args": {"field_label": "Current Salary", "question": "Current Salary"},
+            "name": "browser_snapshot",
+            "args": {},
             "id": "call-1",
         }
     )
@@ -185,8 +185,8 @@ async def test_identical_successful_read_is_not_executed_twice() -> None:
         nonlocal executions
         executions += 1
         return ToolMessage(
-            content='{"memory_status":"exact","answer":"600000"}',
-            name="lookup_candidate_memory",
+            content="current browser evidence",
+            name="browser_snapshot",
             tool_call_id="call-1",
         )
 

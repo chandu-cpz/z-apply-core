@@ -328,7 +328,7 @@ async def test_graph_sink_attributes_tool_action_to_selected_agent_model() -> No
         FrameworkTraceEvent(
             "agent_tool_start",
             "AnswerWriter:invocation-id",
-            {"tool_name": "lookup_candidate_memory", "input": {}},
+            {"tool_name": "ask_human", "input": {}},
             {},
         )
     )
@@ -336,7 +336,7 @@ async def test_graph_sink_attributes_tool_action_to_selected_agent_model() -> No
     assert service.events[-1] == (
         "tool.started",
         {
-            "tool_name": "lookup_candidate_memory",
+            "tool_name": "ask_human",
             "input": {},
             "model_id": "provider/answer-model",
         },

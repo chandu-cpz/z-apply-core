@@ -11,7 +11,6 @@ from nim_router import NimRouter
 
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.prompts import load_prompt
-from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
@@ -100,7 +99,6 @@ async def require_submission_readiness(
         middleware=[
             SafeToolBatchMiddleware(),
             model_retry_middleware(),
-            RequireNativeToolCallMiddleware(),
             router_middleware,
             ActiveGoalMiddleware(
                 is_terminal=lambda: verdict is not None,

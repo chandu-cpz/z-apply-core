@@ -6,11 +6,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 from langchain.agents.middleware import ModelRequest
-from langchain.agents.middleware.types import ModelResponse
+from langchain.agents.middleware.types import ModelResponse, ToolCallRequest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
 
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
+from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.specialists.answer_writer import CandidateFieldAnswer
 from z_apply_core.browser_observation import BrowserControlState, BrowserObservation
 
@@ -128,29 +129,46 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
         inspect_control_state=AsyncMock(return_value=BrowserControlState()),
         call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
     )
-    middleware = CandidateFieldMiddleware(browser)
+    candidate_memory = SimpleNamespace(
+        lookup=AsyncMock(
+            return_value={
+                "memory_status": "exact",
+                "field_label": "Where did you hear about us?",
+                "question": "Where did you hear about us?",
+                "matches": [{"answer": "LinkedIn", "source": "human_answer"}],
+            }
+        )
+    )
+    middleware = CandidateFieldMiddleware(browser, candidate_memory)
     normalized = middleware._normalize_call(_candidate_call())
     answer = CandidateFieldAnswer(
         field_label="Where did you hear about us?",
         target="e96",
         value="LinkedIn",
     )
+    handler = AsyncMock(
+        return_value=Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        answer.model_dump_json(),
+                        tool_call_id="candidate-1",
+                    )
+                ]
+            }
+        )
+    )
     result = await middleware.awrap_tool_call(
-        SimpleNamespace(tool_call=normalized),
-        AsyncMock(
-            return_value=Command(
-                update={
-                    "messages": [
-                        ToolMessage(
-                            answer.model_dump_json(),
-                            tool_call_id="candidate-1",
-                        )
-                    ]
-                }
-            )
-        ),
+        ToolCallRequest(tool_call=normalized, tool=None, state={}, runtime=object()),  # type: ignore[arg-type]
+        handler,
     )
 
+    candidate_memory.lookup.assert_awaited_once_with(
+        field_label="Where did you hear about us?",
+        question="Where did you hear about us?",
+    )
+    forwarded_request = handler.await_args.args[0]
+    assert '"memory_status": "exact"' in forwarded_request.tool_call["args"]["description"]
     browser.call_tool_with_inline_snapshot.assert_awaited_once_with(
         "browser_fill_form",
         {
@@ -168,6 +186,32 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
     assert message.status == "success"
     assert "CANDIDATE_FIELD_APPLIED" in message.text
     assert "changed: true" in message.text
+
+
+@pytest.mark.asyncio
+async def test_repeated_candidate_violation_reports_the_rejected_browser_fact() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "Last Name" [ref=e96]: V',
+        ),
+        inspect_control_state=AsyncMock(
+            return_value=BrowserControlState(value="V", has_value=True)
+        ),
+    )
+    middleware = CandidateFieldMiddleware(browser)
+    handler = AsyncMock(
+        return_value=ModelResponse(
+            result=[AIMessage(content="", tool_calls=[_candidate_call()])]
+        )
+    )
+
+    with pytest.raises(ToolProtocolViolation, match="already resolved"):
+        await middleware.awrap_model_call(_request(), handler)
+
+    assert handler.await_count == 2
 
 
 @pytest.mark.asyncio

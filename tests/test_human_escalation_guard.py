@@ -36,20 +36,6 @@ class HumanEscalationGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(result, expected)
         handler.assert_awaited_once_with(request)
 
-    async def test_candidate_question_requires_configured_evidence_tools(self) -> None:
-        handler = AsyncMock()
-        guard = HumanEscalationGuardMiddleware(
-            required_prior_tools=frozenset({"lookup_candidate_memory"})
-        )
-        request = _request(
-            {"reason": "missing_candidate_fact", "field_label": "Location (City)"}
-        )
-
-        result = await guard.awrap_tool_call(request, handler)
-
-        self.assertIn("lookup_candidate_memory", result.text)
-        handler.assert_not_awaited()
-
     async def test_allows_concrete_human_challenge_without_field_label(self) -> None:
         expected = ToolMessage(content="done", tool_call_id="call-1")
         handler = AsyncMock(return_value=expected)

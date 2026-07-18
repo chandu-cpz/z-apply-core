@@ -12,7 +12,6 @@ from nim_router import NimRouter
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
-from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
@@ -21,7 +20,6 @@ from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
 from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.agents.vision_message_compat import VisionToolMessageCompatibilityMiddleware
-from z_apply_core.memory.applicant_memory import CandidateMemory, build_answer_writer_memory_tools
 from z_apply_core.stream_events import FrameworkEventSink
 
 
@@ -54,7 +52,6 @@ async def build_specialists(
     browser_tools: Sequence[BaseTool],
     *,
     fallback_model: BaseChatModel,
-    candidate_memory: CandidateMemory | None = None,
     candidate_resume: str = "",
     answer_writer_human_tools: Sequence[BaseTool] = (),
     answer_writer_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
@@ -83,20 +80,14 @@ async def build_specialists(
         ),
         _with_routing(
             build_answer_writer(
-                [
-                    *build_answer_writer_memory_tools(candidate_memory),
-                    *answer_writer_human_tools,
-                ],
+                answer_writer_human_tools,
                 candidate_resume=candidate_resume,
             ),
             router=router,
             role="AnswerWriter",
             model=fallback_model,
             preserve_task_context=True,
-            extra_middleware=[
-                *answer_writer_middleware,
-                RequireNativeToolCallMiddleware(),
-            ],
+            extra_middleware=answer_writer_middleware,
             sink=sink,
         ),
     ]

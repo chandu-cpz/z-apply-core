@@ -6,12 +6,10 @@ import functools
 import logging
 import re
 import uuid
-from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from langchain_core.tools import BaseTool, tool
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from qdrant_client import QdrantClient, models
 
@@ -101,30 +99,6 @@ class CandidateMemory:
                 "question": question,
                 "matches": [],
             }
-
-    def answer_writer_tools(self) -> list[BaseTool]:
-        memory = self
-
-        @tool
-        async def lookup_candidate_memory(
-            field_label: str,
-            question: str,
-            limit: int = 5,
-        ) -> dict[str, object]:
-            """Retrieve explicit candidate facts for one application field.
-
-            Only an exact normalized field-label match is returned as candidate
-            evidence. A no_exact_match result contains no usable value; consult the
-            resume or human instead. Call for exactly one field and pass its current
-            label and question without paraphrasing either.
-            """
-            return await memory.lookup(
-                field_label=field_label,
-                question=question,
-                limit=limit,
-            )
-
-        return [lookup_candidate_memory]
 
     def close(self) -> None:
         if self._closed:
@@ -226,7 +200,3 @@ class CandidateMemory:
             collection_name=self._collection_name,
             vectors_config=models.VectorParams(size=vector_size, distance=models.Distance.COSINE),
         )
-
-
-def build_answer_writer_memory_tools(memory: CandidateMemory | None) -> Sequence[BaseTool]:
-    return memory.answer_writer_tools() if memory is not None else ()

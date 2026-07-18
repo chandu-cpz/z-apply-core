@@ -25,7 +25,6 @@ from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.readiness_verifier import require_submission_readiness
-from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import (
@@ -214,7 +213,6 @@ async def run_orchestrator(
     )
     answer_writer_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"}),
-        required_prior_tools=frozenset({"lookup_candidate_memory"}),
     )
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
@@ -257,12 +255,11 @@ async def run_orchestrator(
                 max_stagnant_tool_calls=6,
                 max_stagnant_model_responses=3,
             ),
-            CandidateFieldMiddleware(active_browser),
+            CandidateFieldMiddleware(active_browser, candidate_memory),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
                 browser=active_browser,
             ),
-            RequireNativeToolCallMiddleware(),
             SummarizationMiddleware(
                 model=selection.llm,
                 backend=deepagent_backend,
@@ -283,7 +280,6 @@ async def run_orchestrator(
             router,
             browser_tools,
             fallback_model=selection.llm,
-            candidate_memory=candidate_memory,
             candidate_resume=_candidate_resume_context(),
             answer_writer_human_tools=[tool for tool in human_tools if tool.name == "ask_human"],
             answer_writer_middleware=[answer_writer_human_guard],

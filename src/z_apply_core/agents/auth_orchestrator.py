@@ -16,7 +16,6 @@ from z_apply_core.agents.harness_profile import configure_z_apply_harness_profil
 from z_apply_core.agents.orchestrator import CORE_ROOT, DEEPAGENT_FILESYSTEM_PERMISSIONS
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
-from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.result import AuthOrchestratorRun, AuthStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import (
@@ -102,7 +101,6 @@ async def run_auth_orchestrator(
         system_prompt=load_prompt("auth_orchestrator.md"),
         middleware=[
             SafeToolBatchMiddleware(),
-            RequireNativeToolCallMiddleware(),
             model_retry_middleware(),
             router_middleware,
             ProseToolCallGuardMiddleware(),
