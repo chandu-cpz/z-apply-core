@@ -18,13 +18,7 @@ from z_apply_core.browser_session import BrowserSession
 
 
 class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
-    """Normalize a model's direct subagent call into DeepAgents' ``task`` call.
-
-    Subagent names are agent types, not callable tools. Some tool-capable
-    providers nevertheless emit a tool call using the displayed agent name.
-    This middleware translates that typed tool-call intent before tool
-    execution, keeping browser authority inside BrowserSpecialist.
-    """
+    """Normalize direct specialist calls and guard visual-only delegation."""
 
     def __init__(
         self,
@@ -77,7 +71,6 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
     def _normalize_message(self, message: Any) -> Any:
         if not isinstance(message, AIMessage) or not message.tool_calls:
             return message
-
         normalized = [self._normalize_call(call) for call in message.tool_calls]
         if normalized == message.tool_calls:
             return message
@@ -102,11 +95,13 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
                 f"Complete the one bounded {subagent_type} task requested by the parent. "
                 "Return only evidence relevant to that task."
             )
-        description = self._normalize_description(subagent_type, description)
         return {
             **call,
             "name": "task",
-            "args": {"subagent_type": subagent_type, "description": description},
+            "args": {
+                "subagent_type": subagent_type,
+                "description": self._normalize_description(subagent_type, description),
+            },
         }
 
     def _normalize_description(self, subagent_type: str, description: str) -> str:

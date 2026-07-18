@@ -4,17 +4,9 @@ parent agent.
 Available specialist types:
 {available_agents}
 
-Use `subagent_type="AnswerWriter"` for exactly one empty required candidate
-field and its exact current browser target ref. This is intentional even though
-it is a small task: AnswerWriter alone
-has candidate memory, resume evidence, and Telegram access. Include only the
-field's exact label/question, current value, type, units/constraints, visible
-options, and validation evidence. Do not include a proposed candidate answer or
-biographical claim; AnswerWriter retrieves candidate evidence independently.
-Launch only one AnswerWriter at a time because
-any unresolved field may require the single human-question channel. The parent
-must consume its returned structured field result with a browser mutation
-before launching another task.
+Do not use `task` for AnswerWriter. Candidate fields must go through the
+orchestrator's typed `resolve_candidate_field` tool so the runtime can bind the
+request to live browser evidence.
 
 Use `subagent_type="VisionSpecialist"` only when the current typed browser
 context says `visual_only_surface_visible=true` and one specific visual question

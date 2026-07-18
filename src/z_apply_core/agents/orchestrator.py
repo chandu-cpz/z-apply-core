@@ -15,6 +15,7 @@ from nim_router import NimRouter
 from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
+from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
@@ -33,6 +34,7 @@ from z_apply_core.agents.router_middleware import (
 )
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialists import build_specialists
+from z_apply_core.agents.specialists.answer_writer import make_candidate_field_tool
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_session import BrowserSession
@@ -213,9 +215,7 @@ async def run_orchestrator(
     )
     answer_writer_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"}),
-        required_prior_tools=frozenset(
-            {"lookup_candidate_memory", "read_candidate_resume"}
-        ),
+        required_prior_tools=frozenset({"lookup_candidate_memory", "read_candidate_resume"}),
     )
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
@@ -238,6 +238,7 @@ async def run_orchestrator(
         tools=[
             *orchestrator_browser_tools,
             *platform_memory_tools,
+            make_candidate_field_tool(),
             *human_tools,
             application_submitted,
         ],
@@ -250,15 +251,14 @@ async def run_orchestrator(
                 job_url=job_url,
             ),
             SafeToolBatchMiddleware(),
-            OrchestratorActionOrderMiddleware(
-                active_browser
-            ),
+            OrchestratorActionOrderMiddleware(active_browser),
             NoProgressGuardMiddleware(
                 browser=active_browser,
                 on_no_progress=router_middleware.reject_active_response,
                 max_stagnant_tool_calls=6,
                 max_stagnant_model_responses=3,
             ),
+            CandidateFieldMiddleware(active_browser),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
                 browser=active_browser,

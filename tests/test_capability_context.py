@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import unittest
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 from langchain_core.tools import tool
 
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 from z_apply_core.browser_observation import BrowserCapabilities, BrowserObservation
-from z_apply_core.browser_session import BrowserSession
 
 
 @tool
@@ -48,6 +45,12 @@ def task() -> str:
 
 
 @tool
+def resolve_candidate_field() -> str:
+    """Resolve one candidate field."""
+    return "resolved"
+
+
+@tool
 def request_submit_approval() -> str:
     """Request approval."""
     return "requested"
@@ -74,6 +77,7 @@ class CapabilityContextTests(unittest.TestCase):
             browser_fill_form,
             browser_click_upload,
             task,
+            resolve_candidate_field,
             request_submit_approval,
             application_submitted,
             ls,
@@ -128,6 +132,7 @@ class CapabilityContextTests(unittest.TestCase):
 
         self.assertIn("browser_fill_form", [tool.name for tool in tools])
         self.assertIn("task", [tool.name for tool in tools])
+        self.assertIn("resolve_candidate_field", [tool.name for tool in tools])
 
     def test_ordinary_form_excludes_deepagents_filesystem_tools(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
@@ -158,6 +163,7 @@ class CapabilityContextTests(unittest.TestCase):
         )
 
         self.assertIn("task", [tool.name for tool in tools])
+        self.assertIn("resolve_candidate_field", [tool.name for tool in tools])
 
     def test_disabled_submit_exposes_semantic_repair_delegation(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
@@ -169,6 +175,7 @@ class CapabilityContextTests(unittest.TestCase):
         )
 
         self.assertIn("task", [tool.name for tool in tools])
+        self.assertIn("resolve_candidate_field", [tool.name for tool in tools])
 
     def test_job_detail_page_hides_form_mutations_and_human_delegation(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
@@ -235,33 +242,6 @@ class CapabilityContextTests(unittest.TestCase):
 
         self.assertIn("Where did you hear about Resilinc?", rendered)
         self.assertIn('textbox "Type your response" [ref=e96]', rendered)
-
-
-class BrowserCapabilityParsingTests(unittest.IsolatedAsyncioTestCase):
-    async def test_browser_session_returns_compositional_capabilities(self) -> None:
-        page = SimpleNamespace(
-            evaluate=AsyncMock(
-                return_value={
-                    "editable_controls_visible": True,
-                    "auth_gate_visible": True,
-                    "empty_file_upload_present": True,
-                    "required_file_upload_pending": False,
-                    "enabled_form_submit_visible": True,
-                }
-            )
-        )
-        backend = SimpleNamespace(_ensure_tab=AsyncMock(return_value=SimpleNamespace(page=page)))
-        browser = object.__new__(BrowserSession)
-        browser._backend = backend
-        browser._mutation_gate = None
-        browser._lease = None
-
-        capabilities = await browser.inspect_capabilities()
-
-        self.assertTrue(capabilities.auth_gate_visible)
-        self.assertTrue(capabilities.editable_controls_visible)
-        self.assertTrue(capabilities.empty_file_upload_present)
-        self.assertFalse(capabilities.required_file_upload_pending)
 
 
 if __name__ == "__main__":

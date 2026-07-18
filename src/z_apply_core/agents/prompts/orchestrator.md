@@ -27,11 +27,12 @@ and historical playbooks.
    no-op after that wait, fill directly.
 5. Attach the required resume with `browser_click_upload` on the current upload
    target. Never open a native file chooser.
-6. For each unresolved required candidate field, delegate exactly one
-   AnswerWriter task. Include only the exact label/question, current ref and
-   value, control type, explicit constraints/validation, and all visible
-   options. Do not include a proposed value. Apply its structured result
-   immediately before any other action.
+6. For each unresolved required candidate field, call
+   `resolve_candidate_field` once with the current browser revision, exact
+   label/question, ref, value, control type, explicit constraints/validation,
+   and all visible options. Do not call `task` for AnswerWriter and do not
+   include a proposed value. The runtime applies a validated result atomically;
+   continue from its action receipt and never apply the same result again.
 7. Complete required page-owned controls such as privacy consent directly.
    Empty optional fields are not work.
 8. When only a CAPTCHA or human identity action remains, call `ask_human` once

@@ -27,6 +27,7 @@ _NON_FORM_BROWSER_TOOLS = _READ_BROWSER_TOOLS | frozenset(
 _ALWAYS_AVAILABLE = frozenset(
     {
         "task",
+        "resolve_candidate_field",
         "ask_human",
         "application_blocked",
         "browser_wait_for",
@@ -41,9 +42,7 @@ _ORCHESTRATOR_CONTROL_TOOLS = _ALWAYS_AVAILABLE | frozenset(
 )
 
 
-class CapabilityContextMiddleware(
-    AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
-):
+class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """Narrow model-visible actions using trusted compositional browser facts."""
 
     def __init__(
@@ -61,9 +60,7 @@ class CapabilityContextMiddleware(
     async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
-        handler: Callable[
-            [ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]
-        ],
+        handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT]:
         browser = self._browser
         if browser is None:
@@ -142,9 +139,7 @@ class CapabilityContextMiddleware(
         if atomic_upload_pending:
             return [tool for tool in tools if _tool_name(tool) == "browser_click_upload"]
         if capabilities is None:
-            safe = _READ_BROWSER_TOOLS | frozenset(
-                {"browser_wait_for", "application_blocked"}
-            )
+            safe = _READ_BROWSER_TOOLS | frozenset({"browser_wait_for", "application_blocked"})
             return [tool for tool in tools if _tool_name(tool) in safe]
         if capabilities.auth_gate_visible:
             # The specialist owns fresh inspection and every stateful auth action.
@@ -165,7 +160,12 @@ class CapabilityContextMiddleware(
                 tool
                 for tool in tools
                 if _tool_name(tool)
-                not in {"request_submit_approval", "application_submitted", "task"}
+                not in {
+                    "request_submit_approval",
+                    "application_submitted",
+                    "task",
+                    "resolve_candidate_field",
+                }
             ]
         candidate_resolution_needed = bool(
             capabilities.unresolved_required_controls
@@ -173,7 +173,11 @@ class CapabilityContextMiddleware(
             or capabilities.disabled_form_submit_visible
         )
         if not candidate_resolution_needed and not capabilities.visual_only_surface_visible:
-            return [tool for tool in tools if _tool_name(tool) != "task"]
+            return [
+                tool
+                for tool in tools
+                if _tool_name(tool) not in {"task", "resolve_candidate_field"}
+            ]
         return tools
 
 

@@ -85,8 +85,8 @@ class OrchestratorActionOrderMiddleware(
             return (
                 "CANDIDATE EVIDENCE ERROR: each candidate mutation must exactly match "
                 "the target and value in a successful structured AnswerWriter result. "
-                "Delegate one AnswerWriter task for the exact current field and ref, "
-                "then apply only that returned target and value."
+                "Call resolve_candidate_field for the exact current field and ref, then "
+                "apply only that returned target and value."
             )
         if self._candidate_answers and not entries:
             return (
