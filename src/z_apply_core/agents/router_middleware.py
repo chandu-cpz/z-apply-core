@@ -281,7 +281,11 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             override: dict[str, Any] = {"model": leased_model}
             if len(sanitized_messages) != len(request.messages):
                 override["messages"] = sanitized_messages
-            result: ModelResponse[ResponseT] = await handler(request.override(**override))
+            timeout_seconds = _model_call_timeout_seconds(self._router)
+            async with asyncio.timeout(timeout_seconds):
+                result: ModelResponse[ResponseT] = await handler(
+                    request.override(**override)
+                )
         except BaseException as exc:  # noqa: BLE001 - re-raised after recording
             logger.warning(
                 "router %s model %s failed: %s",
@@ -290,7 +294,16 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 exc,
             )
             protocol_failure = isinstance(exc, ToolProtocolViolation)
-            if protocol_failure:
+            if isinstance(exc, TimeoutError):
+                self._router.record_failure(
+                    selection.info.id,
+                    error=exc,
+                    kind=ErrorKind.TIMEOUT,
+                    tools=tools,
+                    structured=structured,
+                    vision=vision,
+                )
+            elif protocol_failure:
                 self._router.record_failure(
                     selection.info.id,
                     error=exc,
@@ -385,6 +398,13 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         except RuntimeError:
             return
         loop.create_task(self._emit(event, model_id, {"role": self._role, **data}))
+
+
+def _model_call_timeout_seconds(router: NimRouter) -> float | None:
+    value = getattr(getattr(router, "config", None), "timeout_seconds", None)
+    if isinstance(value, int | float) and value > 0:
+        return float(value)
+    return None
 
 
 def _attach_tracking_callback(selection: ModelSelection) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from typing import Any, cast
@@ -8,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, sentinel
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from nim_router import NimRouter
+from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
@@ -331,6 +333,29 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(router.lease.await_count, 2)
         router.record_failure.assert_not_called()
+
+    async def test_model_call_uses_router_wall_clock_timeout(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        router.config = SimpleNamespace(timeout_seconds=0.01)
+        selection = SimpleNamespace(
+            info=SimpleNamespace(id="slow/model"),
+            llm=MagicMock(),
+        )
+        router.lease = AsyncMock(return_value=selection)
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        request.override.return_value = sentinel.overridden_request
+
+        async def blocked(_request: object) -> None:
+            await asyncio.Event().wait()
+
+        with self.assertRaises(TimeoutError):
+            await NimRouterMiddleware(router, role="AnswerWriter").awrap_model_call(
+                request,
+                blocked,
+            )
+
+        router.record_failure.assert_called_once()
+        self.assertEqual(router.record_failure.call_args.kwargs["kind"], ErrorKind.TIMEOUT)
 
 
 if __name__ == "__main__":
