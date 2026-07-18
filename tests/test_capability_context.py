@@ -207,6 +207,8 @@ class CapabilityContextTests(unittest.TestCase):
 
         self.assertLessEqual(len(rendered), 2_000)
         self.assertIn("https://example.test/apply", rendered)
+        self.assertIn('textbox "Email" [ref=e500]', rendered)
+        self.assertIn('button "Continue" [ref=e501]', rendered)
         self.assertIn("bounded current-page view", rendered)
 
     def test_compact_observation_keeps_field_question_with_generic_textbox_name(

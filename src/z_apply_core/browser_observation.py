@@ -193,44 +193,46 @@ class BrowserObservation:
         if len(header) + len(self.evidence) <= max_chars:
             return header + self.evidence
 
-        roles = (
+        primary_roles = (
             "textbox",
-            "button",
             "checkbox",
             "radio",
             "combobox",
             "listbox",
             "option",
-            "link",
             "alert",
             "status",
-            "heading",
             "spinbutton",
             "switch",
-            "tab",
             "dialog",
         )
+        secondary_roles = ("button", "link", "heading", "tab")
         lines = self.evidence.splitlines()
-        selected: set[int] = set(range(min(12, len(lines))))
+        primary: set[int] = set()
+        secondary: set[int] = set(range(min(12, len(lines))))
         for index, line in enumerate(lines):
             normalized = line.casefold()
-            if any(role in normalized for role in roles):
-                selected.update(range(max(0, index - 4), min(len(lines), index + 2)))
+            window = range(max(0, index - 4), min(len(lines), index + 2))
+            if any(role in normalized for role in primary_roles):
+                primary.update(window)
+            elif any(role in normalized for role in secondary_roles):
+                secondary.update(window)
 
         marker = (
             "\n[bounded current-page view; full accessibility evidence remains "
             "available through browser_observe/browser_snapshot]\n"
         )
         budget = max(0, max_chars - len(header) - len(marker))
-        kept: list[str] = []
+        selected: set[int] = set()
         used = 0
-        for index in sorted(selected):
+        for index in [*sorted(primary), *sorted(secondary - primary)]:
             line = lines[index]
             addition = len(line) + 1
             if used + addition > budget:
-                break
-            kept.append(line)
+                continue
+            selected.add(index)
             used += addition
+        kept = [lines[index] for index in sorted(selected)]
         return header + "\n".join(kept) + marker
 
 
