@@ -129,19 +129,26 @@ class CandidateFieldExecutor:
                 "Re-observe the concrete option target and retry.",
             )
         try:
-            receipt = await browser.call_tool_with_inline_snapshot(
-                "browser_fill_form",
-                {
-                    "fields": [
-                        {
-                            "name": request.field_label,
-                            "target": request.target,
-                            "type": request.control_type,
-                            "value": answer.value,
-                        }
-                    ]
-                },
-            )
+            if request.control_type == "combobox":
+                receipt = await browser.call_tool_with_inline_snapshot(
+                    "browser_type",
+                    {"target": request.target, "text": answer.value},
+                )
+            else:
+                receipt = await browser.call_tool_with_inline_snapshot(
+                    "browser_fill_form",
+                    {
+                        "fields": [
+                            {
+                                "name": request.field_label,
+                                "target": request.target,
+                                "type": request.control_type,
+                                "value": answer.value,
+                            }
+                        ]
+                    },
+                )
+            applied = await browser.inspect_control_state(request.target)
         except Exception as exc:
             return await self._recoverable_error(
                 result,
@@ -149,14 +156,39 @@ class CandidateFieldExecutor:
                 "Browser executor could not apply the validated answer: "
                 f"{type(exc).__name__}: {exc}",
             )
+        expected_checked = answer.value == "true"
+        if (
+            request.control_type in {"checkbox", "radio"}
+            and applied.has_value != expected_checked
+        ) or (
+            request.control_type not in {"checkbox", "radio"}
+            and (not applied.has_value or applied.invalid)
+        ):
+            return await self._recoverable_error(
+                result,
+                tool_call_id,
+                "The browser did not retain a valid value after the candidate mutation.",
+            )
+        result_name = (
+            "CANDIDATE_FIELD_TYPED"
+            if request.control_type == "combobox"
+            else "CANDIDATE_FIELD_APPLIED"
+        )
+        continuation = (
+            "The deterministic browser executor typed this exact answer. If the "
+            "receipt exposes a listbox, select the matching visible option before "
+            "continuing."
+            if request.control_type == "combobox"
+            else "The deterministic browser executor applied this exact answer."
+        )
         return _replace_result(
             result,
             ToolMessage(
                 content=(
-                    "CANDIDATE_FIELD_APPLIED\n"
+                    f"{result_name}\n"
                     f"{answer.model_dump_json()}\n"
-                    "The deterministic browser executor applied this exact answer. "
-                    "Continue from the receipt; do not apply it again.\n"
+                    f"{continuation} Browser-observed value: {applied.value!r}. "
+                    "Continue from the receipt; do not delegate or type it again.\n"
                     f"{receipt}"
                 ),
                 name="task",

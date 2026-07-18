@@ -123,7 +123,12 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
             title="Apply",
             evidence='textbox "First Name" [ref=e96]',
         ),
-        inspect_control_state=AsyncMock(return_value=BrowserControlState()),
+        inspect_control_state=AsyncMock(
+            side_effect=[
+                BrowserControlState(),
+                BrowserControlState(value="LinkedIn", has_value=True),
+            ]
+        ),
         call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
     )
     candidate_memory = SimpleNamespace(
@@ -195,7 +200,12 @@ async def test_human_required_outcome_requests_value_before_browser_mutation() -
             title="Apply",
             evidence='textbox "Email" [ref=e96]',
         ),
-        inspect_control_state=AsyncMock(return_value=BrowserControlState()),
+        inspect_control_state=AsyncMock(
+            side_effect=[
+                BrowserControlState(),
+                BrowserControlState(value="candidate@example.com", has_value=True),
+            ]
+        ),
         call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
     )
     human_tool = SimpleNamespace(
@@ -242,6 +252,58 @@ async def test_human_required_outcome_requests_value_before_browser_mutation() -
     message = result.update["messages"][0]
     assert "needs_human" not in message.text
     assert "candidate@example.com" in message.text
+
+
+@pytest.mark.asyncio
+async def test_combobox_value_must_survive_the_browser_mutation() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='combobox "Location (City)" [ref=e96]',
+        ),
+        inspect_control_state=AsyncMock(
+            side_effect=[BrowserControlState(), BrowserControlState()]
+        ),
+        call_tool_with_inline_snapshot=AsyncMock(return_value="changed: false"),
+        observe=AsyncMock(return_value="BROWSER OBSERVATION revision: 8"),
+    )
+    middleware = CandidateFieldMiddleware(browser)
+    call = _candidate_call()
+    call["args"].update(
+        field_label="Location (City)*",
+        control_type="combobox",
+    )
+    normalized = middleware._normalize_call(call)
+    answer = CandidateFieldAnswer(
+        outcome="resolved",
+        field_label="Location (City)*",
+        target="e96",
+        value="Hyderabad",
+    )
+
+    result = await middleware.awrap_tool_call(
+        ToolCallRequest(tool_call=normalized, tool=None, state={}, runtime=object()),  # type: ignore[arg-type]
+        AsyncMock(
+            return_value=Command(
+                update={
+                    "messages": [
+                        ToolMessage(answer.model_dump_json(), tool_call_id="candidate-1")
+                    ]
+                }
+            )
+        ),
+    )
+
+    message = result.update["messages"][0]
+    browser.call_tool_with_inline_snapshot.assert_awaited_once_with(
+        "browser_type",
+        {"target": "e96", "text": "Hyderabad"},
+    )
+    assert message.status == "error"
+    assert "did not retain a valid value" in message.text
+    assert "BROWSER OBSERVATION revision: 8" in message.text
 
 
 @pytest.mark.asyncio
