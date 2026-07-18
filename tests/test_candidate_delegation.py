@@ -30,10 +30,7 @@ def _candidate_call(*, call_id: str = "candidate-1") -> dict[str, Any]:
             "target": "e96",
             "current_value": "",
             "control_type": "textbox",
-            "constraints": [],
             "visible_options": [],
-            "validation": ["This field is required"],
-            "row_context": "",
         },
     }
 

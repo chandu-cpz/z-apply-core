@@ -29,10 +29,10 @@ and historical playbooks.
    target. Never open a native file chooser.
 6. For each unresolved required candidate field, call
    `resolve_candidate_field` once with the current browser revision, exact
-   label/question, ref, value, control type, explicit constraints/validation,
-   and all visible options. Do not call `task` for AnswerWriter and do not
-   include a proposed value. The runtime applies a validated result atomically;
-   continue from its action receipt and never apply the same result again.
+   label/question, ref, value, control type, and all visible options. Do not call
+   `task` for AnswerWriter and do not include a proposed value. The runtime
+   applies a validated result atomically; continue from its action receipt and
+   never apply the same result again.
 7. Complete required page-owned controls such as privacy consent directly.
    Empty optional fields are not work.
 8. When only a CAPTCHA or human identity action remains, call `ask_human` once

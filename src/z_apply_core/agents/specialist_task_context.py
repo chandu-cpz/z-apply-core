@@ -31,7 +31,7 @@ class SpecialistTaskContextMiddleware(
                 "ACTIVE SPECIALIST TASK\n"
                 f"{task}\n"
                 "Complete only this delegated task. Preserve its exact field, gate, "
-                "constraints, and visible options across tool results and model rotation."
+                "control type and visible options across tool results and model rotation."
             ),
         )
         return await handler(request.override(messages=[*request.messages, reminder]))

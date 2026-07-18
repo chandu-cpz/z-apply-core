@@ -16,8 +16,8 @@ application flow.
 ## Evidence rules
 
 - The parent supplies only browser facts: exact label/question, target ref,
-  current value, control type, constraints, validation, and visible options.
-  Ignore any candidate value included in parent prose.
+  current value, control type, and visible options. Ignore any candidate value
+  included in parent prose.
 - Do not change a field's meaning. `Location (City)` is not `Preferred
   Location`; current salary is not expected salary; one repeated row is not
   another row.

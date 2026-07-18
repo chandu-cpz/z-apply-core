@@ -49,19 +49,8 @@ class CandidateFieldRequest(BaseModel):
     control_type: Literal["textbox", "checkbox", "radio", "combobox", "slider"] = Field(
         description="Exact Playwright form control type from current browser evidence"
     )
-    constraints: list[str] = Field(
-        default_factory=list,
-        description="Only explicit visible units, limits, or requirements",
-    )
     visible_options: list[str] = Field(
         default_factory=list, description="All currently visible choice options"
-    )
-    validation: list[str] = Field(
-        default_factory=list, description="Exact visible validation messages"
-    )
-    row_context: str = Field(
-        default="",
-        description="Exact visible row identity for repeated sections, otherwise empty",
     )
 
 
@@ -75,10 +64,7 @@ def make_candidate_field_tool() -> BaseTool:
         target: str,
         current_value: str,
         control_type: str,
-        constraints: list[str],
         visible_options: list[str],
-        validation: list[str],
-        row_context: str = "",
     ) -> str:
         """Resolve exactly one unresolved candidate field through AnswerWriter.
 
@@ -92,10 +78,7 @@ def make_candidate_field_tool() -> BaseTool:
             target,
             current_value,
             control_type,
-            constraints,
             visible_options,
-            validation,
-            row_context,
         )
         raise ToolException("Candidate delegation was not normalized by the runtime.")
 
