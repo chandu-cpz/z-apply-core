@@ -253,7 +253,6 @@ async def run_orchestrator(
             CandidateFieldMiddleware(
                 active_browser,
                 candidate_memory,
-                next((tool for tool in human_tools if tool.name == "ask_human"), None),
             ),
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
@@ -280,7 +279,9 @@ async def run_orchestrator(
             browser_tools,
             fallback_model=selection.llm,
             candidate_resume=_candidate_resume_context(),
-            answer_writer_human_tools=[],
+            answer_writer_human_tools=[
+                tool for tool in human_tools if tool.name == "ask_human"
+            ],
             authentication_tools=[
                 *authentication_tools,
                 *manual_auth_tools,

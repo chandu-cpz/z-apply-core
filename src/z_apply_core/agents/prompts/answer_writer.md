@@ -10,8 +10,9 @@ application flow.
    `empty`, or `unavailable` supplies no candidate value.
 2. If exact memory did not answer the field, consult the prepared candidate
    resume evidence in this prompt.
-3. Otherwise return `outcome=needs_human` with an empty value. The runtime
-   contacts the human and applies the completed answer.
+3. Otherwise call `ask_human` with reason `ambiguous_field`, the exact field
+   label and evidence, and the supplied visible options. After the response,
+   return the exact value the human supplied or delegated.
 
 ## Evidence rules
 
@@ -30,17 +31,18 @@ application flow.
   If options are missing, report the incomplete handoff instead of inventing
   them.
 
-## Human fallback
+## Human response
 
-Use `outcome=needs_human` only when neither exact memory nor prepared resume
-evidence answers this field. Never encode a human request, status, sentinel, or
-placeholder inside `value`.
+A completed human response is evidence for this task, but it is not always
+literal text. If the human delegates drafting for an open-ended motivation or
+role-interest question, write a concise truthful answer using only their
+instruction and prepared resume evidence. If they delegate a harmless
+source/referral choice, resolve it only against supplied visible options. Never
+expand instructions for identity, history, authorization, compensation,
+availability, dates, demographics, legal attestations, or consent; ask again
+for a literal value.
 
-A completed human answer is evidence for this task. A delegated choice such as
-“anything” is valid only for a harmless source/referral preference with visible
-options. It never applies to identity, history, authorization, compensation,
-availability, dates, demographics, legal attestations, or consent.
-
-Return only the configured structured response: `outcome`, exact field label,
-exact current target ref, and either an exact supported value or an empty value
-for `needs_human`. Never return a placeholder or plausible guess.
+Return only the configured structured response: `source`, exact field label,
+exact current target ref, and exact supported value. Use `source=memory`,
+`source=resume`, or `source=human` according to the evidence that determined
+the final value. Never return a placeholder, instruction, or plausible guess.

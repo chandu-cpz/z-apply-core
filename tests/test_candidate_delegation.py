@@ -136,7 +136,7 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
     middleware = CandidateFieldMiddleware(browser, candidate_memory)
     normalized = middleware._normalize_call(_candidate_call())
     answer = CandidateFieldAnswer(
-        outcome="resolved",
+        source="memory",
         field_label="Where did you hear about us?",
         target="e96",
         value="LinkedIn",
@@ -184,7 +184,7 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
 
 
 @pytest.mark.asyncio
-async def test_human_required_outcome_requests_value_before_browser_mutation() -> None:
+async def test_normalized_human_answer_is_stored_after_browser_mutation() -> None:
     browser = SimpleNamespace(
         current_observation=BrowserObservation.create(
             revision=7,
@@ -201,18 +201,17 @@ async def test_human_required_outcome_requests_value_before_browser_mutation() -
         ),
         call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
     )
-    human_tool = SimpleNamespace(
-        ainvoke=AsyncMock(return_value={"human_answer": "candidate@example.com"})
+    candidate_memory = SimpleNamespace(
+        lookup=AsyncMock(return_value={"memory_status": "no_exact_match", "matches": []}),
+        remember_human_answer=AsyncMock(return_value=True),
     )
-    middleware = CandidateFieldMiddleware(
-        browser,
-        human_tool=human_tool,  # type: ignore[arg-type]
-    )
+    middleware = CandidateFieldMiddleware(browser, candidate_memory)
     normalized = middleware._normalize_call(_candidate_call())
     answer = CandidateFieldAnswer(
-        outcome="needs_human",
+        source="human",
         field_label="Where did you hear about us?",
         target="e96",
+        value="candidate@example.com",
     )
 
     result = await middleware.awrap_tool_call(
@@ -228,7 +227,6 @@ async def test_human_required_outcome_requests_value_before_browser_mutation() -
         ),
     )
 
-    human_tool.ainvoke.assert_awaited_once()
     browser.call_tool_with_inline_snapshot.assert_awaited_once_with(
         "browser_fill_form",
         {
@@ -242,8 +240,12 @@ async def test_human_required_outcome_requests_value_before_browser_mutation() -
             ]
         },
     )
+    candidate_memory.remember_human_answer.assert_awaited_once_with(
+        field_label="Where did you hear about us?",
+        question="Where did you hear about us?",
+        answer="candidate@example.com",
+    )
     message = result.update["messages"][0]
-    assert "needs_human" not in message.text
     assert "candidate@example.com" in message.text
 
 
@@ -277,7 +279,7 @@ async def test_combobox_value_must_survive_the_browser_mutation() -> None:
     )
     normalized = middleware._normalize_call(call)
     answer = CandidateFieldAnswer(
-        outcome="resolved",
+        source="resume",
         field_label="Location (City)*",
         target="e96",
         value="Hyderabad",
@@ -348,7 +350,7 @@ async def test_atomic_candidate_failure_returns_fresh_evidence_for_recovery() ->
     middleware = CandidateFieldMiddleware(browser)
     normalized = middleware._normalize_call(_candidate_call())
     answer = CandidateFieldAnswer(
-        outcome="resolved",
+        source="memory",
         field_label="Where did you hear about us?",
         target="e96",
         value="LinkedIn",

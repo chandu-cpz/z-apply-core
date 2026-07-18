@@ -23,7 +23,7 @@ def answer_result(
     *, label: str = "Name", target: str = "e1", value: str = "Chandrakanth"
 ) -> Command:
     answer = CandidateFieldAnswer(
-        outcome="resolved",
+        source="resume",
         field_label=label,
         target=target,
         value=value,
