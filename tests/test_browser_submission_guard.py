@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from z_apply_core.browser_session import (
     BrowserSession,
@@ -22,24 +22,12 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         targets = submit_targets
 
         async def resolve_target(*, target: str) -> SimpleNamespace:
-            submit = target in targets if targets is not None else is_submit
             submit_control = SimpleNamespace(
-                evaluate=AsyncMock(return_value=submit),
                 click=AsyncMock(),
             )
-            handle = SimpleNamespace(
-                as_element=lambda: submit_control,
-                dispose=AsyncMock(),
-            )
-            locator = SimpleNamespace(
-                evaluate=AsyncMock(return_value=submit),
-                evaluate_handle=AsyncMock(return_value=handle),
-            )
-            return SimpleNamespace(locator=locator)
+            return SimpleNamespace(locator=submit_control)
 
         page = MagicMock()
-        page.add_init_script = AsyncMock()
-        page.evaluate = AsyncMock(return_value=True)
         tab = SimpleNamespace(
             page=page,
             resolve_target=AsyncMock(side_effect=resolve_target),
@@ -58,26 +46,22 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         session._capture_workspace = Path("/tmp/guard-test")
         session._submission_guard_active = False
         session._submission_capability = None
-        session._submission_interlock_pages = set()
         session._last_snapshot = "review state"
         session._last_observation = None
         session._browser_revision = 0
         session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
+        session._classify_submit_control = AsyncMock(  # type: ignore[method-assign]
+            side_effect=lambda arguments: (
+                SubmitControlKind.FORM_SUBMIT
+                if (arguments.get("target") in targets if targets is not None else is_submit)
+                else SubmitControlKind.NOT_SUBMIT
+            )
+        )
         return session, backend.call_tool
 
     async def _approve(self, session: BrowserSession, target: str = "e10") -> None:
         await session.prepare_submission_review(target, "Reviewed candidate values")
         session.set_submit_approval(True)
-
-    async def test_installs_interlock_for_current_and_future_documents(self) -> None:
-        session, _ = self._session(is_submit=True)
-        page = session._backend._ensure_tab.return_value.page
-
-        await session.install_submission_interlock()
-        await session.install_submission_interlock()
-
-        page.add_init_script.assert_awaited_once()
-        self.assertEqual(page.evaluate.await_count, 2)
 
     async def test_submit_control_is_blocked_before_browser_mutation(self) -> None:
         session, call_tool = self._session(is_submit=True)
@@ -162,42 +146,38 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         session, call_tool = self._session(is_submit=True)
         session.activate_submission_guard()
 
-        evidence = await session.submit_auth_form("e10")
+        locator = (
+            await session._backend._ensure_tab.return_value.resolve_target(target="e10")
+        ).locator
+        with patch(
+            "z_apply_core.browser_session.resolve_auth_submit_control",
+            new=AsyncMock(return_value=locator),
+        ):
+            evidence = await session.submit_auth_form("e10")
 
         self.assertEqual(call_tool.await_count, 1)
         self.assertEqual(call_tool.await_args_list[0].args[0], "browser_snapshot")
         self.assertIn("review state", evidence)
         self.assertIsNone(session.submission_capability)
 
-    async def test_component_auth_scope_can_submit_without_native_form(self) -> None:
-        session, call_tool = self._session(is_submit=True)
-
-        evidence = await session.submit_auth_form("e10")
-
-        self.assertIn("review state", evidence)
-        self.assertEqual(call_tool.await_args_list[0].args[0], "browser_snapshot")
-
     async def test_auth_submit_classifies_pointer_interception_as_recoverable(self) -> None:
         session, call_tool = self._session(is_submit=True)
         tab = session._backend._ensure_tab.return_value
         submit_control = SimpleNamespace(
-            evaluate=AsyncMock(return_value=True),
             click=AsyncMock(side_effect=TimeoutError("pointer interception")),
         )
-        handle = SimpleNamespace(
-            as_element=lambda: submit_control,
-            dispose=AsyncMock(),
-        )
-        locator = SimpleNamespace(
-            evaluate=AsyncMock(return_value=True),
-            evaluate_handle=AsyncMock(return_value=handle),
-        )
         tab.resolve_target.side_effect = None
-        tab.resolve_target.return_value = SimpleNamespace(locator=locator)
+        tab.resolve_target.return_value = SimpleNamespace(locator=submit_control)
 
-        with self.assertRaisesRegex(
-            BrowserToolExecutionError,
-            "recoverable browser actionability state",
+        with (
+            patch(
+                "z_apply_core.browser_session.resolve_auth_submit_control",
+                new=AsyncMock(return_value=submit_control),
+            ),
+            self.assertRaisesRegex(
+                BrowserToolExecutionError,
+                "recoverable browser actionability state",
+            ),
         ):
             await session.submit_auth_form("e10")
 
@@ -231,9 +211,15 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         session, call_tool = self._session(is_submit=False)
         session.activate_submission_guard()
 
-        with self.assertRaisesRegex(
-            BrowserToolExecutionError,
-            "structurally identifiable login",
+        with (
+            patch(
+                "z_apply_core.browser_session.resolve_auth_submit_control",
+                new=AsyncMock(return_value=None),
+            ),
+            self.assertRaisesRegex(
+                BrowserToolExecutionError,
+                "structurally identifiable login",
+            ),
         ):
             await session.submit_auth_form("e10")
 
@@ -242,8 +228,10 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_stale_submit_target_becomes_recoverable_browser_error(self) -> None:
         session, call_tool = self._session(is_submit=False)
         session.activate_submission_guard()
-        session._backend._ensure_tab.return_value.resolve_target.side_effect = ValueError(
-            "stale ref"
+        session._classify_submit_control = AsyncMock(  # type: ignore[method-assign]
+            side_effect=BrowserToolExecutionError(
+                "Cannot inspect browser target 'e510'; capture a fresh snapshot and retry."
+            )
         )
 
         with self.assertRaisesRegex(

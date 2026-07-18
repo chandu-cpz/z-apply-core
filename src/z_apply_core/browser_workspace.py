@@ -34,9 +34,11 @@ class BrowserControlGate:
     async def mutation(self) -> AsyncIterator[None]:
         async with self._condition:
             await self._condition.wait_for(
-                lambda: not self._human_control
-                and not self._takeover_pending
-                and not self._operation_active
+                lambda: (
+                    not self._human_control
+                    and not self._takeover_pending
+                    and not self._operation_active
+                )
             )
             self._operation_active = True
         try:
@@ -120,7 +122,7 @@ class RunBrowserLease:
             if page.is_closed():
                 continue
             with contextlib.suppress(Exception):
-                await page.evaluate("window.stop()")
+                await page.keyboard.press("Escape")
 
 
 class BrowserWorkspace:

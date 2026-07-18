@@ -14,17 +14,25 @@ from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
 
 from z_apply_core.browser_config import build_browser_config
+from z_apply_core.browser_form_inspection import (
+    inspect_control,
+    inspect_page_capabilities,
+    inspect_page_readiness,
+    required_file_upload_pending,
+)
 from z_apply_core.browser_observation import (
-    BROWSER_CAPABILITY_SCRIPT,
     ActionReceipt,
     BrowserCapabilities,
+    BrowserControlState,
     BrowserObservation,
     SubmissionCapability,
 )
-from z_apply_core.browser_readiness import (
-    FORM_READINESS_SCRIPT,
-    REQUIRED_FILE_UPLOAD_PENDING_SCRIPT,
-    BrowserFormReadiness,
+from z_apply_core.browser_readiness import BrowserFormReadiness
+from z_apply_core.browser_targeting import (
+    classify_submit_control,
+    is_direct_file_upload_trigger,
+    resolve_auth_submit_control,
+    resolve_file_input,
 )
 from z_apply_core.browser_tools import (
     BROWSER_CHANGING_TOOL_NAMES,
@@ -36,120 +44,6 @@ from z_apply_core.browser_tools import (
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
 CORE_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
-FILE_INPUT_RESOLUTION_SCRIPT = r"""element => {
-    const isFileInput = candidate =>
-        candidate instanceof HTMLInputElement && candidate.type === 'file';
-    if (isFileInput(element)) return element;
-
-    const uniqueFileInput = container => {
-        if (!container || !container.querySelectorAll) return null;
-        const inputs = [...container.querySelectorAll('input[type="file"]')];
-        return inputs.length === 1 ? inputs[0] : null;
-    };
-
-    const label = element.closest('label');
-    if (label && isFileInput(label.control)) return label.control;
-
-    const controlledIds = [element.getAttribute('for'), element.getAttribute('aria-controls')]
-        .filter(Boolean).flatMap(value => value.trim().split(/\s+/));
-    for (const id of controlledIds) {
-        const controlled = element.ownerDocument.getElementById(id);
-        if (isFileInput(controlled)) return controlled;
-    }
-
-    let container = element;
-    while (container) {
-        const input = uniqueFileInput(container);
-        if (input) return input;
-        container = container.parentElement;
-    }
-
-    const rootInput = uniqueFileInput(element.getRootNode());
-    if (rootInput) return rootInput;
-    return uniqueFileInput(element.ownerDocument);
-}"""
-DIRECT_FILE_INPUT_TRIGGER_SCRIPT = r"""element => {
-    const isFileInput = candidate =>
-        candidate instanceof HTMLInputElement && candidate.type === 'file';
-    if (isFileInput(element)) return true;
-
-    const label = element.closest('label');
-    if (label && isFileInput(label.control)) return true;
-
-    const controlledIds = [element.getAttribute('for'), element.getAttribute('aria-controls')]
-        .filter(Boolean).flatMap(value => value.trim().split(/\s+/));
-    return controlledIds.some(id =>
-        isFileInput(element.ownerDocument.getElementById(id))
-    );
-}"""
-SUBMISSION_INTERLOCK_SCRIPT = r"""() => {
-    const key = '__zApplySubmissionInterlockV1';
-    if (globalThis[key]) return true;
-
-    const nativeRequestSubmit = HTMLFormElement.prototype.requestSubmit;
-    let approvedControl = null;
-
-    const submitControl = candidate => {
-        if (!(candidate instanceof Element)) return null;
-        const control = candidate.closest(
-            'button, input[type="submit"], input[type="image"]'
-        );
-        if (!(control instanceof HTMLButtonElement) &&
-            !(control instanceof HTMLInputElement)) return null;
-        const form = control.form || control.closest('form');
-        if (!form) return null;
-        if (form.getAttribute('role') === 'search' ||
-            form.querySelector('input[type="search"]')) return null;
-        return control;
-    };
-
-    const isSearchForm = form => form.getAttribute('role') === 'search' ||
-        form.querySelector('input[type="search"]');
-
-    const block = event => {
-        const form = event.target instanceof HTMLFormElement ? event.target : null;
-        if (!form || isSearchForm(form)) return;
-        const control = submitControl(event.submitter);
-        if (control && control.form === form && control === approvedControl) {
-            approvedControl = null;
-            return;
-        }
-        event.preventDefault();
-        event.stopImmediatePropagation();
-    };
-
-    document.addEventListener('submit', block, true);
-    HTMLFormElement.prototype.requestSubmit = function(submitter) {
-        const control = submitControl(submitter);
-        if (!control || control !== approvedControl || control.form !== this) return;
-        return nativeRequestSubmit.call(this, control);
-    };
-    HTMLFormElement.prototype.submit = function() {
-        return;
-    };
-
-    globalThis[key] = Object.freeze({
-        arm(candidate) {
-            const control = submitControl(candidate);
-            if (!control) return false;
-            approvedControl = control;
-            return true;
-        },
-        disarm() {
-            approvedControl = null;
-        },
-    });
-    return true;
-}"""
-ARM_SUBMISSION_INTERLOCK_SCRIPT = r"""element => {
-    const view = element.ownerDocument && element.ownerDocument.defaultView;
-    const interlock = view && view.__zApplySubmissionInterlockV1;
-    return Boolean(interlock && interlock.arm(element));
-}"""
-DISARM_SUBMISSION_INTERLOCK_SCRIPT = r"""() => {
-    const interlock = globalThis.__zApplySubmissionInterlockV1;
-    if (interlock) interlock.disarm();
-}"""
 
 
 class BrowserToolExecutionError(ToolException):
@@ -195,7 +89,6 @@ class BrowserSession:
         self.run_id = run_id
         self._submission_guard_active = False
         self._submission_capability: SubmissionCapability | None = None
-        self._submission_interlock_pages: set[Any] = set()
         self._last_snapshot = ""
         self._last_observation: BrowserObservation | None = None
         self._last_action_receipt: ActionReceipt | None = None
@@ -274,15 +167,11 @@ class BrowserSession:
                     guarded_submit = True
                 if guarded_submit:
                     await self._require_submission_capability_locked(normalized)
-            try:
-                result = await self._call_backend_tool(name, normalized)
-                if name in BROWSER_CHANGING_TOOL_NAMES:
-                    await self._discover_owned_popups()
-                if name == "browser_snapshot":
-                    page_url, page_title = await self._page_identity()
-            finally:
-                if guarded_submit:
-                    await self._disarm_submission_interlock()
+            result = await self._call_backend_tool(name, normalized)
+            if name in BROWSER_CHANGING_TOOL_NAMES:
+                await self._discover_owned_popups()
+            if name == "browser_snapshot":
+                page_url, page_title = await self._page_identity()
         _raise_for_tool_error(name, result)
         if guarded_submit:
             capability = self._submission_capability
@@ -430,21 +319,15 @@ class BrowserSession:
             else:
                 tab = await self._backend._ensure_tab()
                 resolved = await tab.resolve_target(target=target)
-                locator = resolved.locator
-                handle = await locator.evaluate_handle(FILE_INPUT_RESOLUTION_SCRIPT)
-                file_input = handle.as_element()
+                file_input = await resolve_file_input(tab.page, resolved.locator)
                 if file_input is None:
-                    await handle.dispose()
                     raise BrowserToolExecutionError(
                         f"Upload target {target!r} could not be associated with exactly "
                         "one file input. Capture fresh evidence and call "
                         "browser_click_upload on the upload control; never click it to "
                         "open a native chooser."
                     )
-                try:
-                    await file_input.set_input_files(paths)
-                finally:
-                    await handle.dispose()
+                await file_input.set_input_files(paths)
         evidence = await self.call_tool("browser_snapshot")
         after = self._last_observation or self._record_observation(evidence)
         changed = before.signature != after.signature
@@ -477,7 +360,7 @@ class BrowserSession:
             return False
         tab = await self._backend._ensure_tab()
         resolved = await tab.resolve_target(target=target)
-        return bool(await resolved.locator.evaluate(DIRECT_FILE_INPUT_TRIGGER_SCRIPT))
+        return await is_direct_file_upload_trigger(tab.page, resolved.locator)
 
     async def capture_human_challenge(self, target: str) -> Path:
         """Capture one visible challenge into the run-owned artifact directory."""
@@ -500,21 +383,26 @@ class BrowserSession:
         """Capture browser-owned constraint state without asking an LLM to infer it."""
         async with self._operation_scope():
             tab = await self._backend._ensure_tab()
-            payload = await tab.page.evaluate(FORM_READINESS_SCRIPT)
-        return BrowserFormReadiness.from_browser_payload(payload)
+            return await inspect_page_readiness(tab.page)
 
     async def required_file_upload_pending(self) -> bool:
         """Report whether the live form owns an empty required file input."""
         async with self._operation_scope():
             tab = await self._backend._ensure_tab()
-            return bool(await tab.page.evaluate(REQUIRED_FILE_UPLOAD_PENDING_SCRIPT))
+            return await required_file_upload_pending(tab.page)
 
     async def inspect_capabilities(self) -> BrowserCapabilities:
         """Return compositional structural facts about the current browser page."""
         async with self._operation_scope():
             tab = await self._backend._ensure_tab()
-            payload = await tab.page.evaluate(BROWSER_CAPABILITY_SCRIPT)
-        return BrowserCapabilities.from_browser_payload(payload)
+            return await inspect_page_capabilities(tab.page)
+
+    async def inspect_control_state(self, target: str) -> BrowserControlState:
+        """Return typed live state for one exact browser-resolved form target."""
+        async with self._operation_scope():
+            tab = await self._backend._ensure_tab()
+            resolved = await tab.resolve_target(target=target)
+            return await inspect_control(tab.page, resolved.locator, target)
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""
@@ -529,102 +417,15 @@ class BrowserSession:
             async with self._operation_scope():
                 tab = await self._backend._ensure_tab()
                 locator = (await tab.resolve_target(target=target)).locator
-                control_handle = await locator.evaluate_handle(
-                    """element => {
-                    const selector =
-                        'button, input[type="submit"], input[type="image"], [role="button"]';
-                    const direct = element.closest(selector);
-                    const anchor = direct;
-                    if (!anchor) return null;
-                    const box = anchor.getBoundingClientRect();
-                    const x = box.left + box.width / 2;
-                    const y = box.top + box.height / 2;
-                    const hitControl = anchor.ownerDocument.elementsFromPoint(x, y)
-                        .map(candidate => candidate.closest(selector))
-                        .find(candidate => candidate !== null);
-                    return hitControl || direct;
-                }"""
-                )
-                submit_control = control_handle.as_element()
+                submit_control = await resolve_auth_submit_control(tab.page, locator)
                 if submit_control is None:
-                    await control_handle.dispose()
                     raise BrowserToolExecutionError(
-                        "Authentication submit rejected: the target does not resolve to "
-                        "a submit control."
+                        "Authentication submit rejected: the target is not a submit "
+                        "control in a structurally identifiable login or verification form."
                     )
-                try:
-                    is_auth_submit = await submit_control.evaluate(
-                """element => {
-                const selector =
-                    'button, input[type="submit"], input[type="image"], [role="button"]';
-                let control = element.closest(selector);
-                if (!control) {
-                    const clickLayer = element.closest('[role="button"]');
-                    if (clickLayer) {
-                        const box = clickLayer.getBoundingClientRect();
-                        const x = box.left + box.width / 2;
-                        const y = box.top + box.height / 2;
-                        control = clickLayer.ownerDocument
-                            .elementsFromPoint(x, y)
-                            .find(candidate => candidate !== clickLayer &&
-                                candidate.matches(selector)) || null;
-                    }
-                }
-                const isComponentButton =
-                    control instanceof HTMLElement && control.getAttribute('role') === 'button';
-                if (!(control instanceof HTMLButtonElement ||
-                      control instanceof HTMLInputElement || isComponentButton)) return false;
-                if (control instanceof HTMLInputElement &&
-                    control.type !== 'submit' && control.type !== 'image') return false;
-                if (control instanceof HTMLButtonElement) {
-                    const type = control.getAttribute('type');
-                    if (type !== 'submit' && !(type === null && control.form)) return false;
-                }
-                const isAuthInput = input => {
-                    const type = (input.getAttribute('type') || 'text').toLowerCase();
-                    const autocomplete = (input.getAttribute('autocomplete') || '')
-                        .toLowerCase();
-                    return type === 'email' || type === 'password' ||
-                        ['username', 'email', 'current-password', 'new-password',
-                         'one-time-code'].includes(autocomplete);
-                };
-                const isStrongAuthInput = input => {
-                    const type = (input.getAttribute('type') || 'text').toLowerCase();
-                    const autocomplete = (input.getAttribute('autocomplete') || '')
-                        .toLowerCase();
-                    return type === 'password' ||
-                        ['current-password', 'new-password', 'one-time-code']
-                            .includes(autocomplete);
-                };
-
-                const form = control.form || control.closest('form');
-                if (form instanceof HTMLFormElement) {
-                    return Array.from(form.querySelectorAll('input')).some(isAuthInput);
-                }
-
-                // Component frameworks sometimes implement authentication forms
-                // without a native HTMLFormElement. Accept only the nearest bounded
-                // ancestor that owns a strong password/OTP control; an ordinary job
-                // application section containing only email/username cannot qualify.
-                let scope = control.parentElement;
-                while (scope && scope !== control.ownerDocument.body) {
-                    const inputs = Array.from(scope.querySelectorAll('input'));
-                    if (inputs.some(isStrongAuthInput)) return true;
-                    scope = scope.parentElement;
-                }
-                return false;
-            }"""
-                    )
-                    if not is_auth_submit:
-                        raise BrowserToolExecutionError(
-                            "Authentication submit rejected: the target is not a submit "
-                            "control in a structurally identifiable login or verification form."
-                        )
-                    await submit_control.click(trial=True, timeout=15_000)
-                    await submit_control.click(timeout=15_000)
-                    result = "Authentication submit control clicked."
-                finally:
-                    await control_handle.dispose()
+                await submit_control.click(trial=True, timeout=15_000)
+                await submit_control.click(timeout=15_000)
+                result = "Authentication submit control clicked."
                 await self._discover_owned_popups()
         except BrowserToolExecutionError:
             raise
@@ -685,23 +486,6 @@ class BrowserSession:
         self._submission_guard_active = True
         self._submission_capability = None
 
-    async def install_submission_interlock(self) -> None:
-        """Block page-owned form submissions outside the reviewed one-use capability."""
-        tab = await self._backend._ensure_tab()
-        page = tab.page
-        installed_pages = getattr(self, "_submission_interlock_pages", None)
-        if not isinstance(installed_pages, set):
-            installed_pages = set()
-            self._submission_interlock_pages = installed_pages
-        if page not in installed_pages:
-            await page.add_init_script(script=SUBMISSION_INTERLOCK_SCRIPT)
-            installed_pages.add(page)
-        installed = await page.evaluate(SUBMISSION_INTERLOCK_SCRIPT)
-        if installed is not True:
-            raise BrowserToolExecutionError(
-                "Browser submission interlock could not be installed."
-            )
-
     def set_submit_approval(self, approved: bool) -> None:
         """Approve the pending reviewed capability or revoke it."""
         capability = self._submission_capability
@@ -731,9 +515,7 @@ class BrowserSession:
             )
         observation = self._current_observation()
         review_digest = hashlib.sha256(
-            f"{observation.signature}\0{final_review}".encode(
-                "utf-8", errors="replace"
-            )
+            f"{observation.signature}\0{final_review}".encode("utf-8", errors="replace")
         ).hexdigest()
         self._submission_capability = SubmissionCapability(
             run_id=self.run_id,
@@ -782,22 +564,6 @@ class BrowserSession:
                 "Submission approval was revoked because the reviewed browser state changed. "
                 "Inspect, review, and request approval again."
             )
-        tab = await self._backend._ensure_tab()
-        locator = (await tab.resolve_target(target=str(target))).locator
-        if await locator.evaluate(ARM_SUBMISSION_INTERLOCK_SCRIPT) is not True:
-            self._submission_capability = None
-            raise BrowserToolExecutionError(
-                "Submission approval could not arm the exact reviewed submit control."
-            )
-
-    async def _disarm_submission_interlock(self) -> None:
-        try:
-            tab = await self._backend._ensure_tab()
-            await tab.page.evaluate(DISARM_SUBMISSION_INTERLOCK_SCRIPT)
-        except Exception:
-            # A successful submit may replace or close the document. Every new document
-            # starts locked again through add_init_script.
-            return
 
     async def _classify_submit_control(
         self,
@@ -810,49 +576,7 @@ class BrowserSession:
         try:
             tab = await self._backend._ensure_tab()
             locator = (await tab.resolve_target(target=target)).locator
-            classification = await locator.evaluate(
-                    """element => {
-                        const selector =
-                            'button, input[type="submit"], input[type="image"]';
-                        let control = element.closest(selector);
-                        if (!control) {
-                            const clickLayer = element.closest('[role="button"]');
-                            if (clickLayer) {
-                                const box = clickLayer.getBoundingClientRect();
-                                const x = box.left + box.width / 2;
-                                const y = box.top + box.height / 2;
-                                control = clickLayer.ownerDocument
-                                    .elementsFromPoint(x, y)
-                                    .find(candidate => candidate !== clickLayer &&
-                                        candidate.matches(selector)) || null;
-                            }
-                        }
-                        if (control instanceof HTMLInputElement) {
-                            if (control.type !== 'submit' && control.type !== 'image')
-                                return 'not_submit';
-                        }
-                        if (control instanceof HTMLButtonElement) {
-                            const type = control.getAttribute('type');
-                            if (type !== 'submit' && !(type === null && control.form !== null))
-                                return 'not_submit';
-                        } else if (!(control instanceof HTMLInputElement)) {
-                            return 'not_submit';
-                        }
-
-                        const form = control.form || control.closest('form');
-                        if (form && (
-                            form.getAttribute('role') === 'search' ||
-                            form.querySelector('input[type="search"]')
-                        )) return 'reversible_search';
-                        return 'form_submit';
-                    }"""
-                )
-            if isinstance(classification, bool):
-                return (
-                    SubmitControlKind.FORM_SUBMIT
-                    if classification
-                    else SubmitControlKind.NOT_SUBMIT
-                )
+            classification, _control = await classify_submit_control(tab.page, locator)
             try:
                 return SubmitControlKind(str(classification))
             except ValueError as exc:
@@ -868,10 +592,7 @@ class BrowserSession:
 
     async def _is_form_submit(self, arguments: dict[str, Any]) -> bool:
         """Compatibility predicate for callers that require a final-capable submit."""
-        return (
-            await self._classify_submit_control(arguments)
-            is SubmitControlKind.FORM_SUBMIT
-        )
+        return await self._classify_submit_control(arguments) is SubmitControlKind.FORM_SUBMIT
 
     async def close(self) -> None:
         if getattr(self, "_owns_backend", True):

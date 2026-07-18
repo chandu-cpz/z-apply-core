@@ -4,80 +4,17 @@ import hashlib
 from dataclasses import dataclass
 from typing import Any
 
-BROWSER_CAPABILITY_SCRIPT = r"""() => {
-    const visible = element => {
-        if (element instanceof HTMLInputElement && element.type === 'hidden') return false;
-        if (element.closest('[hidden], [inert], [aria-hidden="true"]')) return false;
-        const style = getComputedStyle(element);
-        const box = element.getBoundingClientRect();
-        return style.visibility !== 'hidden' && style.display !== 'none' &&
-            Number(style.opacity || 1) > 0 && box.width > 0 && box.height > 0;
-    };
-    const controls = [...document.querySelectorAll(
-        'input, select, textarea, [contenteditable="true"], [role="combobox"]'
-    )].filter(visible).filter(element => !element.disabled);
-    const authGate = controls.some(element => {
-        if (!(element instanceof HTMLInputElement)) return false;
-        const type = (element.type || 'text').toLowerCase();
-        const autocomplete = (element.autocomplete || '').toLowerCase();
-        return type === 'password' || autocomplete === 'current-password' ||
-            autocomplete === 'new-password' || autocomplete === 'one-time-code';
-    });
-    const fileInputs = [...document.querySelectorAll('input[type="file"]')]
-        .filter(visible)
-        .filter(element => !element.disabled);
-    const emptyFileUploadPresent = fileInputs.some(element => element.files.length === 0);
-    const requiredUploadPending = fileInputs.some(element =>
-        (element.required || element.getAttribute('aria-required') === 'true') &&
-        element.files.length === 0
-    );
-    const emptyValue = element => {
-        if (element instanceof HTMLInputElement) {
-            if (element.type === 'file') return element.files.length === 0;
-            if (element.type === 'checkbox' || element.type === 'radio') {
-                return !element.checked;
-            }
-        }
-        return !String(element.value ?? element.textContent ?? '').trim();
-    };
-    const requiredControl = element => element.matches(':required') ||
-        element.getAttribute('aria-required') === 'true';
-    const unresolvedRequiredControls = controls.filter(element =>
-        requiredControl(element) && emptyValue(element)
-    );
-    const invalidControls = controls.filter(element =>
-        element.getAttribute('aria-invalid') === 'true' ||
-        ('validity' in element && !element.validity.valid)
-    );
-    const allSubmitControls = [...document.querySelectorAll(
-        'button[type="submit"], input[type="submit"], input[type="image"], form button:not([type])'
-    )].filter(visible);
-    const submitControls = allSubmitControls.filter(element => !element.disabled &&
-        element.getAttribute('aria-disabled') !== 'true');
-    const disabledSubmitControls = allSubmitControls.filter(element => element.disabled ||
-        element.getAttribute('aria-disabled') === 'true');
-    const actionControls = [...document.querySelectorAll(
-        'button, a[href], input, select, textarea, [role="button"], [role="link"], [role="combobox"]'
-    )].filter(visible).filter(element => !element.disabled &&
-        element.getAttribute('aria-disabled') !== 'true');
-    const minimumVisualArea = Math.max(40000, innerWidth * innerHeight * 0.2);
-    const largeVisualSurface = [...document.querySelectorAll('canvas, video, iframe, img')]
-        .filter(visible).some(element => {
-            const box = element.getBoundingClientRect();
-            return box.width * box.height >= minimumVisualArea;
-        });
-    return {
-        editable_controls_visible: controls.length > 0,
-        unresolved_required_controls: unresolvedRequiredControls.length,
-        invalid_controls: invalidControls.length,
-        auth_gate_visible: authGate,
-        empty_file_upload_present: emptyFileUploadPresent,
-        required_file_upload_pending: requiredUploadPending,
-        enabled_form_submit_visible: submitControls.length > 0,
-        disabled_form_submit_visible: disabledSubmitControls.length > 0,
-        visual_only_surface_visible: largeVisualSurface && actionControls.length === 0,
-    };
-}"""
+
+@dataclass(frozen=True, slots=True)
+class BrowserControlState:
+    """Exact structural state of one browser-resolved form target."""
+
+    target: str
+    value: str = ""
+    has_value: bool = False
+    required: bool = False
+    invalid: bool = False
+    disabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,25 +31,6 @@ class BrowserCapabilities:
     disabled_form_submit_visible: bool = False
     visual_only_surface_visible: bool = False
 
-    @classmethod
-    def from_browser_payload(cls, payload: Any) -> BrowserCapabilities:
-        data = payload if isinstance(payload, dict) else {}
-        return cls(
-            editable_controls_visible=bool(data.get("editable_controls_visible")),
-            unresolved_required_controls=int(
-                data.get("unresolved_required_controls") or 0
-            ),
-            invalid_controls=int(data.get("invalid_controls") or 0),
-            auth_gate_visible=bool(data.get("auth_gate_visible")),
-            empty_file_upload_present=bool(data.get("empty_file_upload_present")),
-            required_file_upload_pending=bool(data.get("required_file_upload_pending")),
-            enabled_form_submit_visible=bool(data.get("enabled_form_submit_visible")),
-            disabled_form_submit_visible=bool(
-                data.get("disabled_form_submit_visible")
-            ),
-            visual_only_surface_visible=bool(data.get("visual_only_surface_visible")),
-        )
-
     def render(self) -> str:
         return "\n".join(
             (
@@ -120,16 +38,11 @@ class BrowserCapabilities:
                 f"unresolved_required_controls={self.unresolved_required_controls}",
                 f"invalid_controls={self.invalid_controls}",
                 f"auth_gate_visible={str(self.auth_gate_visible).lower()}",
-                "empty_file_upload_present="
-                f"{str(self.empty_file_upload_present).lower()}",
-                "required_file_upload_pending="
-                f"{str(self.required_file_upload_pending).lower()}",
-                "enabled_form_submit_visible="
-                f"{str(self.enabled_form_submit_visible).lower()}",
-                "disabled_form_submit_visible="
-                f"{str(self.disabled_form_submit_visible).lower()}",
-                "visual_only_surface_visible="
-                f"{str(self.visual_only_surface_visible).lower()}",
+                f"empty_file_upload_present={str(self.empty_file_upload_present).lower()}",
+                f"required_file_upload_pending={str(self.required_file_upload_pending).lower()}",
+                f"enabled_form_submit_visible={str(self.enabled_form_submit_visible).lower()}",
+                f"disabled_form_submit_visible={str(self.disabled_form_submit_visible).lower()}",
+                f"visual_only_surface_visible={str(self.visual_only_surface_visible).lower()}",
             )
         )
 
