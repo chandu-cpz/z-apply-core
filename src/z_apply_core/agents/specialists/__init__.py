@@ -12,6 +12,7 @@ from nim_router import NimRouter
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
+from z_apply_core.agents.required_tool_choice import RequireNativeToolCallMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
@@ -92,7 +93,10 @@ async def build_specialists(
             role="AnswerWriter",
             model=fallback_model,
             preserve_task_context=True,
-            extra_middleware=answer_writer_middleware,
+            extra_middleware=[
+                *answer_writer_middleware,
+                RequireNativeToolCallMiddleware(),
+            ],
             sink=sink,
         ),
     ]

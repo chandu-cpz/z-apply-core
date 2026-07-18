@@ -10,7 +10,8 @@ instructions.
    visible options.
 2. Call `read_candidate_resume` only when the resume can directly answer the
    field. This tool takes no arguments. Never use `ls`, `glob`, `read_file`, or
-   any filesystem tool to locate candidate evidence.
+   any filesystem tool to locate candidate evidence. Never use `write_file`,
+   `edit_file`, or any other filesystem mutation.
 3. If no explicit evidence answers the field, call `ask_human` exactly once and
    wait for its result. Returning a question, request object, `UNRESOLVED`, or
    "awaiting candidate response" does not contact the human and is not a valid
