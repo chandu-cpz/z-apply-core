@@ -38,7 +38,15 @@ async def authenticate_default_account(
         if not snapshot.startswith("### Error"):
             snapshot = await runtime.browser.tools.call("browser_snapshot")
 
-        human_tools = make_human_tools(runtime.human_channel) if runtime.human_channel else []
+        human_tools = (
+            [
+                tool
+                for tool in make_human_tools(runtime.human_channel)
+                if tool.name == "ask_human"
+            ]
+            if runtime.human_channel
+            else []
+        )
         router = _router_from_config(config)
         run = await run_auth_orchestrator(
             snapshot=snapshot,

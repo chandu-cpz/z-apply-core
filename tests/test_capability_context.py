@@ -207,6 +207,31 @@ class CapabilityContextTests(unittest.TestCase):
         self.assertIn("https://example.test/apply", rendered)
         self.assertIn("bounded current-page view", rendered)
 
+    def test_compact_observation_keeps_field_question_with_generic_textbox_name(
+        self,
+    ) -> None:
+        evidence = "\n".join(
+            [f"- generic filler {index} {'x' * 80}" for index in range(80)]
+            + [
+                "- listitem [ref=e90]:",
+                "  - generic [ref=e91]:",
+                "    - generic [ref=e93]:",
+                "      - text: Where did you hear about Resilinc?",
+                '      - textbox "Type your response" [ref=e96]',
+            ]
+        )
+        observation = BrowserObservation.create(
+            revision=8,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence=evidence,
+        )
+
+        rendered = observation.compact_render(max_chars=2_000)
+
+        self.assertIn("Where did you hear about Resilinc?", rendered)
+        self.assertIn('textbox "Type your response" [ref=e96]', rendered)
+
 
 class BrowserCapabilityParsingTests(unittest.IsolatedAsyncioTestCase):
     async def test_browser_session_returns_compositional_capabilities(self) -> None:

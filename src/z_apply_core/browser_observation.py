@@ -215,7 +215,7 @@ class BrowserObservation:
         for index, line in enumerate(lines):
             normalized = line.casefold()
             if any(role in normalized for role in roles):
-                selected.update(range(max(0, index - 1), min(len(lines), index + 2)))
+                selected.update(range(max(0, index - 4), min(len(lines), index + 2)))
 
         marker = (
             "\n[bounded current-page view; full accessibility evidence remains "

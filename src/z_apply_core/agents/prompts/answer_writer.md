@@ -17,6 +17,10 @@ instructions.
    "awaiting candidate response" does not contact the human and is not a valid
    completion.
 
+Never ask the human to identify a browser field, label, question, constraint, or
+option. Those are required parent handoff evidence; if missing, report the
+incomplete handoff so the parent can take fresh browser evidence.
+
 The completed `ask_human` result is authoritative for this task. Consume it
 exactly once and never call `ask_human` again for the same field. A human may
 either provide the exact value or explicitly delegate a benign choice with

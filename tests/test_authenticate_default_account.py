@@ -116,7 +116,10 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
             list(AUTH_AGENT_BROWSER_TOOLS),
         )
         self.assertIn("browser_take_screenshot", AUTH_AGENT_BROWSER_TOOLS)
-        self.assertEqual(len(captured["human_tools"]), 2)
+        self.assertEqual(
+            [tool.name for tool in captured["human_tools"]],
+            ["ask_human"],
+        )
 
     async def test_auth_node_still_checks_persistent_session_without_credentials(self) -> None:
         tools = FakeTools(
