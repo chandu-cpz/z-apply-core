@@ -48,13 +48,17 @@ async def is_direct_file_upload_trigger(page: Page, target: Locator) -> bool:
 
 async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Locator | None]:
     control = target.locator(NATIVE_SUBMIT_XPATH)
+    is_proxy = False
     if await control.count() != 1:
-        return "not_submit", None
+        control = await _form_submit_proxy(page, target)
+        if control is None:
+            return "not_submit", None
+        is_proxy = True
 
     tag = await _tag_hint(control)
     control_type = (await control.get_attribute("type") or "").lower()
     form = await _owning_form(page, control)
-    if tag == "button" and control_type not in {"", "submit"}:
+    if tag == "button" and control_type not in {"", "submit"} and not is_proxy:
         return "not_submit", None
     if tag == "button" and not control_type and form is None:
         return "not_submit", None
@@ -67,6 +71,37 @@ async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Loc
     ):
         return "reversible_search", control
     return "form_submit", control
+
+
+async def _form_submit_proxy(page: Page, target: Locator) -> Locator | None:
+    """Recognize a final JS form action without relying on its visible text."""
+    control = target.locator("xpath=ancestor-or-self::button[1]")
+    if await control.count() != 1:
+        return None
+    if (await control.get_attribute("type") or "").lower() != "button":
+        return None
+
+    form = await _owning_form(page, control)
+    if form is None:
+        return None
+    if not await form.locator(
+        "button[type='submit'], input[type='submit'], input[type='image']"
+    ).count():
+        return None
+    if not await form.locator(
+        "input[required], select[required], textarea[required], [aria-required='true']"
+    ).count():
+        return None
+
+    visible_actions: list[Locator] = []
+    buttons = form.locator("button")
+    for index in range(await buttons.count()):
+        button = buttons.nth(index)
+        if await button.is_visible() and not await button.is_disabled():
+            visible_actions.append(button)
+    if not visible_actions or await control.and_(visible_actions[-1]).count() != 1:
+        return None
+    return control
 
 
 async def resolve_auth_submit_control(page: Page, target: Locator) -> Locator | None:
