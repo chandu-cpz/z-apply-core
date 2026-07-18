@@ -19,6 +19,22 @@ def response(name: str, args: dict[str, object]) -> ModelResponse:
 
 
 class ActionOrderTests(unittest.IsolatedAsyncioTestCase):
+    async def test_text_entry_requires_one_answer_writer_result_per_field(self) -> None:
+        browser = SimpleNamespace(required_file_upload_pending=AsyncMock(return_value=False))
+        middleware = OrchestratorActionOrderMiddleware(browser)
+        unsafe_fill = response(
+            "browser_fill_form",
+            {"fields": [{"target": "e1", "value": "plausible@example.com"}]},
+        )
+        answer = response(
+            "task",
+            {"subagent_type": "AnswerWriter", "description": "Email"},
+        )
+        handler = AsyncMock(side_effect=[unsafe_fill, answer])
+        request = SimpleNamespace(messages=[], override=lambda **values: SimpleNamespace(**values))
+
+        self.assertIs(await middleware.awrap_model_call(request, handler), answer)
+
     async def test_answer_writer_result_must_be_consumed_by_browser_mutation(self) -> None:
         browser = SimpleNamespace(required_file_upload_pending=AsyncMock(return_value=False))
         middleware = OrchestratorActionOrderMiddleware(browser)

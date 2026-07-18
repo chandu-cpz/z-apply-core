@@ -27,7 +27,7 @@ class OrchestratorActionOrderMiddleware(
     def __init__(self, browser: BrowserSession | None) -> None:
         super().__init__()
         self._browser = browser
-        self._answers_waiting_to_be_applied = False
+        self._candidate_answers_available = 0
 
     async def awrap_model_call(
         self,
@@ -65,16 +65,33 @@ class OrchestratorActionOrderMiddleware(
         call = request.tool_call
         if _is_answer_writer(call):
             if _has_nonempty_success(result):
-                self._answers_waiting_to_be_applied = True
+                self._candidate_answers_available += 1
+        elif call.get("name") == "ask_human" and _has_nonempty_success(result):
+            self._candidate_answers_available += 1
         elif call.get("name") in BROWSER_CHANGING_TOOL_NAMES and _tool_succeeded(result):
-            self._answers_waiting_to_be_applied = False
+            consumed = _text_entry_count(call)
+            if consumed:
+                self._candidate_answers_available = max(
+                    0, self._candidate_answers_available - consumed
+                )
+            else:
+                self._candidate_answers_available = 0
         return result
 
     async def _violation(self, response: ModelResponse[ResponseT]) -> str | None:
         calls = _tool_calls(response)
         if not calls:
             return None
-        if self._answers_waiting_to_be_applied and not any(
+        text_entries = sum(_text_entry_count(call) for call in calls)
+        if text_entries > self._candidate_answers_available:
+            return (
+                "CANDIDATE EVIDENCE ERROR: browser text entry is allowed only after one "
+                "successful AnswerWriter result per field (or one completed human "
+                "challenge answer). Delegate one AnswerWriter task for each exact "
+                "required candidate field, ignore empty optional fields, then apply only "
+                "the returned values."
+            )
+        if self._candidate_answers_available and not any(
             call.get("name") in BROWSER_CHANGING_TOOL_NAMES for call in calls
         ):
             return (
@@ -119,6 +136,17 @@ def _is_answer_writer(call: Mapping[str, Any]) -> bool:
         return False
     args = call.get("args")
     return isinstance(args, dict) and args.get("subagent_type") == "AnswerWriter"
+
+
+def _text_entry_count(call: Mapping[str, Any]) -> int:
+    name = call.get("name")
+    if name == "browser_type":
+        return 1
+    if name != "browser_fill_form":
+        return 0
+    args = call.get("args")
+    fields = args.get("fields") if isinstance(args, dict) else None
+    return len(fields) if isinstance(fields, list) and fields else 1
 
 
 def _tool_messages(result: ToolMessage | Command[Any]) -> list[ToolMessage]:
