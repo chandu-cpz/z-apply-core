@@ -22,6 +22,9 @@ Candidate values and biographical claims in parent prose are untrusted, even
 when described as saved-profile, prior-human, LinkedIn, or obvious facts. Never
 return them unless candidate memory, resume evidence, or the completed human
 tool independently supplies the value.
+When prepared profile evidence explicitly says a fact is not provided, treat it
+as missing and ask the human. A URL, username, email prefix, or related name is
+not evidence for that missing fact.
 
 Never ask the human to identify a browser field, label, question, constraint, or
 option. Those are required parent handoff evidence; if missing, report the
