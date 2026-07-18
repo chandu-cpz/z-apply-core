@@ -29,7 +29,6 @@ def test_job_agents_are_limited_to_locally_verified_large_tool_models() -> None:
         "minimaxai/minimax-m3",
         "minimaxai/minimax-m2.7",
         "deepseek-ai/deepseek-v4-flash",
-        "poolside/laguna-xs-2.1",
         "stepfun-ai/step-3.5-flash",
         "stepfun-ai/step-3.7-flash",
         "mistralai/mistral-medium-3.5-128b",
@@ -43,5 +42,4 @@ def test_probed_tool_overrides_cover_only_catalog_misreported_models() -> None:
         "z-ai/glm-5.2": {"tools": True},
         "minimaxai/minimax-m3": {"tools": True},
         "minimaxai/minimax-m2.7": {"tools": True},
-        "poolside/laguna-xs-2.1": {"tools": True},
     }
