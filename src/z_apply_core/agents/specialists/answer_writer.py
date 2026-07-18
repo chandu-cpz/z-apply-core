@@ -49,9 +49,6 @@ class CandidateFieldRequest(BaseModel):
     control_type: Literal["textbox", "checkbox", "radio", "combobox", "slider"] = Field(
         description="Exact Playwright form control type from current browser evidence"
     )
-    visible_options: list[str] = Field(
-        default_factory=list, description="All currently visible choice options"
-    )
 
 
 def make_candidate_field_tool() -> BaseTool:
@@ -64,13 +61,12 @@ def make_candidate_field_tool() -> BaseTool:
         target: str,
         current_value: str,
         control_type: str,
-        visible_options: list[str],
     ) -> str:
         """Resolve exactly one candidate field through AnswerWriter.
 
         Copy only current browser evidence into this request. Do not propose an
-        answer. The runtime rejects stale, already-filled, disabled, or invalid
-        requests before delegating candidate reasoning.
+        answer. The runtime rejects stale or disabled requests and supplies
+        browser-owned choice options without model transcription.
         """
         del (
             browser_revision,
@@ -78,7 +74,6 @@ def make_candidate_field_tool() -> BaseTool:
             target,
             current_value,
             control_type,
-            visible_options,
         )
         raise ToolException("Candidate delegation was not normalized by the runtime.")
 

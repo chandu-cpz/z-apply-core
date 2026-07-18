@@ -105,6 +105,20 @@ async def inspect_control(page: Page, locator: Locator) -> BrowserControlState:
     )
 
 
+async def inspect_control_options(page: Page, locator: Locator) -> tuple[str, ...]:
+    """Return exact DOM-owned choices for one select or ARIA combobox."""
+    texts = await locator.locator("option").all_text_contents()
+    if not texts:
+        controlled_id = await locator.get_attribute("aria-controls") or await locator.get_attribute(
+            "aria-owns"
+        )
+        if controlled_id:
+            controlled = page.locator(f"xpath=//*[@id={_xpath_literal(controlled_id)}]")
+            if await controlled.count() == 1:
+                texts = await controlled.get_by_role("option").all_text_contents()
+    return tuple(dict.fromkeys(text.strip() for text in texts if text.strip()))
+
+
 async def required_file_upload_pending(page: Page) -> bool:
     for control in await _visible_enabled(page.locator('input[type="file"]')):
         if await _is_required(control) and not await _has_value(control):

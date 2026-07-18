@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
@@ -90,10 +90,19 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
 
         tool_call_id = str(request.tool_call.get("id", ""))
         field_request = self._requests.pop(tool_call_id, None)
-        if field_request is not None and self._candidate_memory is not None:
-            memory_evidence = await self._candidate_memory.lookup(
-                field_label=field_request.field_label,
-                question=field_request.field_label,
+        visible_options: tuple[str, ...] = ()
+        if field_request is not None:
+            if field_request.control_type == "combobox" and self._browser is not None:
+                visible_options = await self._browser.inspect_control_options(
+                    field_request.target
+                )
+            memory_evidence = (
+                await self._candidate_memory.lookup(
+                    field_label=field_request.field_label,
+                    question=field_request.field_label,
+                )
+                if self._candidate_memory is not None
+                else None
             )
             request = request.override(
                 tool_call={
@@ -103,6 +112,7 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
                         "description": _render_request(
                             field_request,
                             memory_evidence=memory_evidence,
+                            visible_options=visible_options,
                         ),
                     },
                 }
@@ -113,6 +123,7 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
             request,
             result,
             field_request,
+            visible_options=visible_options,
         )
 
     async def _violation(self, response: ModelResponse[Any]) -> str | None:
@@ -175,8 +186,13 @@ def _render_request(
     request: CandidateFieldRequest,
     *,
     memory_evidence: Mapping[str, object] | None = None,
+    visible_options: Sequence[str] = (),
 ) -> str:
-    payload = json.dumps(request.model_dump(), ensure_ascii=False, indent=2)
+    payload = json.dumps(
+        {**request.model_dump(), "visible_options": list(visible_options)},
+        ensure_ascii=False,
+        indent=2,
+    )
     memory_payload = json.dumps(
         memory_evidence
         or {

@@ -16,6 +16,7 @@ from z_apply_core.browser_config import build_browser_config
 from z_apply_core.browser_form_inspection import (
     FormControlBlocker,
     inspect_control,
+    inspect_control_options,
     inspect_page_blockers,
     inspect_page_capabilities,
     required_file_upload_pending,
@@ -399,6 +400,13 @@ class BrowserSession:
             tab = await self._backend._ensure_tab()
             resolved = await tab.resolve_target(target=target)
             return await inspect_control(tab.page, resolved.locator)
+
+    async def inspect_control_options(self, target: str) -> tuple[str, ...]:
+        """Return exact browser-owned options without model transcription."""
+        async with self._operation_scope():
+            tab = await self._backend._ensure_tab()
+            resolved = await tab.resolve_target(target=target)
+            return await inspect_control_options(tab.page, resolved.locator)
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""

@@ -30,10 +30,11 @@ and historical playbooks.
 6. For every required candidate field and every material field filled by
    Simplify, call
    `resolve_candidate_field` once with the current browser revision, exact
-   label/question, ref, value, control type, and all visible options. Do not call
-   `task` for AnswerWriter and do not include a proposed value. The runtime
-   confirms an accurate existing value or applies the corrected value atomically;
-   continue from its receipt and never apply the same result again.
+   label/question, ref, value, and control type. Do not copy choice lists, call
+   `task` for AnswerWriter, or include a proposed value. The runtime binds exact
+   browser-owned options, confirms an accurate existing value, or applies the
+   corrected value atomically; continue from its receipt and never apply the
+   same result again.
 7. Complete required page-owned controls such as privacy consent directly.
    Empty optional fields are not work.
 8. When only a CAPTCHA or human identity action remains, call `ask_human` once

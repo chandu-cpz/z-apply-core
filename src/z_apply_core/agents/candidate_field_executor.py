@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from langchain.agents.middleware.types import ToolCallRequest
@@ -66,6 +67,8 @@ class CandidateFieldExecutor:
         tool_request: ToolCallRequest,
         result: ToolMessage | Command[Any],
         request: CandidateFieldRequest | None,
+        *,
+        visible_options: Sequence[str] = (),
     ) -> ToolMessage | Command[Any]:
         tool_call_id = str(tool_request.tool_call.get("id", ""))
         if request is None:
@@ -97,6 +100,7 @@ class CandidateFieldExecutor:
                 tool_call_id,
                 request,
                 answer,
+                visible_options,
             )
             if not isinstance(answer, CandidateFieldAnswer):
                 return answer
@@ -212,6 +216,7 @@ class CandidateFieldExecutor:
         tool_call_id: str,
         request: CandidateFieldRequest,
         answer: CandidateFieldAnswer,
+        visible_options: Sequence[str],
     ) -> CandidateFieldAnswer | ToolMessage | Command[Any]:
         human_tool = self._human_tool
         if human_tool is None:
@@ -235,7 +240,7 @@ class CandidateFieldExecutor:
                         "This required application field was not found in exact candidate "
                         "memory or prepared resume evidence."
                     ),
-                    "options": request.visible_options,
+                    "options": list(visible_options),
                 }
             )
         except Exception as exc:

@@ -30,7 +30,6 @@ def _candidate_call(*, call_id: str = "candidate-1") -> dict[str, Any]:
             "target": "e96",
             "current_value": "",
             "control_type": "textbox",
-            "visible_options": [],
         },
     }
 
@@ -265,6 +264,9 @@ async def test_combobox_value_must_survive_the_browser_mutation() -> None:
             ]
         ),
         call_tool_with_inline_snapshot=AsyncMock(return_value="changed: false"),
+        inspect_control_options=AsyncMock(
+            return_value=("Hyderabad, Telangana, India",)
+        ),
         observe=AsyncMock(return_value="BROWSER OBSERVATION revision: 8"),
     )
     middleware = CandidateFieldMiddleware(browser)
@@ -352,7 +354,7 @@ async def test_atomic_candidate_failure_returns_fresh_evidence_for_recovery() ->
         value="LinkedIn",
     )
     result = await middleware.awrap_tool_call(
-        SimpleNamespace(tool_call=normalized),
+        ToolCallRequest(tool_call=normalized, tool=None, state={}, runtime=object()),  # type: ignore[arg-type]
         AsyncMock(
             return_value=Command(
                 update={
