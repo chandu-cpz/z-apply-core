@@ -38,22 +38,22 @@ ORCHESTRATOR_EXCLUDED_MODEL_IDS: frozenset[str] = frozenset(
 ROLE_POLICY: dict[str, dict[str, Any]] = {
     "orchestrator": {
         "priority": "balanced",
-        "reasoning": False,
+        "reasoning": True,
         "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     },
     "auth_orchestrator": {
         "priority": "balanced",
-        "reasoning": False,
+        "reasoning": True,
         "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     },
     "AuthenticationSpecialist": {
         "priority": "balanced",
-        "reasoning": False,
+        "reasoning": True,
         "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     },
-    "BrowserSpecialist": {"priority": "balanced", "reasoning": False},
-    "AnswerWriter": {"priority": "quality", "reasoning": False},
-    "VisionSpecialist": {"priority": "balanced", "reasoning": False, "force_vision": True},
+    "BrowserSpecialist": {"priority": "balanced", "reasoning": True},
+    "AnswerWriter": {"priority": "quality", "reasoning": True},
+    "VisionSpecialist": {"priority": "balanced", "reasoning": True, "force_vision": True},
 }
 
 
@@ -161,7 +161,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         super().__init__()
         self._router = router
         self._role = role
-        self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": False})
+        self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": True})
         self._active_selection = initial_selection
         self._last_model_id = initial_selection.info.id if initial_selection is not None else ""
         self._sink = sink

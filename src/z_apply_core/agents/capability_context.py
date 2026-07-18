@@ -13,17 +13,6 @@ from z_apply_core.browser_session import BrowserSession
 from z_apply_core.memory.platform_playbooks import PlatformPlaybooks
 
 CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
-_READ_BROWSER_TOOLS = frozenset({"browser_observe", "browser_snapshot", "browser_find"})
-_NON_FORM_BROWSER_TOOLS = _READ_BROWSER_TOOLS | frozenset(
-    {
-        "browser_navigate",
-        "browser_click",
-        "browser_tabs",
-        "browser_wait_for",
-        "remember_platform_lesson",
-        "browser_handle_dialog",
-    }
-)
 _ALWAYS_AVAILABLE = frozenset(
     {
         "task",
@@ -138,46 +127,6 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         ]
         if atomic_upload_pending:
             return [tool for tool in tools if _tool_name(tool) == "browser_click_upload"]
-        if capabilities is None:
-            safe = _READ_BROWSER_TOOLS | frozenset({"browser_wait_for", "application_blocked"})
-            return [tool for tool in tools if _tool_name(tool) in safe]
-        if capabilities.auth_gate_visible:
-            # The specialist owns fresh inspection and every stateful auth action.
-            # Once the live DOM proves an auth gate, another parent observation
-            # cannot advance the application and only gives small models an escape
-            # from the required semantic handoff.
-            allowed = frozenset({"task"})
-            return [tool for tool in tools if _tool_name(tool) in allowed]
-        if not capabilities.editable_controls_visible:
-            allowed = _NON_FORM_BROWSER_TOOLS | frozenset(
-                {"application_blocked", "application_submitted"}
-            )
-            if capabilities.visual_only_surface_visible:
-                allowed |= frozenset({"task"})
-            return [tool for tool in tools if _tool_name(tool) in allowed]
-        if capabilities.required_file_upload_pending:
-            return [
-                tool
-                for tool in tools
-                if _tool_name(tool)
-                not in {
-                    "request_submit_approval",
-                    "application_submitted",
-                    "task",
-                    "resolve_candidate_field",
-                }
-            ]
-        candidate_resolution_needed = bool(
-            capabilities.unresolved_required_controls
-            or capabilities.invalid_controls
-            or capabilities.disabled_form_submit_visible
-        )
-        if not candidate_resolution_needed and not capabilities.visual_only_surface_visible:
-            return [
-                tool
-                for tool in tools
-                if _tool_name(tool) not in {"task", "resolve_candidate_field"}
-            ]
         return tools
 
 

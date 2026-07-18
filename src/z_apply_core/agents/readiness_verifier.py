@@ -51,7 +51,7 @@ async def require_submission_readiness(
         await _emit_verdict(sink, blocked_verdict)
         return blocked_verdict
 
-    selection = await router.lease(tools=True, priority="balanced")
+    selection = await router.lease(tools=True, reasoning=True, priority="balanced")
     verdict: ReadinessVerdict | None = None
 
     @tool(return_direct=True)

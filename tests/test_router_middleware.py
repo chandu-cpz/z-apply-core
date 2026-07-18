@@ -247,7 +247,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             tools=True,
             structured=False,
             vision=False,
-            reasoning=False,
+            reasoning=True,
             priority="balanced",
             excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )
@@ -276,7 +276,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             tools=True,
             structured=False,
             vision=False,
-            reasoning=False,
+            reasoning=True,
             priority="quality",
         )
 
@@ -305,7 +305,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             tools=True,
             structured=False,
             vision=False,
-            reasoning=False,
+            reasoning=True,
             priority="balanced",
             excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )

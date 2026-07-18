@@ -24,7 +24,6 @@ def test_router_policy_keeps_the_120b_floor_and_known_bad_120b_exceptions() -> N
 def test_job_agents_are_limited_to_locally_verified_large_tool_models() -> None:
     assert VERIFIED_LARGE_TOOL_MODEL_IDS == (
         "nvidia/nemotron-3-ultra-550b-a55b",
-        "thinkingmachines/inkling",
         "z-ai/glm-5.2",
         "minimaxai/minimax-m3",
         "minimaxai/minimax-m2.7",
@@ -38,7 +37,6 @@ def test_job_agents_are_limited_to_locally_verified_large_tool_models() -> None:
 
 def test_probed_tool_overrides_cover_only_catalog_misreported_models() -> None:
     assert PROBED_TOOL_CAPABILITY_OVERRIDES == {
-        "thinkingmachines/inkling": {"tools": True},
         "z-ai/glm-5.2": {"tools": True},
         "minimaxai/minimax-m3": {"tools": True},
         "minimaxai/minimax-m2.7": {"tools": True},

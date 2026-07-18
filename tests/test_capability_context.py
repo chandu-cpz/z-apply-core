@@ -83,33 +83,29 @@ class CapabilityContextTests(unittest.TestCase):
             ls,
         ]
 
-    def test_auth_gate_exposes_only_authentication_delegation(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(
-            self.tools,
+    def test_browser_state_does_not_hide_safe_agent_actions(self) -> None:
+        expected = [
+            "browser_observe",
+            "browser_click",
+            "browser_navigate",
+            "browser_fill_form",
+            "browser_click_upload",
+            "task",
+            "resolve_candidate_field",
+            "request_submit_approval",
+            "application_submitted",
+        ]
+        states = (
             BrowserCapabilities(auth_gate_visible=True),
+            BrowserCapabilities(editable_controls_visible=True),
+            BrowserCapabilities(editable_controls_visible=False),
+            None,
         )
 
-        self.assertEqual([tool.name for tool in tools], ["task"])
-
-    def test_required_upload_hides_delegation_and_submission(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(
-            self.tools,
-            BrowserCapabilities(
-                editable_controls_visible=True,
-                required_file_upload_pending=True,
-            ),
-        )
-
-        self.assertEqual(
-            [tool.name for tool in tools],
-            [
-                "browser_observe",
-                "browser_click",
-                "browser_navigate",
-                "browser_fill_form",
-                "browser_click_upload",
-            ],
-        )
+        for state in states:
+            with self.subTest(state=state):
+                tools = CapabilityContextMiddleware._filter_tools(self.tools, state)
+                self.assertEqual([tool.name for tool in tools], expected)
 
     def test_intercepted_file_chooser_exposes_only_atomic_upload(self) -> None:
         tools = CapabilityContextMiddleware._filter_tools(
@@ -119,84 +115,6 @@ class CapabilityContextTests(unittest.TestCase):
         )
 
         self.assertEqual([tool.name for tool in tools], ["browser_click_upload"])
-
-    def test_optional_empty_file_input_does_not_hide_form_work(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(
-            self.tools,
-            BrowserCapabilities(
-                editable_controls_visible=True,
-                empty_file_upload_present=True,
-                unresolved_required_controls=1,
-            ),
-        )
-
-        self.assertIn("browser_fill_form", [tool.name for tool in tools])
-        self.assertIn("task", [tool.name for tool in tools])
-        self.assertIn("resolve_candidate_field", [tool.name for tool in tools])
-
-    def test_ordinary_form_excludes_deepagents_filesystem_tools(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(
-            self.tools,
-            BrowserCapabilities(editable_controls_visible=True),
-        )
-
-        self.assertEqual(
-            [tool.name for tool in tools],
-            [
-                "browser_observe",
-                "browser_click",
-                "browser_navigate",
-                "browser_fill_form",
-                "browser_click_upload",
-                "request_submit_approval",
-                "application_submitted",
-            ],
-        )
-
-    def test_unresolved_required_control_exposes_answer_writer_delegation(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(
-            self.tools,
-            BrowserCapabilities(
-                editable_controls_visible=True,
-                unresolved_required_controls=1,
-            ),
-        )
-
-        self.assertIn("task", [tool.name for tool in tools])
-        self.assertIn("resolve_candidate_field", [tool.name for tool in tools])
-
-    def test_disabled_submit_exposes_semantic_repair_delegation(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(
-            self.tools,
-            BrowserCapabilities(
-                editable_controls_visible=True,
-                disabled_form_submit_visible=True,
-            ),
-        )
-
-        self.assertIn("task", [tool.name for tool in tools])
-        self.assertIn("resolve_candidate_field", [tool.name for tool in tools])
-
-    def test_job_detail_page_hides_form_mutations_and_human_delegation(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(
-            self.tools,
-            BrowserCapabilities(editable_controls_visible=False),
-        )
-
-        self.assertEqual(
-            [tool.name for tool in tools],
-            [
-                "browser_observe",
-                "browser_click",
-                "browser_navigate",
-                "application_submitted",
-            ],
-        )
-
-    def test_capability_inspection_failure_exposes_only_safe_recovery_tools(self) -> None:
-        tools = CapabilityContextMiddleware._filter_tools(self.tools, None)
-
-        self.assertEqual([tool.name for tool in tools], ["browser_observe"])
 
     def test_compact_observation_bounds_repeated_model_context(self) -> None:
         evidence = "\n".join(

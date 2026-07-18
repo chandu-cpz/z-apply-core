@@ -109,6 +109,7 @@ async def run_orchestrator(
     try:
         selection = await router.lease(
             tools=True,
+            reasoning=True,
             priority="balanced",
             excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )
@@ -250,10 +251,7 @@ async def run_orchestrator(
             SafeToolBatchMiddleware(),
             OrchestratorActionOrderMiddleware(active_browser),
             NoProgressGuardMiddleware(
-                browser=active_browser,
                 on_no_progress=router_middleware.reject_active_response,
-                max_stagnant_tool_calls=6,
-                max_stagnant_model_responses=3,
             ),
             CandidateFieldMiddleware(active_browser, candidate_memory),
             SubagentDispatchMiddleware(

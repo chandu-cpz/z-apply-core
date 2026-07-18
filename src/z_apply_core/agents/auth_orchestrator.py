@@ -49,6 +49,7 @@ async def run_auth_orchestrator(
     try:
         selection = await router.lease(
             tools=True,
+            reasoning=True,
             priority="balanced",
             excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )

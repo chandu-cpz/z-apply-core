@@ -60,7 +60,6 @@ BLOCKED_MODEL_IDS_BELOW_120B: tuple[str, ...] = (
 # request capabilities rather than model IDs.
 VERIFIED_LARGE_TOOL_MODEL_IDS: tuple[str, ...] = (
     "nvidia/nemotron-3-ultra-550b-a55b",
-    "thinkingmachines/inkling",
     "z-ai/glm-5.2",
     "minimaxai/minimax-m3",
     "minimaxai/minimax-m2.7",
@@ -76,7 +75,6 @@ VERIFIED_LARGE_TOOL_MODEL_IDS: tuple[str, ...] = (
 # override only that stale provider metadata; they do not permit unprobed
 # models into the fixed application pool.
 PROBED_TOOL_CAPABILITY_OVERRIDES: dict[str, dict[str, bool]] = {
-    "thinkingmachines/inkling": {"tools": True},
     "z-ai/glm-5.2": {"tools": True},
     "minimaxai/minimax-m3": {"tools": True},
     "minimaxai/minimax-m2.7": {"tools": True},
