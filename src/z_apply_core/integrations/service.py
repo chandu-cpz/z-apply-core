@@ -18,6 +18,7 @@ from typing import Any
 from uuid import uuid4
 
 from z_apply_core.agents.context_inbox import ContextInbox, ContextMessage
+from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.browser_session import ARTIFACT_ROOT
 from z_apply_core.browser_workspace import BrowserWorkspace
 from z_apply_core.graph import make_router, run_job
@@ -225,7 +226,7 @@ class ZApplyCore:
         configured_limit = int(os.getenv("Z_APPLY_MAX_ACTIVE_RUNS", "3"))
         self._config = config or CoreIntegrationConfig(max_active_runs=configured_limit)
         self._runs: dict[str, _Run] = {}
-        self._router: Any | None = None
+        self._provider: ModelProvider | None = None
         self._started = False
         self._closing = False
         self._scheduler: asyncio.Task[None] | None = None
@@ -245,7 +246,7 @@ class ZApplyCore:
             return
         if self._closing:
             raise CoreShuttingDown()
-        self._router = make_router()
+        self._provider = get_provider(make_router())
         self._candidate_memory = CandidateMemory()
         self._telegram = make_configured_human_channel()
         self._started = True
@@ -472,7 +473,7 @@ class ZApplyCore:
                 task=run.request.task or DEFAULT_TASK,
                 live_view=run.request.live_view,
                 sink=_GraphSink(self, run),
-                router=self._router,
+                provider=self._provider,
                 resources=run.resources,
                 cleanup_resources=False,
                 context_inbox=run.context_inbox,

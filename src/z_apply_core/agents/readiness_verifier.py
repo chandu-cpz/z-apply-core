@@ -7,9 +7,9 @@ from deepagents import create_deep_agent
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
-from nim_router import NimRouter
 
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
+from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
@@ -30,7 +30,7 @@ class ReadinessVerdict:
 async def require_submission_readiness(
     *,
     browser: BrowserSession,
-    router: NimRouter,
+    provider: ModelProvider,
     final_review: str,
     config: RunnableConfig,
     sink: FrameworkEventSink | None,
@@ -51,7 +51,7 @@ async def require_submission_readiness(
         await _emit_verdict(sink, blocked_verdict)
         return blocked_verdict
 
-    selection = await router.lease(tools=True, reasoning=True, priority="balanced")
+    selection = await provider.lease(tools=True, reasoning=True, priority="balanced")
     verdict: ReadinessVerdict | None = None
 
     @tool(return_direct=True)
@@ -87,7 +87,7 @@ async def require_submission_readiness(
         return "Readiness rejection recorded."
 
     router_middleware = NimRouterMiddleware(
-        router,
+        provider,
         role="ReadinessVerifier",
         initial_selection=selection,
         sink=sink,

@@ -8,11 +8,10 @@ from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool, tool
-from nim_router import NimRouter
-from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
+from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.orchestrator import CORE_ROOT, DEEPAGENT_FILESYSTEM_PERMISSIONS
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
@@ -37,23 +36,23 @@ async def run_auth_orchestrator(
     verification_tools: Sequence[BaseTool] = (),
     config: RunnableConfig,
     sink: FrameworkEventSink | None = None,
-    router: NimRouter | None = None,
+    provider: ModelProvider | None = None,
     default_credentials_available: bool = False,
 ) -> AuthOrchestratorRun:
     configure_z_apply_harness_profile()
-    if not isinstance(router, NimRouter):
+    if provider is None:
         return AuthOrchestratorRun(
-            "Model routing failed: shared NimRouter was not provided.", "", "failed"
+            "Model routing failed: no model provider was provided.", "", "failed"
         )
 
     try:
-        selection = await router.lease(
+        selection = await provider.lease(
             tools=True,
             reasoning=True,
             priority="balanced",
             excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )
-    except (NimRouterError, ImportError, ValueError) as exc:
+    except (ImportError, ValueError) as exc:
         return AuthOrchestratorRun(f"Model selection failed: {exc}", "", "failed")
 
     node_info(logger, "authenticate_default_account", "initial model: %s", selection.info.id)
@@ -81,7 +80,7 @@ async def run_auth_orchestrator(
         return "Authentication uncertainty recorded. Stop now."
 
     router_middleware = NimRouterMiddleware(
-        router,
+        provider,
         role="auth_orchestrator",
         initial_selection=selection,
         sink=sink,

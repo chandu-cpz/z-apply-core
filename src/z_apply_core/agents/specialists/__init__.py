@@ -7,9 +7,9 @@ from deepagents import SubAgent
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
-from nim_router import NimRouter
 
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
@@ -26,7 +26,7 @@ from z_apply_core.stream_events import FrameworkEventSink
 def _with_routing(
     spec: SubAgent,
     *,
-    router: NimRouter,
+    provider: ModelProvider,
     role: str,
     model: BaseChatModel,
     extra_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
@@ -35,7 +35,7 @@ def _with_routing(
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
-    router_middleware = NimRouterMiddleware(router, role=role, sink=sink)
+    router_middleware = NimRouterMiddleware(provider, role=role, sink=sink)
     enriched["middleware"] = [
         *extra_middleware,
         *([SpecialistTaskContextMiddleware()] if preserve_task_context else []),
@@ -48,7 +48,7 @@ def _with_routing(
 
 
 async def build_specialists(
-    router: NimRouter,
+    provider: ModelProvider,
     browser_tools: Sequence[BaseTool],
     *,
     fallback_model: BaseChatModel,
@@ -61,7 +61,7 @@ async def build_specialists(
     return [
         _with_routing(
             build_authentication_specialist(authentication_tools),
-            router=router,
+            provider=provider,
             role="AuthenticationSpecialist",
             model=fallback_model,
             extra_middleware=[
@@ -72,7 +72,7 @@ async def build_specialists(
         ),
         _with_routing(
             build_vision_specialist(browser_tools),
-            router=router,
+            provider=provider,
             role="VisionSpecialist",
             model=fallback_model,
             extra_middleware=[VisionToolMessageCompatibilityMiddleware()],
@@ -83,7 +83,7 @@ async def build_specialists(
                 answer_writer_human_tools,
                 candidate_resume=candidate_resume,
             ),
-            router=router,
+            provider=provider,
             role="AnswerWriter",
             model=fallback_model,
             preserve_task_context=True,

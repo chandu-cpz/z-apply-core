@@ -7,12 +7,10 @@ from typing import cast
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import FilesystemBackend
-from deepagents.middleware.summarization import SummarizationMiddleware
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from nim_router import NimRouter
-from nim_router.errors import NimRouterError
 
 from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
@@ -21,6 +19,7 @@ from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddlewa
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
@@ -87,6 +86,7 @@ async def run_orchestrator(
     human_tools: Sequence[BaseTool] = (),
     authentication_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
+    provider: ModelProvider | None = None,
     router: NimRouter | None = None,
     resume_path: str = "",
     candidate_memory: CandidateMemory | None = None,
@@ -98,22 +98,29 @@ async def run_orchestrator(
     browser: BrowserSession | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
+    from nim_router import NimRouter as NimRouterClass
+
     configure_z_apply_harness_profile()
-    if not isinstance(router, NimRouter):
-        return OrchestratorRun(
-            "Model routing failed: shared NimRouter was not provided.",
-            "",
-            "failed",
-        )
+
+    if provider is None:
+        if router is None:
+            return OrchestratorRun(
+                "Model routing failed: neither provider nor router was provided.",
+                "",
+                "failed",
+            )
+        provider = get_provider(router)
+    elif router is None and isinstance(provider, NimRouterClass):
+        router = provider
 
     try:
-        selection = await router.lease(
+        selection = await provider.lease(
             tools=True,
             reasoning=True,
             priority="balanced",
             excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )
-    except (NimRouterError, ImportError, ValueError) as exc:
+    except (ImportError, ValueError) as exc:
         return OrchestratorRun(f"Model selection failed: {exc}", "", "failed")
 
     node_info(logger, "orchestrator", "initial model: %s", selection.info.id)
@@ -138,7 +145,7 @@ async def run_orchestrator(
             await publisher.publish_review_artifact()
             verdict = await require_submission_readiness(
                 browser=publisher.browser,
-                router=router,
+                provider=provider,
                 final_review=final_review,
                 config=config,
                 sink=event_sink,
@@ -200,7 +207,7 @@ async def run_orchestrator(
         artifact_publisher.browser if artifact_publisher is not None else None
     )
     router_middleware = NimRouterMiddleware(
-        router,
+        provider,
         role="orchestrator",
         initial_selection=selection,
         sink=event_sink,
@@ -258,16 +265,6 @@ async def run_orchestrator(
                 ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
                 browser=active_browser,
             ),
-            SummarizationMiddleware(
-                model=selection.llm,
-                backend=deepagent_backend,
-                trigger=[("tokens", 24_000), ("messages", 36)],
-                keep=("messages", 12),
-                truncate_args_settings={
-                    "trigger": ("messages", 16),
-                    "keep": ("messages", 8),
-                },
-            ),
             model_retry_middleware(),
             router_middleware,
             ProseToolCallGuardMiddleware(),
@@ -275,7 +272,7 @@ async def run_orchestrator(
             active_goal_middleware,
         ],
         subagents=await build_specialists(
-            router,
+            provider,
             browser_tools,
             fallback_model=selection.llm,
             candidate_resume=_candidate_resume_context(),

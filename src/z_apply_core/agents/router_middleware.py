@@ -16,10 +16,10 @@ from langchain.agents.middleware.types import (
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
-from nim_router import NimRouter
 from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
 
+from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
@@ -152,14 +152,14 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
 
     def __init__(
         self,
-        router: NimRouter,
+        provider: ModelProvider,
         role: str,
         *,
         initial_selection: ModelSelection | None = None,
         sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
-        self._router = router
+        self._provider = provider
         self._role = role
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": True})
         self._active_selection = initial_selection
@@ -172,6 +172,10 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         return self._role
 
     @property
+    def name(self) -> str:
+        return f"NimRouterMiddleware[{self._role}]"
+
+    @property
     def last_model_id(self) -> str:
         return self._last_model_id
 
@@ -180,7 +184,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         selection = self._active_selection
         if selection is None:
             return
-        self._router.record_failure(
+        self._provider.record_failure(
             selection.info.id,
             error=error,
             kind=ErrorKind.TOOL_CALL_FAILURE,
@@ -188,7 +192,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             structured=False,
             vision=bool(self._policy.get("force_vision")),
         )
-        self._router.cooldown_model(selection.info.id, 20.0)
+        self._provider.cooldown_model(selection.info.id, 20.0)
         logger.warning(
             "router %s rejected no-progress response from %s and released sticky lease",
             self._role,
@@ -230,17 +234,14 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         selection = self._active_selection
         leased_new = selection is None
         if selection is None:
-            lease_kwargs: dict[str, Any] = {}
             excluded_model_ids = self._policy.get("excluded_model_ids")
-            if excluded_model_ids:
-                lease_kwargs["excluded_model_ids"] = excluded_model_ids
-            selection = await self._router.lease(
+            selection = await self._provider.lease(
                 tools=tools,
                 structured=structured,
                 vision=vision,
                 reasoning=reasoning,
                 priority=priority,
-                **lease_kwargs,
+                excluded_model_ids=excluded_model_ids,
             )
             self._active_selection = selection
         _attach_tracking_callback(selection)
@@ -262,7 +263,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
 
         logger.info(
             "router %s selected %s (priority=%s, tools=%s, structured=%s, "
-            "vision=%s, reasoning=%s, candidates=%d, exploring=%s)",
+            "vision=%s, reasoning=%s)",
             self._role,
             selection.info.id,
             priority,
@@ -270,8 +271,6 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             structured,
             vision,
             reasoning,
-            len(cast(Sequence[Any], getattr(self._router, "_candidates", ()))),
-            bool(self._router._exploring) if hasattr(self._router, "_exploring") else False,
         )
 
         start = time.monotonic()
@@ -281,7 +280,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             override: dict[str, Any] = {"model": leased_model}
             if len(sanitized_messages) != len(request.messages):
                 override["messages"] = sanitized_messages
-            timeout_seconds = _model_call_timeout_seconds(self._router)
+            timeout_seconds = _model_call_timeout_seconds(self._provider)
             async with asyncio.timeout(timeout_seconds):
                 result: ModelResponse[ResponseT] = await handler(
                     request.override(**override)
@@ -295,7 +294,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             )
             protocol_failure = isinstance(exc, ToolProtocolViolation)
             if isinstance(exc, TimeoutError):
-                self._router.record_failure(
+                self._provider.record_failure(
                     selection.info.id,
                     error=exc,
                     kind=ErrorKind.TIMEOUT,
@@ -304,7 +303,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                     vision=vision,
                 )
             elif protocol_failure:
-                self._router.record_failure(
+                self._provider.record_failure(
                     selection.info.id,
                     error=exc,
                     kind=ErrorKind.TOOL_CALL_FAILURE,
@@ -312,7 +311,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                     structured=structured,
                     vision=vision,
                 )
-                self._router.cooldown_model(selection.info.id, 20.0)
+                self._provider.cooldown_model(selection.info.id, 20.0)
             self._active_selection = None
             self._selection_announced = False
             await self._emit(
@@ -344,7 +343,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                     "tool_protocol_failure: provider returned reasoning without a "
                     "native tool call or final assistant answer"
                 )
-                self._router.record_failure(
+                self._provider.record_failure(
                     selection.info.id,
                     error=failure,
                     kind=ErrorKind.TOOL_CALL_FAILURE,
@@ -352,7 +351,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                     structured=structured,
                     vision=vision,
                 )
-                self._router.cooldown_model(selection.info.id, 20.0)
+                self._provider.cooldown_model(selection.info.id, 20.0)
                 self._active_selection = None
                 self._selection_announced = False
                 await self._emit(
@@ -400,10 +399,13 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         loop.create_task(self._emit(event, model_id, {"role": self._role, **data}))
 
 
-def _model_call_timeout_seconds(router: NimRouter) -> float | None:
-    value = getattr(getattr(router, "config", None), "timeout_seconds", None)
-    if isinstance(value, int | float) and value > 0:
-        return float(value)
+def _model_call_timeout_seconds(provider: ModelProvider) -> float | None:
+    from z_apply_core.agents.model_provider import NIMProvider
+
+    if isinstance(provider, NIMProvider):
+        value = getattr(getattr(provider._router, "config", None), "timeout_seconds", None)
+        if isinstance(value, int | float) and value > 0:
+            return float(value)
     return None
 
 

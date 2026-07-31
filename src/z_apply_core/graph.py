@@ -8,6 +8,7 @@ from nim_router import NimRouter
 from nim_router.config import RouterConfig
 
 from z_apply_core.agents.context_inbox import ContextInbox
+from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.model_policy import (
     BLOCKED_MODEL_IDS_BELOW_120B,
     PROBED_TOOL_CAPABILITY_OVERRIDES,
@@ -41,6 +42,7 @@ async def run_job(
     task: str,
     live_view: bool = True,
     sink: FrameworkEventSink | None = None,
+    provider: ModelProvider | None = None,
     router: NimRouter | None = None,
     resources: RunResources | None = None,
     cleanup_resources: bool = True,
@@ -50,12 +52,14 @@ async def run_job(
     graph = build_graph()
     run_resources = resources or RunResources()
     resolved_router = router or make_router()
+    resolved_provider = provider or get_provider(resolved_router)
     try:
         stream = graph.astream_events(
             initial_state(job_url, task=task, live_view=live_view),
             config={
                 "configurable": {
                     "sink": sink,
+                    "model_provider": resolved_provider,
                     "nim_router": resolved_router,
                     "run_resources": run_resources,
                     "context_inbox": context_inbox,

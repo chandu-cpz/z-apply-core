@@ -3,9 +3,9 @@ from __future__ import annotations
 import contextlib
 
 from langchain_core.runnables.config import RunnableConfig
-from nim_router import NimRouter
 
 from z_apply_core.agents.auth_orchestrator import run_auth_orchestrator
+from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
 from z_apply_core.config import load_settings
 from z_apply_core.gmail_tools import make_gmail_tools
@@ -47,7 +47,7 @@ async def authenticate_default_account(
             if runtime.human_channel
             else []
         )
-        router = _router_from_config(config)
+        provider = _provider_from_config(config)
         run = await run_auth_orchestrator(
             snapshot=snapshot,
             browser_tools=runtime.browser.tools.langchain_tools(AUTH_AGENT_BROWSER_TOOLS),
@@ -58,7 +58,7 @@ async def authenticate_default_account(
             ),
             config=config,
             sink=sink,
-            router=router,
+            provider=provider,
             default_credentials_available=settings.has_default_credentials,
         )
 
@@ -103,16 +103,19 @@ def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
     return None
 
 
-def _router_from_config(config: RunnableConfig) -> NimRouter:
+def _provider_from_config(config: RunnableConfig) -> ModelProvider:
     configurable = config.get("configurable")
     if not isinstance(configurable, dict):
         raise ValueError(
-            "Run config is missing 'configurable'; cannot locate the shared NimRouter."
+            "Run config is missing 'configurable'; cannot locate the shared model provider."
         )
+    provider = configurable.get("model_provider")
+    if isinstance(provider, ModelProvider):
+        return provider
     router = configurable.get("nim_router")
-    if not isinstance(router, NimRouter):
-        raise ValueError("configurable['nim_router'] is missing or not a NimRouter instance.")
-    return router
+    if router is not None:
+        return get_provider(router)
+    raise ValueError("configurable['model_provider'] or 'nim_router' is required.")
 
 
 async def _emit(

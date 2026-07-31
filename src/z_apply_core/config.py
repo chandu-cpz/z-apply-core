@@ -32,6 +32,8 @@ class Settings(BaseSettings):
         default=DEFAULT_SIMPLIFY_ADDON_PATH,
         alias="SIMPLIFY_ADDON_PATH",
     )
+    agnes_api_key: str = Field(default="", alias="AGNES_API_KEY")
+    model_provider: str = Field(default="", alias="MODEL_PROVIDER")
 
     model_config = SettingsConfigDict(
         env_file=CORE_ROOT / ".env",

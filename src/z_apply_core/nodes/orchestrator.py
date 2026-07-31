@@ -5,8 +5,8 @@ from pathlib import Path
 
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
-from nim_router import NimRouter
 
+from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_tools import (
@@ -29,7 +29,7 @@ _log = logging.getLogger(__name__)
 
 async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str]:
     sink = _sink_from_config(config)
-    router = _router_from_config(config)
+    provider = _provider_from_config(config)
     runtime = _runtime(state)
     initial_snapshot = str(state.get("snapshot", ""))
     if runtime is not None:
@@ -48,7 +48,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         config=config,
         human_channel=_human_channel(state),
         sink=sink,
-        router=router,
+        provider=provider,
         resume_path=str(DEFAULT_RESUME_PATH),
         candidate_memory=runtime_candidate_memory(state),
         run_id=_run_id(state),
@@ -76,16 +76,19 @@ def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
     return None
 
 
-def _router_from_config(config: RunnableConfig) -> NimRouter:
+def _provider_from_config(config: RunnableConfig) -> ModelProvider:
     configurable = config.get("configurable")
     if not isinstance(configurable, dict):
         raise ValueError(
-            "Run config is missing 'configurable'; cannot locate the shared NimRouter."
+            "Run config is missing 'configurable'; cannot locate the shared model provider."
         )
+    provider = configurable.get("model_provider")
+    if isinstance(provider, ModelProvider):
+        return provider
     router = configurable.get("nim_router")
-    if not isinstance(router, NimRouter):
-        raise ValueError("configurable['nim_router'] is missing or not a NimRouter instance.")
-    return router
+    if router is not None:
+        return get_provider(router)
+    raise ValueError("configurable['model_provider'] or 'nim_router' is required.")
 
 
 async def _fresh_snapshot(state: RunState) -> str:
