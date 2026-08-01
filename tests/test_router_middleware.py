@@ -12,6 +12,7 @@ from nim_router import NimRouter
 from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
 
+from z_apply_core.agents.model_provider import NIMProvider
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.router_middleware import (
     ORCHESTRATOR_EXCLUDED_MODEL_IDS,
@@ -280,6 +281,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             vision=False,
             reasoning=True,
             priority="quality",
+            excluded_model_ids=None,
         )
 
     async def test_authentication_specialist_excludes_unreliable_stateful_models(
@@ -349,7 +351,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
 
         with self.assertRaises(TimeoutError):
-            await NimRouterMiddleware(router, role="AnswerWriter").awrap_model_call(
+            await NimRouterMiddleware(NIMProvider(router), role="AnswerWriter").awrap_model_call(
                 request,
                 blocked,
             )

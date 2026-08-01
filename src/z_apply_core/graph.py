@@ -43,6 +43,7 @@ async def run_job(
     live_view: bool = True,
     sink: FrameworkEventSink | None = None,
     provider: ModelProvider | None = None,
+    provider_name: str | None = None,
     router: NimRouter | None = None,
     resources: RunResources | None = None,
     cleanup_resources: bool = True,
@@ -52,7 +53,7 @@ async def run_job(
     graph = build_graph()
     run_resources = resources or RunResources()
     resolved_router = router or make_router()
-    resolved_provider = provider or get_provider(resolved_router)
+    resolved_provider = provider or get_provider(resolved_router, provider_name=provider_name)
     try:
         stream = graph.astream_events(
             initial_state(job_url, task=task, live_view=live_view),
