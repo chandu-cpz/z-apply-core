@@ -18,6 +18,7 @@ from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialist_task_context import SpecialistTaskContextMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
+from z_apply_core.agents.specialists.page_analyst import build_page_analyst
 from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.agents.vision_message_compat import VisionToolMessageCompatibilityMiddleware
 from z_apply_core.stream_events import FrameworkEventSink
@@ -76,6 +77,13 @@ async def build_specialists(
             role="VisionSpecialist",
             model=fallback_model,
             extra_middleware=[VisionToolMessageCompatibilityMiddleware()],
+            sink=sink,
+        ),
+        _with_routing(
+            build_page_analyst(),
+            provider=provider,
+            role="PageAnalyst",
+            model=fallback_model,
             sink=sink,
         ),
         _with_routing(

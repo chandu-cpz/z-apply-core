@@ -146,6 +146,12 @@ class BrowserObservation:
         kept = [lines[index] for index in sorted(selected)]
         return header + "\n".join(kept) + marker
 
+    def bounded_render(self, budget_chars: int = 8000) -> str:
+        """Render a deterministic, budget-bounded evidence projection."""
+        from z_apply_core.context.evidence_projection import EvidenceProjection
+
+        return EvidenceProjection.project(self, budget_chars=budget_chars)
+
 
 @dataclass(frozen=True, slots=True)
 class ActionReceipt:

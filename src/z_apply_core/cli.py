@@ -5,12 +5,17 @@ import asyncio
 from collections.abc import Callable
 from typing import cast
 
+from rich.text import Text
+
 from z_apply_core import __version__
 from z_apply_core.agents.model_provider import default_provider_name, list_providers
 from z_apply_core.config import load_settings
+from z_apply_core.context.token_metric import TokenUsage
 from z_apply_core.graph import run_job
 from z_apply_core.logging_config import configure_logging
 from z_apply_core.rich_stream import RichStreamRenderer
+from z_apply_core.runtime import RunRuntime
+from z_apply_core.state import RunState
 
 DEFAULT_RUN_TASK = (
     "Complete and submit the current job application: enter the form if needed, "
@@ -60,12 +65,39 @@ def run_command(args: argparse.Namespace) -> int:
             )
         )
         renderer.print_result(result, state)
+        _print_token_usage(renderer, state)
     except KeyboardInterrupt:
         renderer.console.print("[yellow]Run interrupted; resources closed.[/yellow]")
         return 130
     finally:
         renderer.close()
     return 0 if state.get("run_status") == "completed" else 2
+
+
+def _print_token_usage(renderer: RichStreamRenderer, state: RunState) -> None:
+    usage = _last_token_usage(state)
+    if usage is None:
+        return
+    renderer.console.print(
+        Text(
+            "token usage: "
+            f"prompt_tokens={usage.prompt_tokens} "
+            f"tool_schema_tokens={usage.tool_schema_tokens} "
+            f"messages={usage.message_count} "
+            f"tools={usage.tool_count}",
+            style="dim",
+        )
+    )
+
+
+def _last_token_usage(state: RunState) -> TokenUsage | None:
+    runtime = state.get("runtime")
+    if not isinstance(runtime, RunRuntime):
+        return None
+    run_context = runtime.browser.run_context
+    if run_context is None:
+        return None
+    return run_context.token_usage
 
 
 def providers_command(_args: argparse.Namespace) -> int:

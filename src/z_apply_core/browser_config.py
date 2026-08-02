@@ -35,6 +35,9 @@ def build_browser_config(run_id: str = "manual") -> dict[str, Any]:
         "timeouts": {"navigation": 120_000},
         "outputDir": str(output_dir),
         "outputMode": "stdout",
+        "imageResponses": "omit",
+        "snapshot": {"mode": "full"},
+        "console": {"level": "error"},
     }
     secrets = {
         name: value

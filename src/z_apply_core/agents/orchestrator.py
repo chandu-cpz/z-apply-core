@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
 from collections.abc import Callable, Sequence
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import cast
 
 from deepagents import FilesystemPermission, create_deep_agent
 from deepagents.backends import FilesystemBackend
+from langchain.agents.middleware import AgentMiddleware
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -16,6 +20,7 @@ from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
+from z_apply_core.agents.form_phase_controller import FormPhaseController
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
@@ -36,6 +41,10 @@ from z_apply_core.agents.specialists.answer_writer import make_candidate_field_t
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_session import BrowserSession
+from z_apply_core.context.context_budget import ContextBudgetMiddleware
+from z_apply_core.context.evidence_store import EvidenceStore
+from z_apply_core.context.run_context import RunContext
+from z_apply_core.context.token_metric import TokenMetricMiddleware
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.tools import make_human_tools, make_manual_auth_tool
 from z_apply_core.log_labels import node_info
@@ -44,7 +53,12 @@ from z_apply_core.memory.platform_playbooks import (
     PlatformPlaybooks,
     make_platform_memory_tool,
 )
-from z_apply_core.stream_events import FrameworkEventSink, SequencedEventSink
+from z_apply_core.stream_events import (
+    FormPhaseEvent,
+    FrameworkEventSink,
+    FrameworkTraceEvent,
+    SequencedEventSink,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +220,14 @@ async def run_orchestrator(
     active_browser = browser or (
         artifact_publisher.browser if artifact_publisher is not None else None
     )
+    run_context = RunContext(run_id=run_id)
+    evidence_store = EvidenceStore(
+        base_dir=CORE_ROOT / ".z-apply" / "runs" / run_id / "context"
+    )
+    form_phase_controller = FormPhaseController()
+    if active_browser is not None:
+        active_browser.bind_run_context(run_context)
+        active_browser.bind_evidence_store(evidence_store)
     router_middleware = NimRouterMiddleware(
         provider,
         role="orchestrator",
@@ -245,32 +267,21 @@ async def run_orchestrator(
             application_submitted,
         ],
         system_prompt=load_prompt("orchestrator.md"),
-        middleware=[
-            *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
-            CapabilityContextMiddleware(
-                active_browser,
-                platform_playbooks=platform_playbooks,
-                job_url=job_url,
-            ),
-            SafeToolBatchMiddleware(),
-            OrchestratorActionOrderMiddleware(active_browser),
-            NoProgressGuardMiddleware(
-                on_no_progress=router_middleware.reject_active_response,
-            ),
-            CandidateFieldMiddleware(
-                active_browser,
-                candidate_memory,
-            ),
-            SubagentDispatchMiddleware(
-                ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
-                browser=active_browser,
-            ),
-            model_retry_middleware(),
-            router_middleware,
-            ProseToolCallGuardMiddleware(),
-            orchestrator_human_guard,
-            active_goal_middleware,
-        ],
+        middleware=build_orchestrator_middleware(
+            run_context=run_context,
+            evidence_store=evidence_store,
+            event_sink=event_sink,
+            active_browser=active_browser,
+            platform_playbooks=platform_playbooks,
+            job_url=job_url,
+            context_inbox=context_inbox,
+            candidate_memory=candidate_memory,
+            router_middleware=router_middleware,
+            form_phase_controller=form_phase_controller,
+            orchestrator_human_guard=orchestrator_human_guard,
+            active_goal_middleware=active_goal_middleware,
+            terminal=terminal,
+        ),
         subagents=await build_specialists(
             provider,
             browser_tools,
@@ -369,3 +380,109 @@ def _captcha_path(run_id: str) -> Path:
 def _candidate_resume_context() -> str:
     path = CORE_ROOT / CANDIDATE_CONTEXT_VIRTUAL_PATH.lstrip("/")
     return path.read_text(encoding="utf-8")
+
+
+def build_orchestrator_middleware(
+    *,
+    run_context: RunContext,
+    evidence_store: EvidenceStore,
+    event_sink: SequencedEventSink,
+    active_browser: BrowserSession | None,
+    platform_playbooks: PlatformPlaybooks,
+    job_url: str,
+    context_inbox: ContextInbox | None,
+    candidate_memory: CandidateMemory | None,
+    router_middleware: NimRouterMiddleware,
+    form_phase_controller: FormPhaseController,
+    orchestrator_human_guard: HumanEscalationGuardMiddleware,
+    active_goal_middleware: ActiveGoalMiddleware,
+    terminal: tuple[RunStatus, str] | None = None,
+) -> list[AgentMiddleware]:
+    """Build the orchestrator middleware chain in execution order.
+
+    The first element is the outermost wrapper. ``ContextBudgetMiddleware`` and
+    ``TokenMetricMiddleware`` wrap every other middleware, and their emit
+    adapters forward typed events into the run-sequenced sink.
+    """
+    del terminal
+
+    def usage_emit(event: object) -> None:
+        _emit_usage_sync(event_sink, event)
+
+    async def form_phase_emit(event: FormPhaseEvent) -> None:
+        await _emit_form_phase(event_sink, event)
+
+    return [
+        ContextBudgetMiddleware(
+            evidence_store=evidence_store,
+            run_context=run_context,
+        ),
+        TokenMetricMiddleware(run_context=run_context, emit=usage_emit),
+        *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
+        CapabilityContextMiddleware(
+            active_browser,
+            platform_playbooks=platform_playbooks,
+            job_url=job_url,
+            run_context=run_context,
+            evidence_store=evidence_store,
+            form_phase_controller=form_phase_controller,
+            form_phase_emit=form_phase_emit,
+        ),
+        SafeToolBatchMiddleware(),
+        OrchestratorActionOrderMiddleware(active_browser),
+        NoProgressGuardMiddleware(
+            on_no_progress=router_middleware.reject_active_response,
+        ),
+        CandidateFieldMiddleware(
+            active_browser,
+            candidate_memory,
+            run_context=run_context,
+        ),
+        SubagentDispatchMiddleware(
+            ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
+            browser=active_browser,
+        ),
+        model_retry_middleware(),
+        router_middleware,
+        ProseToolCallGuardMiddleware(),
+        orchestrator_human_guard,
+        active_goal_middleware,
+    ]
+
+
+def _emit_usage_sync(sink: SequencedEventSink, event: object) -> None:
+    """Emit a token usage event into a run-sequenced sink, fire-and-forget.
+
+    ``TokenMetricMiddleware`` requires a synchronous ``emit``, but
+    ``SequencedEventSink.accept`` is async. The event is wrapped into a
+    ``FrameworkTraceEvent`` and the resulting coroutine is scheduled on the
+    running event loop instead of being awaited.
+    """
+    result = sink.accept(_as_trace_event("token_usage", event))
+    if inspect.isawaitable(result):
+        asyncio.get_running_loop().create_task(result)
+
+
+async def _emit_form_phase(sink: SequencedEventSink, event: FormPhaseEvent) -> None:
+    """Forward one form-phase transition as a run-sequenced trace event."""
+    result = sink.accept(_as_trace_event("form_phase", event))
+    if inspect.isawaitable(result):
+        await result
+
+
+def _as_trace_event(kind: str, event: object) -> FrameworkTraceEvent:
+    """Wrap a typed runtime event into the trace event the sequenced sink reads."""
+    if isinstance(event, FrameworkTraceEvent):
+        return event
+    return FrameworkTraceEvent(
+        event=kind,
+        name=kind,
+        data=_event_data(event),
+        raw={},
+    )
+
+
+def _event_data(event: object) -> dict[str, object]:
+    if is_dataclass(event) and not isinstance(event, type):
+        return {field.name: getattr(event, field.name) for field in fields(event)}
+    return {"value": event}

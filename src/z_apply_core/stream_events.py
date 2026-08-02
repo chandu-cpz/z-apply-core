@@ -6,7 +6,10 @@ import warnings
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, fields, is_dataclass
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
+
+if TYPE_CHECKING:
+    from z_apply_core.context.token_metric import TokenUsage
 
 
 class FrameworkEventSink(Protocol):
@@ -42,6 +45,25 @@ class FrameworkTraceEvent:
     name: str
     data: dict[str, Any]
     raw: dict[str, Any]
+
+
+@dataclass(slots=True)
+class TokenUsageEvent:
+    """Measured model-visible prompt and schema token usage for one model call."""
+
+    run_id: str
+    usage: TokenUsage
+    model: str | None = None
+    provider: str | None = None
+
+
+@dataclass(slots=True)
+class FormPhaseEvent:
+    """One confirmed form-phase transition driven by a PageAnalyst verdict."""
+
+    run_id: str
+    phase: str
+    confidence: str
 
 
 @dataclass(slots=True)

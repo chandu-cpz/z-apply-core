@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import ToolCallRequest
@@ -59,9 +60,11 @@ class CandidateFieldExecutor:
         self,
         browser: BrowserSession | None,
         candidate_memory: CandidateMemory | None = None,
+        on_applied: Callable[[CandidateFieldAnswer], None] | None = None,
     ) -> None:
         self._browser = browser
         self._candidate_memory = candidate_memory
+        self.on_applied = on_applied
 
     async def apply(
         self,
@@ -109,6 +112,7 @@ class CandidateFieldExecutor:
         current = await browser.inspect_control_state(request.target)
         if current.value == answer.value and current.has_value and not current.invalid:
             await self._remember_human_answer(request, answer)
+            self._record_applied(answer)
             return _replace_result(
                 result,
                 ToolMessage(
@@ -174,6 +178,7 @@ class CandidateFieldExecutor:
                 "The browser did not retain a valid value after the candidate mutation.",
             )
         await self._remember_human_answer(request, answer)
+        self._record_applied(answer)
         result_name = (
             "CANDIDATE_FIELD_TYPED"
             if request.control_type == "combobox"
@@ -200,6 +205,10 @@ class CandidateFieldExecutor:
                 tool_call_id=tool_call_id,
             ),
         )
+
+    def _record_applied(self, answer: CandidateFieldAnswer) -> None:
+        if self.on_applied is not None:
+            self.on_applied(answer)
 
     async def _remember_human_answer(
         self,

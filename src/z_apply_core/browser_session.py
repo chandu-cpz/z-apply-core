@@ -40,8 +40,15 @@ from z_apply_core.browser_tools import (
     normalize_browser_arguments,
     validate_bounded_wait_arguments,
 )
+from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
+from z_apply_core.context.run_context import RunContext
 
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
+VISUAL_EVIDENCE_UNAVAILABLE_NOTE = (
+    "visual_evidence_unavailable: the browser did not retain a screenshot image "
+    "for this run, so no visual evidence exists. Rely on DOM/ARIA evidence or "
+    "report that visual evidence is unavailable."
+)
 CORE_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
 
@@ -80,6 +87,8 @@ class BrowserSession:
         tools: Sequence[Any] | None = None,
         mutation_gate: MutationGate | None = None,
         owns_backend: bool = True,
+        run_context: RunContext | None = None,
+        evidence_store: EvidenceStore | None = None,
     ) -> None:
         self._server = server
         self._backend = backend if backend is not None else server.backend
@@ -87,7 +96,10 @@ class BrowserSession:
         self._lease: BrowserLease | None = None
         self._owns_backend = owns_backend
         self.run_id = run_id
+        self.run_context = run_context
+        self.evidence_store = evidence_store
         self._submission = SubmissionGuard()
+        self._screenshot_seq = 0
         self._last_snapshot = ""
         self._last_observation: BrowserObservation | None = None
         self._last_action_receipt: ActionReceipt | None = None
@@ -141,10 +153,18 @@ class BrowserSession:
     def bind_lease(self, lease: BrowserLease) -> None:
         self._lease = lease
 
+    def bind_run_context(self, run_context: RunContext) -> None:
+        self.run_context = run_context
+
+    def bind_evidence_store(self, evidence_store: EvidenceStore) -> None:
+        self.evidence_store = evidence_store
+
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         normalized = normalize_browser_arguments(arguments)
         if name == "browser_snapshot" and "target" not in normalized:
             normalized["target"] = "html"
+        if name == "browser_take_screenshot":
+            normalized = self._ensure_screenshot_filename(normalized)
         page_url = ""
         page_title = ""
         async with self._operation_scope():
@@ -218,6 +238,12 @@ class BrowserSession:
             )
         return result
 
+    def _ensure_screenshot_filename(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        if not arguments.get("filename"):
+            arguments["filename"] = f"screenshot_{self._screenshot_seq:03d}.png"
+            self._screenshot_seq += 1
+        return arguments
+
     async def call_bounded_wait(
         self,
         name: str,
@@ -231,6 +257,9 @@ class BrowserSession:
             raise BrowserToolExecutionError(
                 "The bounded wait completed but current browser evidence is unavailable."
             )
+        evidence_store = getattr(self, "evidence_store", None)
+        if evidence_store is not None:
+            return f"{result}\n{render_bounded(observation, evidence_store)}"
         return f"{result}\n{observation.compact_render()}"
 
     async def observe(self) -> str:
@@ -255,16 +284,23 @@ class BrowserSession:
         self,
         name: str,
         arguments: dict[str, Any] | None = None,
-    ) -> list[dict[str, str]]:
+    ) -> list[dict[str, Any]]:
         """Return MCP text and image results as LangChain standard content blocks."""
+        normalized = normalize_browser_arguments(arguments)
+        if name == "browser_take_screenshot":
+            normalized = self._ensure_screenshot_filename(normalized)
         async with self._operation_scope():
             result = await self._backend.call_tool(
                 name,
-                normalize_browser_arguments(arguments),
+                normalized,
                 meta=self._call_meta(name),
             )
-        _raise_for_tool_error(name, result)
-        return _content_blocks(result)
+        if _is_tool_error(result):
+            return [{"type": "text", "text": VISUAL_EVIDENCE_UNAVAILABLE_NOTE}]
+        blocks = _content_blocks(result)
+        if name == "browser_take_screenshot" and not _has_image_block(blocks):
+            return [{"type": "text", "text": VISUAL_EVIDENCE_UNAVAILABLE_NOTE}]
+        return blocks
 
     async def call_tool_with_inline_snapshot(
         self,
@@ -304,6 +340,8 @@ class BrowserSession:
             result=mutation,
         )
         self._last_action_receipt = receipt
+        if self.run_context is not None:
+            self.run_context.action_log.record(receipt)
         return receipt.render()
 
     async def upload_files(self, target: str, paths: list[str]) -> str:
@@ -339,6 +377,8 @@ class BrowserSession:
             result="Files attached directly to the resolved upload control.",
         )
         self._last_action_receipt = receipt
+        if self.run_context is not None:
+            self.run_context.action_log.record(receipt)
         return receipt.render()
 
     @property
@@ -680,8 +720,16 @@ def _text_content(result: Any) -> str:
 
 
 def _raise_for_tool_error(name: str, result: Any) -> None:
-    if bool(getattr(result, "is_error", False) or getattr(result, "isError", False)):
+    if _is_tool_error(result):
         raise BrowserToolExecutionError(f"{name} failed: {_text_content(result)}")
+
+
+def _is_tool_error(result: Any) -> bool:
+    return bool(getattr(result, "is_error", False) or getattr(result, "isError", False))
+
+
+def _has_image_block(blocks: Sequence[dict[str, Any]]) -> bool:
+    return any(block.get("type") == "image_url" for block in blocks)
 
 
 def _content_blocks(result: Any) -> list[dict[str, Any]]:

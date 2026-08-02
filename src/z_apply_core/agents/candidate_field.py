@@ -26,6 +26,7 @@ from z_apply_core.agents.specialists.answer_writer import (
     CandidateFieldRequest,
 )
 from z_apply_core.browser_session import BrowserSession
+from z_apply_core.context.run_context import RunContext
 
 if TYPE_CHECKING:
     from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -38,11 +39,16 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
         self,
         browser: BrowserSession | None,
         candidate_memory: CandidateMemory | None = None,
+        run_context: RunContext | None = None,
     ) -> None:
         super().__init__()
         self._browser = browser
         self._candidate_memory = candidate_memory
-        self._executor = CandidateFieldExecutor(browser, candidate_memory)
+        self._executor = CandidateFieldExecutor(
+            browser,
+            candidate_memory,
+            on_applied=run_context.applied_fields.record if run_context is not None else None,
+        )
         self._requests: dict[str, CandidateFieldRequest] = {}
 
     async def awrap_model_call(

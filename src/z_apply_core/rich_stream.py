@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from rich.console import Console
@@ -9,11 +10,21 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
+from z_apply_core.context.token_metric import TokenUsage
 from z_apply_core.log_labels import agent_info, node_info, run_info
 from z_apply_core.state import RunState
-from z_apply_core.stream_events import FrameworkTraceEvent, V3RunResult
+from z_apply_core.stream_events import (
+    FormPhaseEvent,
+    FrameworkTraceEvent,
+    TokenUsageEvent,
+    V3RunResult,
+)
 
 logger = logging.getLogger(__name__)
+
+# TokenUsageEvent is rendered at most once per interval, and immediately when
+# the measured values change, so a model loop cannot spam the terminal.
+_TOKEN_USAGE_THROTTLE_SECONDS = 10.0
 
 
 class RichStreamRenderer:
@@ -33,6 +44,8 @@ class RichStreamRenderer:
         self._reasoning_text = ""
         self._content_text = ""
         self._stream_source = "model"
+        self._last_token_usage: TokenUsage | None = None
+        self._last_token_usage_time = 0.0
 
     @property
     def console(self) -> Console:
@@ -41,7 +54,15 @@ class RichStreamRenderer:
     def close(self) -> None:
         self._end_stream_if_active()
 
-    async def accept(self, event: FrameworkTraceEvent) -> None:
+    async def accept(self, event: FrameworkTraceEvent | TokenUsageEvent | FormPhaseEvent) -> None:
+        if isinstance(event, FormPhaseEvent):
+            self._render_form_phase(event)
+            return
+
+        if isinstance(event, TokenUsageEvent):
+            self._render_token_usage(event)
+            return
+
         if event.event in {"updates", "values", "auth"}:
             self._render_update(event)
             return
@@ -106,6 +127,24 @@ class RichStreamRenderer:
             )
         )
         run_info(logger, "streamed %s events in %sms", result.event_count, result.duration_ms)
+
+    def _render_token_usage(self, event: TokenUsageEvent) -> None:
+        now = time.monotonic()
+        usage = event.usage
+        unchanged = usage == self._last_token_usage
+        if (
+            unchanged
+            and self._last_token_usage_time > 0
+            and now - self._last_token_usage_time < _TOKEN_USAGE_THROTTLE_SECONDS
+        ):
+            return
+        self._last_token_usage = usage
+        self._last_token_usage_time = now
+        self._console.print(Text(f"token usage: {usage}", style="dim"))
+
+    def _render_form_phase(self, event: FormPhaseEvent) -> None:
+        self._end_stream_if_active()
+        self._console.print(Text(f"phase -> {event.phase} ({event.confidence})"))
 
     def _render_update(self, event: FrameworkTraceEvent) -> None:
         data = event.data.get("data", event.data)

@@ -169,6 +169,231 @@ async def _async_result(value: ModelResponse) -> ModelResponse:
     return value
 
 
+async def _execute(
+    middleware: NoProgressGuardMiddleware,
+    tool_calls: list[dict],
+) -> bool:
+    """Run tool-call steps; return True if the no-progress circuit opened."""
+    for index, call in enumerate(tool_calls):
+        request = SimpleNamespace(
+            tool_call={
+                "name": call["name"],
+                "args": call.get("args", {}),
+                "id": call.get("id", f"call-{index}"),
+            }
+        )
+
+        async def success(
+            _request: object,
+            *,
+            _call: dict = call,
+        ) -> ToolMessage:
+            return ToolMessage(
+                content=_call.get("result_content", "ok"),
+                name=str(_call["name"]),
+                tool_call_id=str(_call["id"]),
+                status=_call.get("status", "success"),
+            )
+
+        try:
+            await middleware.awrap_tool_call(request, success)  # type: ignore[arg-type]
+        except NoProgressCircuitOpen:
+            return True
+    return False
+
+
+@pytest.mark.asyncio
+async def test_same_action_repeated_within_window_triggers() -> None:
+    failures: list[Exception] = []
+    middleware = NoProgressGuardMiddleware(
+        window_size=8,
+        repetition_threshold=4,
+        on_no_progress=failures.append,
+    )
+    clicks = [
+        {"name": "browser_click", "args": {"target": "e5"}, "id": f"c{i}"}
+        for i in range(4)
+    ]
+
+    assert await _execute(middleware, clicks) is True
+    assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_field_refilled_with_new_value_is_still_a_repeat() -> None:
+    failures: list[Exception] = []
+    middleware = NoProgressGuardMiddleware(
+        window_size=8,
+        repetition_threshold=4,
+        on_no_progress=failures.append,
+    )
+    fills = [
+        {
+            "name": "browser_fill_form",
+            "args": {"fields": [{"target": "e3", "value": f"value-{i}"}]},
+            "id": f"f{i}",
+        }
+        for i in range(4)
+    ]
+
+    assert await _execute(middleware, fills) is True
+    assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_same_tool_on_different_fields_does_not_trigger() -> None:
+    middleware = NoProgressGuardMiddleware(window_size=8, repetition_threshold=4)
+    fills = [
+        {
+            "name": "browser_fill_form",
+            "args": {"fields": [{"target": f"e{i}", "value": "v"}]},
+            "id": f"f{i}",
+        }
+        for i in range(4)
+    ]
+
+    assert await _execute(middleware, fills) is False
+
+
+@pytest.mark.asyncio
+async def test_repeat_spread_wider_than_window_does_not_trigger() -> None:
+    middleware = NoProgressGuardMiddleware(window_size=4, repetition_threshold=3)
+    steps = [
+        {"name": "browser_click", "args": {"target": "e5"}, "id": "c1"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w1"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w2"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w3"},
+        {"name": "browser_click", "args": {"target": "e5"}, "id": "c2"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w4"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w5"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w6"},
+        {"name": "browser_click", "args": {"target": "e5"}, "id": "c3"},
+    ]
+
+    assert await _execute(middleware, steps) is False
+
+
+@pytest.mark.asyncio
+async def test_wider_window_catches_slow_loop() -> None:
+    failures: list[Exception] = []
+    slow_steps = [
+        {"name": "browser_click", "args": {"target": "e5"}, "id": "c1"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w1"},
+        {"name": "browser_click", "args": {"target": "e5"}, "id": "c2"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w2"},
+        {"name": "browser_click", "args": {"target": "e5"}, "id": "c3"},
+        {"name": "browser_wait_for", "args": {"time": 1}, "id": "w3"},
+        {"name": "browser_click", "args": {"target": "e5"}, "id": "c4"},
+    ]
+    narrow = NoProgressGuardMiddleware(
+        window_size=3,
+        repetition_threshold=4,
+        on_no_progress=failures.append,
+    )
+    assert await _execute(narrow, slow_steps) is False
+
+    wide = NoProgressGuardMiddleware(
+        window_size=8,
+        repetition_threshold=4,
+        on_no_progress=failures.append,
+    )
+    assert await _execute(wide, slow_steps) is True
+    assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_detection_ignores_tool_result_text() -> None:
+    middleware = NoProgressGuardMiddleware(window_size=8, repetition_threshold=4)
+    varied_text = [
+        {
+            "name": "browser_click",
+            "args": {"target": "e5"},
+            "id": f"c{i}",
+            "result_content": f"receipt number {i}",
+        }
+        for i in range(4)
+    ]
+    assert await _execute(middleware, varied_text) is True
+
+    middleware = NoProgressGuardMiddleware(window_size=8, repetition_threshold=4)
+    same_text_different_refs = [
+        {
+            "name": "browser_click",
+            "args": {"target": f"e{i}"},
+            "id": f"c{i}",
+            "result_content": "identical receipt text",
+        }
+        for i in range(4)
+    ]
+    assert await _execute(middleware, same_text_different_refs) is False
+
+
+@pytest.mark.asyncio
+async def test_model_call_detection_ignores_assistant_text() -> None:
+    middleware = NoProgressGuardMiddleware(max_stagnant_model_responses=2)
+    request = SimpleNamespace()
+
+    def response(tool_name: str, content: str) -> ModelResponse:
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content=content,
+                    tool_calls=[
+                        {
+                            "name": tool_name,
+                            "args": {},
+                            "id": tool_name,
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    with pytest.raises(NoProgressCircuitOpen):
+        await middleware.awrap_model_call(  # type: ignore[arg-type]
+            request, lambda _request: _async_result(response("write_todos", "plan A"))
+        )
+        await middleware.awrap_model_call(  # type: ignore[arg-type]
+            request, lambda _request: _async_result(response("write_todos", "plan B"))
+        )
+
+
+@pytest.mark.asyncio
+async def test_model_call_detection_depends_on_tool_choice_not_text() -> None:
+    middleware = NoProgressGuardMiddleware(max_stagnant_model_responses=2)
+    request = SimpleNamespace()
+
+    def response(tool_name: str) -> ModelResponse:
+        return ModelResponse(
+            result=[
+                AIMessage(
+                    content="identical assistant wording",
+                    tool_calls=[
+                        {
+                            "name": tool_name,
+                            "args": {},
+                            "id": tool_name,
+                            "type": "tool_call",
+                        }
+                    ],
+                )
+            ]
+        )
+
+    await middleware.awrap_model_call(  # type: ignore[arg-type]
+        request, lambda _request: _async_result(response("write_todos"))
+    )
+    await middleware.awrap_model_call(  # type: ignore[arg-type]
+        request, lambda _request: _async_result(response("browser_click"))
+    )
+    result = await middleware.awrap_model_call(  # type: ignore[arg-type]
+        request, lambda _request: _async_result(response("write_todos"))
+    )
+
+    assert result.result[0].tool_calls[0]["name"] == "write_todos"  # type: ignore[union-attr]
+
+
 @pytest.mark.asyncio
 async def test_identical_successful_read_is_not_executed_twice() -> None:
     middleware = NoProgressGuardMiddleware()

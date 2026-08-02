@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections import deque
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Any
 
 from langchain.agents.middleware.types import (
@@ -50,6 +51,8 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         max_state_action_failures: int = 3,
         max_stagnant_tool_calls: int | None = None,
         max_stagnant_model_responses: int | None = None,
+        window_size: int = 8,
+        repetition_threshold: int = 4,
         browser: BrowserSession | None = None,
         on_no_progress: Callable[[ToolProtocolViolation], None] | None = None,
     ) -> None:
@@ -59,6 +62,8 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._max_state_action_failures = max_state_action_failures
         self._max_stagnant_tool_calls = max_stagnant_tool_calls
         self._max_stagnant_model_responses = max_stagnant_model_responses
+        self._window_size = max(1, window_size)
+        self._repetition_threshold = max(2, repetition_threshold)
         self._browser = browser
         self._last_denial = ""
         self._same_denials = 0
@@ -70,6 +75,9 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._blocked_state_actions: set[str] = set()
         self._stagnant_tool_calls = 0
         self._stagnant_model_responses = 0
+        self._action_window: deque[tuple[str, frozenset[str]] | None] = deque(
+            maxlen=self._window_size
+        )
 
     async def awrap_model_call(
         self,
@@ -169,6 +177,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 self._last_read_signature = None
             elif read_signature is not None:
                 self._last_read_signature = read_signature
+        self._track_repeated_action(request.tool_call, _tool_succeeded(result))
         if isinstance(result, ToolMessage) and result.status == "error":
             failures = self._state_action_failures.get(state_action, 0) + 1
             self._state_action_failures[state_action] = failures
@@ -228,6 +237,39 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._blocked_state_actions.clear()
         self._stagnant_tool_calls = 0
         self._stagnant_model_responses = 0
+        self._action_window.clear()
+
+    def _track_repeated_action(
+        self,
+        tool_call: Mapping[str, Any],
+        succeeded: bool,
+    ) -> None:
+        """End the turn when the same typed action repeats within a sliding window.
+
+        The typed signature is the tool name plus the set of refs/fields the action
+        targets, with values excluded, so refilling the same field is a repeat while
+        acting on different fields is not. Every tool-call step advances the window
+        so repeats spread wider than ``window_size`` steps slide out.
+        """
+        signature = _action_signature(tool_call)
+        self._action_window.append(signature if succeeded else None)
+        if (
+            succeeded
+            and signature is not None
+            and self._action_window.count(signature) >= self._repetition_threshold
+        ):
+            failure = ToolProtocolViolation(
+                "no_progress: the same typed browser action repeated within the "
+                "recent window without advancing the application"
+            )
+            if self._on_no_progress is not None:
+                self._on_no_progress(failure)
+            self._action_window.clear()
+            raise NoProgressCircuitOpen(
+                "The same typed browser action repeated within the recent window "
+                "without advancing the application; ending this agent turn for "
+                "fresh-evidence recovery."
+            )
 
     def _state_action_signature(self, request: ToolCallRequest) -> str:
         name = str(request.tool_call.get("name", ""))
@@ -252,3 +294,40 @@ def _read_signature(request: ToolCallRequest) -> str | None:
 
 def _tool_succeeded(result: ToolMessage | Command[Any]) -> bool:
     return not isinstance(result, ToolMessage) or result.status != "error"
+
+
+def _action_signature(tool_call: Mapping[str, Any]) -> tuple[str, frozenset[str]] | None:
+    """Typed identity of a browser-changing action: tool name plus targeted refs.
+
+    Only refs/fields the action targets are kept; values are deliberately excluded
+    so refilling the same field counts as a repeat while acting on different fields
+    does not. Non-browser-changing tools are not loop-tracked.
+    """
+    name = str(tool_call.get("name", ""))
+    if name not in BROWSER_CHANGING_TOOL_NAMES:
+        return None
+    args = tool_call.get("args") or {}
+    if not isinstance(args, Mapping):
+        return None
+    refs = set(_target_refs(args))
+    if name == "browser_navigate":
+        url = args.get("url")
+        if isinstance(url, str) and url:
+            refs.add(url)
+    return (name, frozenset(refs))
+
+
+def _target_refs(args: Mapping[str, Any]) -> frozenset[str]:
+    refs: set[str] = set()
+    target = args.get("target")
+    if isinstance(target, str) and target:
+        refs.add(target)
+    fields = args.get("fields")
+    if isinstance(fields, list):
+        for field in fields:
+            if not isinstance(field, Mapping):
+                continue
+            field_ref = field.get("target")
+            if isinstance(field_ref, str) and field_ref:
+                refs.add(field_ref)
+    return frozenset(refs)
