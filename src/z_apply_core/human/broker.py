@@ -44,7 +44,14 @@ RequestHook = Callable[[BrokerRequest], Awaitable[None]]
 
 
 class HumanRequestBroker:
-    """Authoritative first-response-wins broker for one application run."""
+    """Per-request HITL broker for one application run.
+
+    Multiple requests may be pending concurrently, each keyed by its own
+    request_id. ``_pending`` is an insertion-ordered dict, so pending requests
+    and ``on_requested`` notifications preserve FIFO creation order, giving the
+    web cockpit a stable display sequence. Each request is resolved or
+    cancelled independently by its request_id (first-response-wins per request).
+    """
 
     def __init__(
         self,
@@ -95,8 +102,6 @@ class HumanRequestBroker:
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         pending = _Pending(request, future)
         async with self._lock:
-            if self._pending:
-                raise RuntimeError("Only one human question may be pending for a run.")
             self._pending[request_id] = pending
         await self._on_requested(request)
         if self._telegram is not None:

@@ -4,9 +4,12 @@ parent agent.
 Available specialist types:
 {available_agents}
 
-Do not use `task` for AnswerWriter. Candidate fields must go through the
-orchestrator's typed `resolve_candidate_field` tool so the runtime can bind the
-request to live browser evidence.
+Do not call `task` with `subagent_type="AnswerWriter"`. AnswerWriter handoffs
+must go through the orchestrator's typed `resolve_candidate_field` tool: the
+runtime rewrites each call into an AnswerWriter `task` and binds it to live
+browser evidence. Emitting multiple `resolve_candidate_field` calls in one
+response is encouraged; the runtime runs them concurrently. Browser mutations
+remain deliberate single steps: act, read the result, then decide.
 
 Use `subagent_type="VisionSpecialist"` only when the current typed browser
 context says `visual_only_surface_visible=true` and one specific visual question

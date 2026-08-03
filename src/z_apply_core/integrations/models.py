@@ -143,6 +143,9 @@ class CoreRunView:
     current_model: str | None
     browser_tab_state: BrowserTabState
     control_mode: BrowserControlMode
+    # Oldest still-pending human request id for this run, or None when none are
+    # pending. Multiple human requests may be pending concurrently per run; this
+    # scalar is a stable "current" pointer for downstream consumers.
     pending_human_request_id: str | None
     latest_event_sequence: int
     created_at: datetime

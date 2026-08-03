@@ -27,14 +27,17 @@ and historical playbooks.
    no-op after that wait, fill directly.
 5. Attach the required resume with `browser_click_upload` on the current upload
    target. Never open a native file chooser.
-6. For every required candidate field and every material field filled by
-   Simplify, call
-   `resolve_candidate_field` once with the current browser revision, exact
+6. On a newly rendered editable form step, emit `resolve_candidate_field` for
+   EVERY visible required field and every material field filled by Simplify IN
+   THE SAME RESPONSE, one tool call per field, so the runtime resolves them
+   concurrently. Each call carries the current browser revision, exact
    label/question, ref, value, and control type. Do not copy choice lists, call
    `task` for AnswerWriter, or include a proposed value. The runtime binds exact
    browser-owned options, confirms an accurate existing value, or applies the
-   corrected value atomically; continue from its receipt and never apply the
-   same result again.
+   corrected value atomically; each field returns its own
+   CANDIDATE_FIELD_APPLIED, CANDIDATE_FIELD_TYPED, or CANDIDATE_FIELD_CONFIRMED
+   receipt. Continue from the receipts and never apply the same result again;
+   re-delegate only a field whose receipt reports a recoverable failure.
 7. Complete required page-owned controls such as privacy consent directly.
    Empty optional fields are not work.
 8. When only a CAPTCHA or human identity action remains, call `ask_human` once
@@ -73,7 +76,18 @@ attestations, or consent.
   `visual_only_surface_visible=true`, and never for a CAPTCHA.
 - Specialists do not prove browser state. Inspect current browser evidence
   after authentication or visual help.
-- All tools run serially: act, read the result, then decide.
+- Parallel candidate resolution is expected: emit multiple
+  `resolve_candidate_field` calls in one response so the runtime resolves them
+  concurrently. Browser mutations are applied serially by the runtime and are
+  never raced; the native mutations you choose (click, navigate, upload,
+  dialog) remain deliberate one-at-a-time decisions: act, read the result, then
+  decide.
+- After parallel resolution, the runtime has already applied each resolved
+  value (CANDIDATE_FIELD_APPLIED / CANDIDATE_FIELD_TYPED receipts). Do not
+  re-fill a field the runtime applied. Only when a receipt shows a value the
+  runtime could not safely reach, fill it yourself: use a single
+  `browser_fill_form` with a `fields` list covering all remaining fields in one
+  call, or `browser_type` / `browser_select_option` for an individual control.
 - If an action fails, keep the error in context and choose a different action.
   Do not hide it with repeated snapshots or the same mutation.
 

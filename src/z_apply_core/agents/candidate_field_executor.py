@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -65,6 +66,7 @@ class CandidateFieldExecutor:
         self._browser = browser
         self._candidate_memory = candidate_memory
         self.on_applied = on_applied
+        self._apply_lock = asyncio.Lock()
 
     async def apply(
         self,
@@ -103,108 +105,109 @@ class CandidateFieldExecutor:
                 tool_call_id,
                 "Browser execution is unavailable. Retry after the session is restored.",
             )
-        if await candidate_browser_violation(browser, request) is not None:
-            return await self._recoverable_error(
-                result,
-                tool_call_id,
-                "The browser field changed before its answer could be applied.",
-            )
-        current = await browser.inspect_control_state(request.target)
-        if current.value == answer.value and current.has_value and not current.invalid:
+        async with self._apply_lock:
+            if await candidate_browser_violation(browser, request) is not None:
+                return await self._recoverable_error(
+                    result,
+                    tool_call_id,
+                    "The browser field changed before its answer could be applied.",
+                )
+            current = await browser.inspect_control_state(request.target)
+            if current.value == answer.value and current.has_value and not current.invalid:
+                await self._remember_human_answer(request, answer)
+                self._record_applied(answer)
+                return _replace_result(
+                    result,
+                    ToolMessage(
+                        content=(
+                            "CANDIDATE_FIELD_CONFIRMED\n"
+                            f"{answer.model_dump_json()}\n"
+                            "The browser already contains this exact evidence-backed value. "
+                            "Do not rewrite or delegate it again."
+                        ),
+                        name="task",
+                        tool_call_id=tool_call_id,
+                    ),
+                )
+            if request.control_type in {"checkbox", "radio"} and answer.value not in {
+                "true",
+                "false",
+            }:
+                return _error(
+                    result,
+                    tool_call_id,
+                    "Checkbox and radio answers require an exact 'true' or 'false' value. "
+                    "Re-observe the concrete option target and retry.",
+                )
+            try:
+                if request.control_type == "combobox":
+                    receipt = await browser.call_tool_with_inline_snapshot(
+                        "browser_type",
+                        {"target": request.target, "text": answer.value},
+                    )
+                else:
+                    receipt = await browser.call_tool_with_inline_snapshot(
+                        "browser_fill_form",
+                        {
+                            "fields": [
+                                {
+                                    "name": request.field_label,
+                                    "target": request.target,
+                                    "type": request.control_type,
+                                    "value": answer.value,
+                                }
+                            ]
+                        },
+                    )
+                applied = await browser.inspect_control_state(request.target)
+            except Exception as exc:
+                return await self._recoverable_error(
+                    result,
+                    tool_call_id,
+                    "Browser executor could not apply the validated answer: "
+                    f"{type(exc).__name__}: {exc}",
+                )
+            expected_checked = answer.value == "true"
+            if (
+                request.control_type in {"checkbox", "radio"}
+                and applied.has_value != expected_checked
+            ) or (
+                request.control_type not in {"checkbox", "radio"}
+                and (not applied.has_value or applied.invalid)
+            ):
+                return await self._recoverable_error(
+                    result,
+                    tool_call_id,
+                    "The browser did not retain a valid value after the candidate mutation.",
+                )
             await self._remember_human_answer(request, answer)
             self._record_applied(answer)
+            result_name = (
+                "CANDIDATE_FIELD_TYPED"
+                if request.control_type == "combobox"
+                else "CANDIDATE_FIELD_APPLIED"
+            )
+            continuation = (
+                "The deterministic browser executor typed this exact answer. If the "
+                "receipt exposes a listbox, select the matching visible option before "
+                "continuing."
+                if request.control_type == "combobox"
+                else "The deterministic browser executor applied this exact answer."
+            )
             return _replace_result(
                 result,
                 ToolMessage(
                     content=(
-                        "CANDIDATE_FIELD_CONFIRMED\n"
+                        f"{result_name}\n"
                         f"{answer.model_dump_json()}\n"
-                        "The browser already contains this exact evidence-backed value. "
-                        "Do not rewrite or delegate it again."
+                        f"{continuation} Browser-observed value: {applied.value!r}. "
+                        "Continue from the receipt; do not delegate or type it again.\n"
+                        f"{receipt}"
                     ),
                     name="task",
                     tool_call_id=tool_call_id,
                 ),
             )
-        if request.control_type in {"checkbox", "radio"} and answer.value not in {
-            "true",
-            "false",
-        }:
-            return _error(
-                result,
-                tool_call_id,
-                "Checkbox and radio answers require an exact 'true' or 'false' value. "
-                "Re-observe the concrete option target and retry.",
-            )
-        try:
-            if request.control_type == "combobox":
-                receipt = await browser.call_tool_with_inline_snapshot(
-                    "browser_type",
-                    {"target": request.target, "text": answer.value},
-                )
-            else:
-                receipt = await browser.call_tool_with_inline_snapshot(
-                    "browser_fill_form",
-                    {
-                        "fields": [
-                            {
-                                "name": request.field_label,
-                                "target": request.target,
-                                "type": request.control_type,
-                                "value": answer.value,
-                            }
-                        ]
-                    },
-                )
-            applied = await browser.inspect_control_state(request.target)
-        except Exception as exc:
-            return await self._recoverable_error(
-                result,
-                tool_call_id,
-                "Browser executor could not apply the validated answer: "
-                f"{type(exc).__name__}: {exc}",
-            )
-        expected_checked = answer.value == "true"
-        if (
-            request.control_type in {"checkbox", "radio"}
-            and applied.has_value != expected_checked
-        ) or (
-            request.control_type not in {"checkbox", "radio"}
-            and (not applied.has_value or applied.invalid)
-        ):
-            return await self._recoverable_error(
-                result,
-                tool_call_id,
-                "The browser did not retain a valid value after the candidate mutation.",
-            )
-        await self._remember_human_answer(request, answer)
-        self._record_applied(answer)
-        result_name = (
-            "CANDIDATE_FIELD_TYPED"
-            if request.control_type == "combobox"
-            else "CANDIDATE_FIELD_APPLIED"
-        )
-        continuation = (
-            "The deterministic browser executor typed this exact answer. If the "
-            "receipt exposes a listbox, select the matching visible option before "
-            "continuing."
-            if request.control_type == "combobox"
-            else "The deterministic browser executor applied this exact answer."
-        )
-        return _replace_result(
-            result,
-            ToolMessage(
-                content=(
-                    f"{result_name}\n"
-                    f"{answer.model_dump_json()}\n"
-                    f"{continuation} Browser-observed value: {applied.value!r}. "
-                    "Continue from the receipt; do not delegate or type it again.\n"
-                    f"{receipt}"
-                ),
-                name="task",
-                tool_call_id=tool_call_id,
-            ),
-        )
 
     def _record_applied(self, answer: CandidateFieldAnswer) -> None:
         if self.on_applied is not None:

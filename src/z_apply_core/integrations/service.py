@@ -606,6 +606,21 @@ class ZApplyCore:
             raise HumanRequestAlreadyResolved() from exc
         return run.human_requests[request_id]
 
+    def _oldest_pending_human_request_id(self, run: _Run) -> str | None:
+        """Id of the oldest still-pending human request, or None when none pending.
+
+        Resolved and cancelled requests stay in ``run.human_requests`` with their
+        terminal status, so the pending set is recomputed from the broker state
+        after every requested/resolved transition instead of tracking a single
+        scalar.
+        """
+        pending = [
+            request for request in run.human_requests.values() if request.status == "pending"
+        ]
+        if not pending:
+            return None
+        return min(pending, key=lambda request: request.created_at).request_id
+
     async def _human_requested(self, run: _Run, request: BrokerRequest) -> None:
         image_artifact_id: str | None = None
         if request.image_path:
@@ -620,7 +635,7 @@ class ZApplyCore:
             run.view,
             status=RunStatus.WAITING_HUMAN,
             phase=phase,
-            pending_human_request_id=public.request_id,
+            pending_human_request_id=self._oldest_pending_human_request_id(run),
         )
         await self._emit(
             run,
@@ -647,15 +662,17 @@ class ZApplyCore:
             image_artifact_id=(existing.image_artifact_id if existing is not None else None),
         )
         run.human_requests[public.request_id] = public
-        next_status = (
-            RunStatus.HUMAN_CONTROL
-            if run.view.control_mode is BrowserControlMode.HUMAN_CONTROL
-            else RunStatus.RUNNING
-        )
+        pending_id = self._oldest_pending_human_request_id(run)
+        if run.view.control_mode is BrowserControlMode.HUMAN_CONTROL:
+            next_status = RunStatus.HUMAN_CONTROL
+        elif pending_id is not None:
+            next_status = RunStatus.WAITING_HUMAN
+        else:
+            next_status = RunStatus.RUNNING
         run.view = replace(
             run.view,
             status=next_status,
-            pending_human_request_id=None,
+            pending_human_request_id=pending_id,
         )
         if public.status == "cancelled":
             event_type = "human.cancelled"

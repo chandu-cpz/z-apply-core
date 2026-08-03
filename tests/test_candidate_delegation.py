@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -12,6 +13,7 @@ from langgraph.types import Command
 from pydantic import ValidationError
 
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
+from z_apply_core.agents.candidate_field_executor import CandidateFieldExecutor
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.specialists.answer_writer import (
     CandidateFieldAnswer,
@@ -419,3 +421,102 @@ async def test_atomic_candidate_failure_returns_fresh_evidence_for_recovery() ->
     assert message.status == "error"
     assert "The answer was not consumed" in message.text
     assert "BROWSER OBSERVATION revision: 8" in message.text
+
+
+class _SerializingBrowser:
+    """Fake browser that records whether mutations overlap in time."""
+
+    def __init__(self) -> None:
+        self.current_observation = BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "First Name" [ref=e96]',
+        )
+        self._inspect_counts: dict[str, int] = {}
+        self.active_mutations = 0
+        self.max_concurrent_mutations = 0
+        self.applied_targets: list[str] = []
+
+    async def inspect_control_state(self, target: str) -> BrowserControlState:
+        count = self._inspect_counts.get(target, 0) + 1
+        self._inspect_counts[target] = count
+        if count >= 3:
+            return BrowserControlState(value="resolved", has_value=True)
+        return BrowserControlState()
+
+    async def call_tool_with_inline_snapshot(
+        self, name: str, arguments: dict[str, Any]
+    ) -> str:
+        if name == "browser_fill_form":
+            target = arguments["fields"][0]["target"]
+        else:
+            target = arguments["target"]
+        self.active_mutations += 1
+        self.max_concurrent_mutations = max(
+            self.max_concurrent_mutations, self.active_mutations
+        )
+        await asyncio.sleep(0.02)
+        self.applied_targets.append(target)
+        self.active_mutations -= 1
+        return "changed: true"
+
+
+@pytest.mark.asyncio
+async def test_parallel_answer_applies_serialize_their_browser_mutations() -> None:
+    browser = _SerializingBrowser()
+    executor = CandidateFieldExecutor(browser)
+    requests = [
+        CandidateFieldRequest(
+            browser_revision=7,
+            field_label=f"Field {index}",
+            target=f"e9{index}",
+            current_value="",
+            control_type="textbox",
+        )
+        for index in range(2)
+    ]
+    answers = [
+        CandidateFieldAnswer(
+            source="memory",
+            field_label=f"Field {index}",
+            target=f"e9{index}",
+            value=f"value-{index}",
+        )
+        for index in range(2)
+    ]
+
+    async def apply_one(index: int) -> Command[Any]:
+        tool_call_id = f"call-{index}"
+        return await executor.apply(
+            ToolCallRequest(
+                tool_call={
+                    "name": "task",
+                    "id": tool_call_id,
+                    "args": {"subagent_type": "AnswerWriter", "description": ""},
+                },
+                tool=None,
+                state={},
+                runtime=object(),
+            ),  # type: ignore[arg-type]
+            Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            answers[index].model_dump_json(),
+                            tool_call_id=tool_call_id,
+                        )
+                    ]
+                }
+            ),
+            requests[index],
+        )
+
+    results = await asyncio.gather(apply_one(0), apply_one(1))
+
+    assert browser.max_concurrent_mutations == 1
+    assert sorted(browser.applied_targets) == ["e90", "e91"]
+    for result in results:
+        message = result.update["messages"][0]
+        assert message.status == "success"
+        assert "CANDIDATE_FIELD_APPLIED" in message.text
