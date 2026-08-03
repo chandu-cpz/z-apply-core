@@ -33,6 +33,7 @@ class Settings(BaseSettings):
         alias="SIMPLIFY_ADDON_PATH",
     )
     agnes_api_key: str = Field(default="", alias="AGNES_API_KEY")
+    agnes_reasoning: bool = Field(default=True, alias="AGNES_REASONING")
     inferx_api_key: str = Field(default="", alias="INFERX_API_KEY")
     inferx_model: str = Field(default="deepseek-v4-flash-0731", alias="INFERX_MODEL")
     inferx_reasoning: bool = Field(default=True, alias="INFERX_REASONING")

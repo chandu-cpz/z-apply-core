@@ -36,13 +36,18 @@ class AgnesProvider:
     BASE_URL = "https://apihub.agnes-ai.com/v1"
     DEFAULT_MODEL = "agnes-2.5-flash"
 
-    def __init__(self, api_key: str = "") -> None:
+    def __init__(
+        self,
+        api_key: str = "",
+        reasoning: bool = True,
+    ) -> None:
         self._api_key = api_key or os.environ.get("AGNES_API_KEY", "")
         if not self._api_key:
             raise ValueError(
                 "AGNES_API_KEY is required for AgnesProvider. "
                 "Get a key at https://platform.agnes-ai.com/"
             )
+        self._reasoning = reasoning
 
     async def lease(
         self,
@@ -57,11 +62,16 @@ class AgnesProvider:
         from langchain_openai import ChatOpenAI
         from pydantic import SecretStr
 
+        extra_body: dict[str, Any] = {
+            "chat_template_kwargs": {"enable_thinking": self._reasoning}
+        }
+
         llm = ChatOpenAI(
             model=self.DEFAULT_MODEL,
             base_url=self.BASE_URL,
             api_key=SecretStr(self._api_key),
             temperature=0.3,
+            extra_body=extra_body,
         )
 
         from nim_router.schemas import ModelCapabilities, ModelInfo
@@ -78,7 +88,13 @@ class AgnesProvider:
             metadata={"provider": "agnes", "pricing": "free"},
         )
 
-        logger.info("AgnesProvider: selected %s (tools=%s, vision=%s)", self.DEFAULT_MODEL, tools, vision)
+        logger.info(
+            "AgnesProvider: selected %s (tools=%s, vision=%s, reasoning=%s)",
+            self.DEFAULT_MODEL,
+            tools,
+            vision,
+            self._reasoning,
+        )
         return ModelSelection(info=info, llm=llm, callback=None)
 
     def record_failure(self, model_id: str, **kwargs: Any) -> None:
@@ -248,7 +264,11 @@ def default_provider_name() -> str:
 def _make_agnes(_router: NimRouter | None) -> ModelProvider:
     from z_apply_core.config import load_settings
 
-    return AgnesProvider(api_key=load_settings().agnes_api_key)
+    settings = load_settings()
+    return AgnesProvider(
+        api_key=settings.agnes_api_key,
+        reasoning=settings.agnes_reasoning,
+    )
 
 
 def _make_inferx(_router: NimRouter | None) -> ModelProvider:
