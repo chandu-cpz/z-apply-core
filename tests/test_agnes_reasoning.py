@@ -39,3 +39,24 @@ def test_settings_defaults_apply_when_env_unset() -> None:
     settings = load_settings()
 
     assert settings.agnes_reasoning is True
+
+
+def test_reasoning_content_patch_attaches_reasoning_block() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    from z_apply_core.agents.model_provider import _install_openai_reasoning_content_patch
+
+    _install_openai_reasoning_content_patch()
+
+    import langchain_openai.chat_models.base as lc_openai_base
+
+    chunk = lc_openai_base._convert_delta_to_message_chunk(
+        {"role": "assistant", "content": "answer", "reasoning_content": "think step"},
+        AIMessageChunk,
+    )
+    assert isinstance(chunk, AIMessageChunk)
+    assert chunk.content == [
+        {"type": "reasoning", "reasoning": "think step"},
+        {"type": "text", "text": "answer"},
+    ]
+    assert chunk.text == "answer"

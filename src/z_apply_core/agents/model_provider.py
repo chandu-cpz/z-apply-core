@@ -4,12 +4,54 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Protocol, cast, runtime_checkable
 
 from nim_router import NimRouter
 from nim_router.schemas import ModelSelection
 
 logger = logging.getLogger(__name__)
+
+_reasoning_patch_installed = False
+
+
+def _install_openai_reasoning_content_patch() -> None:
+    """Surface ``reasoning_content`` from OpenAI-compatible SSE streams.
+
+    langchain-openai's chunk converter drops non-standard ``delta`` fields, so
+    DeepAgents' ``message_stream.reasoning`` never receives thinking tokens
+    from reasoning-capable providers (Agnes, InferX). Wrap the converter so
+    each assistant chunk carries the reasoning as a content block, which
+    langchain-core's stream projection turns into reasoning deltas consumed by
+    the DeepAgents harness.
+    """
+
+    global _reasoning_patch_installed
+    if _reasoning_patch_installed:
+        return
+    import langchain_openai.chat_models.base as lc_openai_base
+    from langchain_core.messages import AIMessageChunk
+
+    base_module: Any = lc_openai_base
+    original = base_module._convert_delta_to_message_chunk
+
+    def _convert_with_reasoning(
+        _dict: dict[str, Any], default_class: type[Any]
+    ) -> Any:
+        chunk = original(_dict, default_class)
+        reasoning = _dict.get("reasoning_content")
+        if not reasoning or not isinstance(chunk, AIMessageChunk):
+            return chunk
+        blocks: list[dict[str, str]] = []
+        if isinstance(chunk.content, list):
+            blocks = [dict(block) for block in chunk.content if isinstance(block, dict)]
+        elif isinstance(chunk.content, str) and chunk.content:
+            blocks.append({"type": "text", "text": chunk.content})
+        blocks.insert(0, {"type": "reasoning", "reasoning": reasoning})
+        chunk.content = cast("Any", blocks)
+        return chunk
+
+    base_module._convert_delta_to_message_chunk = _convert_with_reasoning
+    _reasoning_patch_installed = True
 
 
 @runtime_checkable
@@ -61,6 +103,8 @@ class AgnesProvider:
     ) -> ModelSelection:
         from langchain_openai import ChatOpenAI
         from pydantic import SecretStr
+
+        _install_openai_reasoning_content_patch()
 
         extra_body: dict[str, Any] = {
             "chat_template_kwargs": {"enable_thinking": self._reasoning}
@@ -152,6 +196,8 @@ class InferXProvider:
             }
         else:
             extra_body = {"thinking": {"type": "disabled"}}
+
+        _install_openai_reasoning_content_patch()
 
         llm = ChatOpenAI(
             model=self._model,

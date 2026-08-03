@@ -354,10 +354,16 @@ def _task_prompt(
     run_id: str,
 ) -> str:
     captcha_path = _captcha_path(run_id)
+    resume_text = _candidate_resume_context()
+    resume_section = (
+        f"Candidate resume (authoritative candidate facts; use this text directly, never read files):\n{resume_text}"
+        if resume_text
+        else f"Configured resume: {resume_path}"
+    )
     return f"""Complete this job application in the already-open browser.
 
 Job URL: {job_url}
-Configured resume: {resume_path}
+{resume_section}
 CAPTCHA artifact path: {captcha_path}
 
 Objective:
@@ -381,7 +387,11 @@ def _captcha_path(run_id: str) -> Path:
 
 def _candidate_resume_context() -> str:
     path = CORE_ROOT / CANDIDATE_CONTEXT_VIRTUAL_PATH.lstrip("/")
-    return path.read_text(encoding="utf-8")
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        logger.warning("Candidate resume not readable at %s", path)
+        return ""
 
 
 def build_orchestrator_middleware(
@@ -415,7 +425,7 @@ def build_orchestrator_middleware(
             evidence_store=evidence_store,
             run_context=run_context,
         ),
-        TokenMetricMiddleware(run_context=run_context, emit=usage_emit),
+        TokenMetricMiddleware(agent="orchestrator", run_context=run_context, emit=usage_emit),
         *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
         CapabilityContextMiddleware(
             active_browser,
