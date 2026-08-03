@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
 from pathlib import Path
@@ -8,6 +9,8 @@ from typing import Annotated, Any, Protocol, cast, get_origin
 
 from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
+
+ELEMENT_REF_PATTERN = r"^(?:f\d+)?e\d+(?:v\d+)?$"
 
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
@@ -149,7 +152,7 @@ def _canonical_reference(value: Any) -> str | None:
         candidate = candidate[4:]
     elif candidate.startswith("[") and candidate.endswith("]"):
         candidate = candidate[1:-1]
-    if len(candidate) > 1 and candidate[0] == "e" and candidate[1:].isdigit():
+    if re.fullmatch(ELEMENT_REF_PATTERN, candidate):
         return candidate
     return None
 

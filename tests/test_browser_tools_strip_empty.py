@@ -125,6 +125,24 @@ class StripEmptyArgsTests(unittest.TestCase):
             self._run(tools[0].coroutine(target=supplied))
             self.assertEqual(self.captured["target"], "e125")
 
+    def test_versioned_aria_references_are_canonicalized(self) -> None:
+        tools = self.registry.langchain_tools(["browser_snapshot"])
+
+        for supplied in (
+            "e125v3",
+            "[e125v3]",
+            "ref=e125v3",
+            "[ref=e125v3]",
+            "f1e2v5",
+            "[f1e2v5]",
+            "ref=f1e2v5",
+            '[ref=f1e2v5]',
+            'textbox "Current Salary *" [ref=e125v3]:',
+        ):
+            self._run(tools[0].coroutine(target=supplied))
+            expected = "f1e2v5" if "f1e2" in supplied else "e125v3"
+            self.assertEqual(self.captured["target"], expected)
+
     def test_fill_form_nested_targets_are_canonicalized(self) -> None:
         spec = SimpleSpec(
             name="browser_fill_form",

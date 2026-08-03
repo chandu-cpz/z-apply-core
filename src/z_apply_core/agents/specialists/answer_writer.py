@@ -9,6 +9,7 @@ from langchain_core.tools import BaseTool, ToolException, tool
 from pydantic import BaseModel, Field
 
 from z_apply_core.agents.prompts import load_prompt
+from z_apply_core.browser_tools import ELEMENT_REF_PATTERN
 
 CANDIDATE_FIELD_TOOL_NAME = "resolve_candidate_field"
 
@@ -19,7 +20,8 @@ class CandidateFieldAnswer(BaseModel):
     source: Literal["memory", "resume", "human"]
     field_label: str = Field(min_length=1, description="Exact current field label")
     target: str = Field(
-        pattern=r"^e\d+$", description="Exact current browser target ref from the task"
+        pattern=ELEMENT_REF_PATTERN,
+        description="Exact current browser target ref from the task",
     )
     value: str = Field(min_length=1, description="Exact evidence-backed field value")
 
@@ -31,7 +33,10 @@ class CandidateFieldRequest(BaseModel):
     field_label: str = Field(
         min_length=1, description="Exact visible label or question for this field"
     )
-    target: str = Field(pattern=r"^e\d+$", description="Exact current browser target ref")
+    target: str = Field(
+        pattern=ELEMENT_REF_PATTERN,
+        description="Exact current browser target ref",
+    )
     current_value: str = Field(
         description="Exact value currently visible in the target; empty when unresolved"
     )

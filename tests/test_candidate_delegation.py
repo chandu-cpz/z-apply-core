@@ -9,10 +9,14 @@ from langchain.agents.middleware import ModelRequest
 from langchain.agents.middleware.types import ModelResponse, ToolCallRequest
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Command
+from pydantic import ValidationError
 
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
-from z_apply_core.agents.specialists.answer_writer import CandidateFieldAnswer
+from z_apply_core.agents.specialists.answer_writer import (
+    CandidateFieldAnswer,
+    CandidateFieldRequest,
+)
 from z_apply_core.browser_observation import BrowserControlState, BrowserObservation
 
 
@@ -32,6 +36,46 @@ def _candidate_call(*, call_id: str = "candidate-1") -> dict[str, Any]:
             "control_type": "textbox",
         },
     }
+
+
+def test_candidate_field_request_accepts_legacy_and_versioned_targets() -> None:
+    for target in ("e140", "e140v11", "f1e2v5"):
+        request = CandidateFieldRequest.model_validate(
+            {
+                "browser_revision": 7,
+                "field_label": "Where did you hear about us?",
+                "target": target,
+                "current_value": "",
+                "control_type": "textbox",
+            }
+        )
+        assert request.target == target
+
+
+def test_candidate_field_request_rejects_malformed_targets() -> None:
+    for target in ("e140vv11", "e140!", "e", "v11", "[ref=e140]"):
+        with pytest.raises(ValidationError) as exc_info:
+            CandidateFieldRequest.model_validate(
+                {
+                    "browser_revision": 7,
+                    "field_label": "Where did you hear about us?",
+                    "target": target,
+                    "current_value": "",
+                    "control_type": "textbox",
+                }
+            )
+        assert any(error["loc"] == ("target",) for error in exc_info.value.errors())
+
+
+def test_candidate_field_answer_accepts_legacy_and_versioned_targets() -> None:
+    for target in ("e140", "e140v11", "f1e2v5"):
+        answer = CandidateFieldAnswer(
+            source="memory",
+            field_label="Where did you hear about us?",
+            target=target,
+            value="LinkedIn",
+        )
+        assert answer.target == target
 
 
 @pytest.mark.asyncio
