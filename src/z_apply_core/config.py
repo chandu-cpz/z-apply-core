@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     agnes_api_key: str = Field(default="", alias="AGNES_API_KEY")
     inferx_api_key: str = Field(default="", alias="INFERX_API_KEY")
     inferx_model: str = Field(default="deepseek-v4-flash-0731", alias="INFERX_MODEL")
+    inferx_reasoning: bool = Field(default=True, alias="INFERX_REASONING")
+    inferx_reasoning_effort: str = Field(default="high", alias="INFERX_REASONING_EFFORT")
     model_provider: str = Field(default="", alias="MODEL_PROVIDER")
 
     model_config = SettingsConfigDict(

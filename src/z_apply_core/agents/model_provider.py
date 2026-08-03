@@ -94,7 +94,13 @@ class InferXProvider:
     BASE_URL = "https://model.inferx.net/endpoints/v1"
     DEFAULT_MODEL = "deepseek-v4-flash-0731"
 
-    def __init__(self, api_key: str = "", model: str = "") -> None:
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "",
+        reasoning: bool = True,
+        reasoning_effort: str = "high",
+    ) -> None:
         self._api_key = api_key or os.environ.get("INFERX_API_KEY", "")
         if not self._api_key:
             raise ValueError(
@@ -102,6 +108,8 @@ class InferXProvider:
                 "Create an inference key in the InferX Console (https://model.inferx.net/)."
             )
         self._model = model or os.environ.get("INFERX_MODEL", "") or self.DEFAULT_MODEL
+        self._reasoning = reasoning
+        self._reasoning_effort = reasoning_effort
 
     async def lease(
         self,
@@ -116,11 +124,25 @@ class InferXProvider:
         from langchain_openai import ChatOpenAI
         from pydantic import SecretStr
 
+        if self._reasoning:
+            effort = (
+                self._reasoning_effort
+                if self._reasoning_effort in {"high", "max"}
+                else "high"
+            )
+            extra_body: dict[str, Any] = {
+                "thinking": {"type": "enabled"},
+                "reasoning_effort": effort,
+            }
+        else:
+            extra_body = {"thinking": {"type": "disabled"}}
+
         llm = ChatOpenAI(
             model=self._model,
             base_url=self.BASE_URL,
             api_key=SecretStr(self._api_key),
             temperature=0.3,
+            extra_body=extra_body,
         )
 
         from nim_router.schemas import ModelCapabilities, ModelInfo
@@ -233,7 +255,12 @@ def _make_inferx(_router: NimRouter | None) -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
-    return InferXProvider(api_key=settings.inferx_api_key, model=settings.inferx_model)
+    return InferXProvider(
+        api_key=settings.inferx_api_key,
+        model=settings.inferx_model,
+        reasoning=settings.inferx_reasoning,
+        reasoning_effort=settings.inferx_reasoning_effort,
+    )
 
 
 def _make_nim(router: NimRouter | None) -> ModelProvider:
