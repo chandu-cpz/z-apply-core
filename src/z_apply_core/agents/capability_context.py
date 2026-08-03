@@ -9,20 +9,15 @@ from langchain.agents.middleware.types import AgentState, ContextT, ModelRespons
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 
-from z_apply_core.agents.form_phase_controller import (
-    FormPhaseController,
-    FormPhaseEmitter,
-)
 from z_apply_core.browser_observation import BrowserCapabilities
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.memory.platform_playbooks import PlatformPlaybooks
-from z_apply_core.stream_events import FormPhaseEvent
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CapabilityContextMiddleware", "FormPhaseEvent"]
+__all__ = ["CapabilityContextMiddleware"]
 
 CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
 _ALWAYS_AVAILABLE = frozenset(
@@ -54,8 +49,6 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         job_url: str = "",
         run_context: RunContext | None = None,
         evidence_store: EvidenceStore | None = None,
-        form_phase_controller: FormPhaseController | None = None,
-        form_phase_emit: FormPhaseEmitter | None = None,
     ) -> None:
         super().__init__()
         self._browser = browser
@@ -63,9 +56,6 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         self._job_url = job_url
         self._run_context = run_context
         self._evidence_store = evidence_store
-        self._form_phase_controller = form_phase_controller
-        self._form_phase_emit = form_phase_emit
-        self._last_revision: int | None = None
 
     async def awrap_model_call(
         self,
@@ -129,29 +119,6 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
                 f"{current_evidence}"
             ),
         )
-        revision_changed = (
-            observation is not None
-            and self._last_revision is not None
-            and observation.revision != self._last_revision
-        )
-        self._last_revision = (
-            observation.revision if observation is not None else self._last_revision
-        )
-        if (
-            self._form_phase_controller is not None
-            and self._form_phase_emit is not None
-            and self._run_context is not None
-            and observation is not None
-        ):
-            try:
-                await self._form_phase_controller.update_form_phase(
-                    self._run_context,
-                    current_evidence,
-                    self._form_phase_emit,
-                    browser_mutated=revision_changed,
-                )
-            except Exception:  # noqa: BLE001 — the form-phase hook must never break a model turn
-                logger.warning("form-phase controller failed; ignoring", exc_info=True)
         return await handler(
             request.override(
                 messages=[*request.messages, context],

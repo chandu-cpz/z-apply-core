@@ -13,6 +13,8 @@ class BrowserControlState:
     has_value: bool = False
     invalid: bool = False
     disabled: bool = False
+    control_name: str = ""
+    role: str = ""
 
 
 @dataclass(frozen=True, slots=True)

@@ -28,12 +28,10 @@ async def candidate_browser_violation(
             "CANDIDATE DELEGATION ERROR: browser validation is unavailable. "
             "Use browser_observe after the browser session is restored."
         )
-    observation = browser.current_observation
-    if observation is None or observation.revision != request.browser_revision:
-        return (
-            "CANDIDATE DELEGATION ERROR: browser_revision is stale or unavailable. "
-            "Discard the request and call browser_observe for fresh evidence."
-        )
+    # The hard browser_revision equality gate was removed: filling one field in a
+    # parallel batch bumps the shared revision, so comparing against the request's
+    # snapshot revision would reject every later field. The live value and identity
+    # checks below are the authoritative stale-evidence guards instead.
     try:
         control = await browser.inspect_control_state(request.target)
     except Exception:
@@ -54,6 +52,26 @@ async def candidate_browser_violation(
     return None
 
 
+def _identity_match(control_name: str, field_label: str) -> bool:
+    """Return True when a live control name can support the requested label.
+
+    An empty or non-informative control name cannot be verified and passes to avoid
+    false negatives on unnamed controls. Only a definitive mismatch (both sides
+    informative with no text overlap) fails.
+    """
+    normalized_name = _normalize_label_text(control_name)
+    normalized_label = _normalize_label_text(field_label)
+    if not normalized_name or not normalized_label:
+        return True
+    return normalized_label in normalized_name or normalized_name in normalized_label
+
+
+def _normalize_label_text(text: str) -> str:
+    if text.casefold().strip() == "unnamed control":
+        return ""
+    return " ".join(text.casefold().split())
+
+
 class CandidateFieldExecutor:
     """Apply one AnswerWriter result or return recoverable browser evidence."""
 
@@ -67,6 +85,7 @@ class CandidateFieldExecutor:
         self._candidate_memory = candidate_memory
         self.on_applied = on_applied
         self._apply_lock = asyncio.Lock()
+        self._consecutive_failures: dict[tuple[str, str], int] = {}
 
     async def apply(
         self,
@@ -107,13 +126,25 @@ class CandidateFieldExecutor:
             )
         async with self._apply_lock:
             if await candidate_browser_violation(browser, request) is not None:
-                return await self._recoverable_error(
+                return await self._recoverable(
                     result,
                     tool_call_id,
                     "The browser field changed before its answer could be applied.",
+                    target=request.target,
+                    value=answer.value,
                 )
             current = await browser.inspect_control_state(request.target)
+            if not _identity_match(current.control_name, request.field_label):
+                return await self._recoverable(
+                    result,
+                    tool_call_id,
+                    "The browser target now resolves to a different control than the "
+                    "requested field label.",
+                    target=request.target,
+                    value=answer.value,
+                )
             if current.value == answer.value and current.has_value and not current.invalid:
+                self._reset_failures(request.target, answer.value)
                 await self._remember_human_answer(request, answer)
                 self._record_applied(answer)
                 return _replace_result(
@@ -161,11 +192,13 @@ class CandidateFieldExecutor:
                     )
                 applied = await browser.inspect_control_state(request.target)
             except Exception as exc:
-                return await self._recoverable_error(
+                return await self._recoverable(
                     result,
                     tool_call_id,
                     "Browser executor could not apply the validated answer: "
                     f"{type(exc).__name__}: {exc}",
+                    target=request.target,
+                    value=answer.value,
                 )
             expected_checked = answer.value == "true"
             if (
@@ -175,11 +208,14 @@ class CandidateFieldExecutor:
                 request.control_type not in {"checkbox", "radio"}
                 and (not applied.has_value or applied.invalid)
             ):
-                return await self._recoverable_error(
+                return await self._recoverable(
                     result,
                     tool_call_id,
                     "The browser did not retain a valid value after the candidate mutation.",
+                    target=request.target,
+                    value=answer.value,
                 )
+            self._reset_failures(request.target, answer.value)
             await self._remember_human_answer(request, answer)
             self._record_applied(answer)
             result_name = (
@@ -225,6 +261,28 @@ class CandidateFieldExecutor:
             question=request.field_label,
             answer=answer.value,
         )
+
+    async def _recoverable(
+        self,
+        result: ToolMessage | Command[Any],
+        tool_call_id: str,
+        reason: str,
+        *,
+        target: str,
+        value: str,
+    ) -> ToolMessage | Command[Any]:
+        key = (target, value)
+        self._consecutive_failures[key] = self._consecutive_failures.get(key, 0) + 1
+        if self._consecutive_failures[key] >= 2:
+            return _error(
+                result,
+                tool_call_id,
+                f"repeated identical candidate mutation failure; not retrying: {reason}",
+            )
+        return await self._recoverable_error(result, tool_call_id, reason)
+
+    def _reset_failures(self, target: str, value: str) -> None:
+        self._consecutive_failures.pop((target, value), None)
 
     async def _recoverable_error(
         self,

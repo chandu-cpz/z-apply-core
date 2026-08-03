@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
@@ -41,4 +41,4 @@ class VisionToolMessageCompatibilityMiddleware(
                     ]
                 )
             )
-        return await handler(request.override(messages=messages))
+        return cast(ModelResponse[ResponseT], await handler(request.override(messages=messages)))

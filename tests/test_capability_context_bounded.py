@@ -8,14 +8,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.tools import tool
 
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
-from z_apply_core.agents.form_phase_controller import (
-    FormPhaseController,
-    FormPhaseEmitter,
-)
 from z_apply_core.browser_observation import BrowserCapabilities, BrowserObservation
 from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
-from z_apply_core.stream_events import FormPhaseEvent
 
 
 @tool
@@ -44,44 +39,6 @@ class FakeBrowser:
 
     def set_observation(self, observation: BrowserObservation | None) -> None:
         self._observation = observation
-
-
-class PhaseBumpingController(FormPhaseController):
-    def __init__(self) -> None:
-        super().__init__()
-        self.browser_mutated_flags: list[bool] = []
-
-    async def update_form_phase(
-        self,
-        run_context: RunContext,
-        browser_evidence: str,
-        emit: FormPhaseEmitter,
-        *,
-        browser_mutated: bool = False,
-    ) -> None:
-        self.browser_mutated_flags.append(browser_mutated)
-        if browser_mutated:
-            run_context.form_phase.apply_analysis("submitted")
-            await emit(
-                FormPhaseEvent(
-                    run_id=run_context.run_id,
-                    phase="submitted",
-                    confidence="high",
-                )
-            )
-        return None
-
-
-class RaisingFormPhaseController(FormPhaseController):
-    async def update_form_phase(
-        self,
-        run_context: RunContext,
-        browser_evidence: str,
-        emit: FormPhaseEmitter,
-        *,
-        browser_mutated: bool = False,
-    ) -> None:
-        raise RuntimeError("form-phase boom")
 
 
 def _observation(revision: int) -> BrowserObservation:
@@ -150,65 +107,12 @@ async def test_bounded_evidence_saved_to_store(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_form_phase_hook_emits_after_revision_bump() -> None:
-    run_context = RunContext(run_id="run-1")
-    browser = FakeBrowser(_observation(revision=1))
-    controller = PhaseBumpingController()
-    emitted: list[FormPhaseEvent] = []
-
-    async def emit(event: FormPhaseEvent) -> None:
-        emitted.append(event)
-
-    middleware = CapabilityContextMiddleware(
-        browser,
-        run_context=run_context,
-        form_phase_controller=controller,
-        form_phase_emit=emit,
-    )
-
-    await _run(middleware, _request())
-    assert emitted == []
-    assert run_context.form_phase.phase == "initial"
-    assert controller.browser_mutated_flags == [False]
-
-    browser.set_observation(_observation(revision=2))
-    await _run(middleware, _request())
-
-    assert controller.browser_mutated_flags == [False, True]
-    assert len(emitted) == 1
-    assert emitted[0].run_id == "run-1"
-    assert emitted[0].phase == "submitted"
-    assert emitted[0].confidence == "high"
-    assert run_context.form_phase.phase == "submitted"
-
-
-@pytest.mark.asyncio
-async def test_form_phase_hook_failure_is_swallowed() -> None:
-    run_context = RunContext(run_id="run-2")
-    browser = FakeBrowser(_observation(revision=1))
-    middleware = CapabilityContextMiddleware(
-        browser,
-        run_context=run_context,
-        form_phase_controller=RaisingFormPhaseController(),
-        form_phase_emit=lambda _event: None,
-    )
-    request = _request()
-
-    result = await _run(middleware, request)
-
-    assert result.result[0].content == "done"
-    assert run_context.form_phase.phase == "initial"
-
-
-@pytest.mark.asyncio
 async def test_observation_none_is_graceful() -> None:
     run_context = RunContext(run_id="run-3")
     browser = FakeBrowser(None)
     middleware = CapabilityContextMiddleware(
         browser,
         run_context=run_context,
-        form_phase_controller=PhaseBumpingController(),
-        form_phase_emit=lambda _event: None,
     )
     request = _request()
     received: list[ModelRequest[Any]] = []

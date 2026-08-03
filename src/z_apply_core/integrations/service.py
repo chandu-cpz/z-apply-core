@@ -630,6 +630,25 @@ class ZApplyCore:
             image_artifact_id = artifact.artifact_id
         public = _public_human_request(request, image_artifact_id=image_artifact_id)
         run.human_requests[public.request_id] = public
+        if run.view.status is RunStatus.TERMINAL:
+            await self._emit(
+                run,
+                "submission.approval_requested"
+                if public.kind == "submission_approval"
+                else "human.requested",
+                {
+                    "request_id": public.request_id,
+                    "kind": public.kind,
+                    "question": public.question,
+                    "context": public.context,
+                    "options": list(public.options),
+                    "risk": public.risk,
+                    "allow_free_text": public.allow_free_text,
+                    "image_artifact_id": public.image_artifact_id,
+                    "created_at": public.created_at.isoformat(),
+                },
+            )
+            return
         phase = RunPhase.APPROVAL if public.kind == "submission_approval" else run.view.phase
         run.view = replace(
             run.view,
@@ -676,18 +695,19 @@ class ZApplyCore:
                 answer=public.answer,
             )
         run.human_requests[public.request_id] = public
-        pending_id = self._oldest_pending_human_request_id(run)
-        if run.view.control_mode is BrowserControlMode.HUMAN_CONTROL:
-            next_status = RunStatus.HUMAN_CONTROL
-        elif pending_id is not None:
-            next_status = RunStatus.WAITING_HUMAN
-        else:
-            next_status = RunStatus.RUNNING
-        run.view = replace(
-            run.view,
-            status=next_status,
-            pending_human_request_id=pending_id,
-        )
+        if run.view.status is not RunStatus.TERMINAL:
+            pending_id = self._oldest_pending_human_request_id(run)
+            if run.view.control_mode is BrowserControlMode.HUMAN_CONTROL:
+                next_status = RunStatus.HUMAN_CONTROL
+            elif pending_id is not None:
+                next_status = RunStatus.WAITING_HUMAN
+            else:
+                next_status = RunStatus.RUNNING
+            run.view = replace(
+                run.view,
+                status=next_status,
+                pending_human_request_id=pending_id,
+            )
         if public.status == "cancelled":
             event_type = "human.cancelled"
         elif public.kind == "submission_approval":

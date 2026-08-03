@@ -58,15 +58,6 @@ class TokenUsageEvent:
 
 
 @dataclass(slots=True)
-class FormPhaseEvent:
-    """One confirmed form-phase transition driven by a PageAnalyst verdict."""
-
-    run_id: str
-    phase: str
-    confidence: str
-
-
-@dataclass(slots=True)
 class V3RunResult:
     output: dict[str, Any] = field(default_factory=dict)
     event_count: int = 0

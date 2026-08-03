@@ -20,7 +20,6 @@ from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
-from z_apply_core.agents.form_phase_controller import FormPhaseController
 from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
@@ -55,7 +54,6 @@ from z_apply_core.memory.platform_playbooks import (
 )
 from z_apply_core.memory.tools import make_candidate_memory_tools
 from z_apply_core.stream_events import (
-    FormPhaseEvent,
     FrameworkEventSink,
     FrameworkTraceEvent,
     SequencedEventSink,
@@ -225,7 +223,6 @@ async def run_orchestrator(
     evidence_store = EvidenceStore(
         base_dir=CORE_ROOT / ".z-apply" / "runs" / run_id / "context"
     )
-    form_phase_controller = FormPhaseController()
     if active_browser is not None:
         active_browser.bind_run_context(run_context)
         active_browser.bind_evidence_store(evidence_store)
@@ -278,7 +275,6 @@ async def run_orchestrator(
             context_inbox=context_inbox,
             candidate_memory=candidate_memory,
             router_middleware=router_middleware,
-            form_phase_controller=form_phase_controller,
             orchestrator_human_guard=orchestrator_human_guard,
             active_goal_middleware=active_goal_middleware,
             terminal=terminal,
@@ -399,7 +395,6 @@ def build_orchestrator_middleware(
     context_inbox: ContextInbox | None,
     candidate_memory: CandidateMemory | None,
     router_middleware: NimRouterMiddleware,
-    form_phase_controller: FormPhaseController,
     orchestrator_human_guard: HumanEscalationGuardMiddleware,
     active_goal_middleware: ActiveGoalMiddleware,
     terminal: tuple[RunStatus, str] | None = None,
@@ -415,9 +410,6 @@ def build_orchestrator_middleware(
     def usage_emit(event: object) -> None:
         _emit_usage_sync(event_sink, event)
 
-    async def form_phase_emit(event: FormPhaseEvent) -> None:
-        await _emit_form_phase(event_sink, event)
-
     return [
         ContextBudgetMiddleware(
             evidence_store=evidence_store,
@@ -431,8 +423,6 @@ def build_orchestrator_middleware(
             job_url=job_url,
             run_context=run_context,
             evidence_store=evidence_store,
-            form_phase_controller=form_phase_controller,
-            form_phase_emit=form_phase_emit,
         ),
         SafeToolBatchMiddleware(),
         OrchestratorActionOrderMiddleware(active_browser),
@@ -467,13 +457,6 @@ def _emit_usage_sync(sink: SequencedEventSink, event: object) -> None:
     result = sink.accept(_as_trace_event("token_usage", event))
     if inspect.isawaitable(result):
         asyncio.get_running_loop().create_task(result)
-
-
-async def _emit_form_phase(sink: SequencedEventSink, event: FormPhaseEvent) -> None:
-    """Forward one form-phase transition as a run-sequenced trace event."""
-    result = sink.accept(_as_trace_event("form_phase", event))
-    if inspect.isawaitable(result):
-        await result
 
 
 def _as_trace_event(kind: str, event: object) -> FrameworkTraceEvent:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from z_apply_core.agents.specialists.answer_writer import CandidateFieldAnswer
 from z_apply_core.context.ledger import AppliedFieldLedger
-from z_apply_core.context.run_context import FormPhaseTracker, RunContext
+from z_apply_core.context.run_context import RunContext
 
 
 def _answer(*, field_label: str, value: str, target: str = "e1") -> CandidateFieldAnswer:
@@ -43,30 +43,9 @@ def test_as_dict_returns_shallow_copy() -> None:
     assert ledger.lookup("Name").value == "Chandrakanth"
 
 
-def test_transition_records_only_real_transitions() -> None:
-    tracker = FormPhaseTracker()
-    tracker.transition("initial")
-    assert tracker.phase == "initial"
-    assert tracker.phase_history == []
-    tracker.transition(FormPhaseTracker.FILLING)
-    tracker.transition("filling")
-    assert tracker.phase == FormPhaseTracker.FILLING
-    assert tracker.phase_history == [FormPhaseTracker.INITIAL]
-    tracker.transition(FormPhaseTracker.REVIEWING)
-    tracker.transition(FormPhaseTracker.SUBMITTED)
-    assert tracker.phase == FormPhaseTracker.SUBMITTED
-    assert tracker.phase_history == [
-        FormPhaseTracker.INITIAL,
-        FormPhaseTracker.FILLING,
-        FormPhaseTracker.REVIEWING,
-    ]
-
-
-def test_short_summary_formats_counts_and_phase() -> None:
+def test_short_summary_formats_counts() -> None:
     context = RunContext()
-    assert context.short_summary() == "actions=0 applied=0 phase=initial"
-    context.form_phase.transition(FormPhaseTracker.FILLING)
-    assert "phase=filling" in context.short_summary()
+    assert context.short_summary() == "actions=0 applied=0"
 
 
 def test_short_summary_does_not_leak_field_values() -> None:

@@ -14,7 +14,6 @@ from z_apply_core.context.token_metric import TokenUsage
 from z_apply_core.log_labels import agent_info, node_info, run_info
 from z_apply_core.state import RunState
 from z_apply_core.stream_events import (
-    FormPhaseEvent,
     FrameworkTraceEvent,
     TokenUsageEvent,
     V3RunResult,
@@ -54,11 +53,7 @@ class RichStreamRenderer:
     def close(self) -> None:
         self._end_stream_if_active()
 
-    async def accept(self, event: FrameworkTraceEvent | TokenUsageEvent | FormPhaseEvent) -> None:
-        if isinstance(event, FormPhaseEvent):
-            self._render_form_phase(event)
-            return
-
+    async def accept(self, event: FrameworkTraceEvent | TokenUsageEvent) -> None:
         if isinstance(event, TokenUsageEvent):
             self._render_token_usage(event)
             return
@@ -141,10 +136,6 @@ class RichStreamRenderer:
         self._last_token_usage = usage
         self._last_token_usage_time = now
         self._console.print(Text(f"token usage: {usage}", style="dim"))
-
-    def _render_form_phase(self, event: FormPhaseEvent) -> None:
-        self._end_stream_if_active()
-        self._console.print(Text(f"phase -> {event.phase} ({event.confidence})"))
 
     def _render_update(self, event: FrameworkTraceEvent) -> None:
         data = event.data.get("data", event.data)

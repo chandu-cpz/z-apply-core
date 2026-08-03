@@ -102,6 +102,8 @@ async def inspect_control(page: Page, locator: Locator) -> BrowserControlState:
         has_value=await _has_value(locator),
         invalid=await _is_invalid(page, locator),
         disabled=await _is_disabled(locator),
+        control_name=await _control_name(locator),
+        role=await _control_role(locator),
     )
 
 
@@ -176,6 +178,23 @@ async def _control_name(locator: Locator) -> str:
         if value and value.strip():
             return value.strip()
     return "unnamed control"
+
+
+async def _control_role(locator: Locator) -> str:
+    role = await locator.get_attribute("role")
+    if role and role.strip():
+        return role.strip()
+    control_type = (await locator.get_attribute("type") or "").lower()
+    if control_type in {"text", "email", "tel", "number", "password"}:
+        return "textbox"
+    if control_type == "checkbox":
+        return "checkbox"
+    if control_type == "radio":
+        return "radio"
+    tag_name = str(await locator.evaluate("el => el.tagName.toLowerCase()"))
+    if tag_name == "select":
+        return "combobox"
+    return tag_name
 
 
 async def _described_by_text(page: Page, locator: Locator) -> list[str]:

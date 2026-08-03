@@ -133,6 +133,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         before_browser_signature = self._browser_signature
         state_action = self._state_action_signature(request)
         read_signature = _read_signature(request)
+        result: ToolMessage | Command[Any]
         if state_action in self._blocked_state_actions:
             result = ToolMessage(
                 content=(

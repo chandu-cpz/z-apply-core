@@ -50,9 +50,10 @@ async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Loc
     control = target.locator(NATIVE_SUBMIT_XPATH)
     is_proxy = False
     if await control.count() != 1:
-        control = await _form_submit_proxy(page, target)
-        if control is None:
+        proxy = await _form_submit_proxy(page, target)
+        if proxy is None:
             return "not_submit", None
+        control = proxy
         is_proxy = True
 
     tag = await _tag_hint(control)

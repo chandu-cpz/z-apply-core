@@ -11,9 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool, ToolException, tool
-from langchain_google_community import GmailToolkit
-from langchain_google_community._utils import get_google_credentials
-from langchain_google_community.gmail.utils import build_gmail_service
+from langchain_google_community import GmailToolkit  # type: ignore[import-untyped]
+from langchain_google_community._utils import get_google_credentials  # type: ignore[import-untyped]
+from langchain_google_community.gmail.utils import (  # type: ignore[import-untyped]
+    build_gmail_service,
+)
 
 READONLY_GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
 ALLOWED_GMAIL_TOOLS = frozenset({"search_gmail"})
@@ -40,12 +42,12 @@ class ReadonlyGmailClient:
                 if selected is None:
                     raise ToolException(f"Read-only Gmail operation {name!r} is unavailable.")
                 result = selected.invoke(arguments)
-            if name == "search_gmail":
-                for _ in range(GMAIL_SEARCH_ATTEMPTS - 1):
-                    if not _empty_search_result(result):
-                        break
-                    await asyncio.sleep(GMAIL_SEARCH_INTERVAL_SECONDS)
-                    result = selected.invoke(arguments)
+                if name == "search_gmail":
+                    for _ in range(GMAIL_SEARCH_ATTEMPTS - 1):
+                        if not _empty_search_result(result):
+                            break
+                        await asyncio.sleep(GMAIL_SEARCH_INTERVAL_SECONDS)
+                        result = selected.invoke(arguments)
             return _safe_tool_content(result)
         except Exception as exc:  # noqa: BLE001 - surface a safe recoverable tool failure
             raise ToolException(f"Gmail read failed: {exc}") from exc

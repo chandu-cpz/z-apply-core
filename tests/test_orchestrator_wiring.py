@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
-from z_apply_core.agents.form_phase_controller import FormPhaseController
 from z_apply_core.agents.orchestrator import build_orchestrator_middleware
 from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.browser_session import BrowserSession
@@ -42,7 +41,6 @@ def _build(
         context_inbox=None,
         candidate_memory=None,
         router_middleware=MagicMock(),
-        form_phase_controller=FormPhaseController(),
         orchestrator_human_guard=MagicMock(),
         active_goal_middleware=MagicMock(),
         terminal=None,
@@ -84,9 +82,7 @@ def test_capability_context_carries_wiring(tmp_path: Path) -> None:
         if isinstance(middleware, CapabilityContextMiddleware)
     )
     assert capability._evidence_store is evidence_store
-    assert capability._form_phase_controller is not None
     assert capability._run_context is run_context
-    assert capability._form_phase_emit is not None
 
 
 def test_bind_evidence_store(tmp_path: Path) -> None:

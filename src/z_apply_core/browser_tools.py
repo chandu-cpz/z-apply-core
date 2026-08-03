@@ -117,7 +117,7 @@ def validate_bounded_wait_arguments(
     """Reject ambiguous or excessive model-requested browser waits."""
     normalized = normalize_browser_arguments(arguments)
     raw_time = normalized.get("time")
-    if raw_time in (None, ""):
+    if raw_time is None or raw_time == "":
         return normalized
     try:
         seconds = float(raw_time)
