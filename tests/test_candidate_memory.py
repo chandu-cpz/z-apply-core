@@ -90,6 +90,39 @@ class CandidateMemoryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["memory_status"], "no_exact_match")
         self.assertEqual(result["matches"], [])
 
+    async def test_semantic_search_returns_stored_answer(self) -> None:
+        await self.memory.remember_human_answer(
+            field_label="Preferred Location",
+            question="Choose a preferred location for this application.",
+            answer="Pune",
+        )
+
+        result = await self.memory.search(query="Pune")
+
+        self.assertEqual(result["memory_status"], "semantic")
+        matches = result["matches"]
+        self.assertIsInstance(matches, list)
+        self.assertGreater(len(matches), 0)
+        self.assertEqual(matches[0]["answer"], "Pune")
+
+    async def test_semantic_search_is_well_formed_without_close_query(self) -> None:
+        await self.memory.remember_human_answer(
+            field_label="Preferred Location",
+            question="Choose a preferred location for this application.",
+            answer="Pune",
+        )
+
+        result = await self.memory.search(query="xyzzy")
+
+        self.assertEqual(result["memory_status"], "semantic")
+        self.assertIsInstance(result["matches"], list)
+
+    async def test_semantic_search_empty_collection_is_well_formed(self) -> None:
+        result = await self.memory.search(query="anything")
+
+        self.assertEqual(result["memory_status"], "empty")
+        self.assertEqual(result["matches"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

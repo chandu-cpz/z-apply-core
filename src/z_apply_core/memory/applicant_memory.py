@@ -100,6 +100,30 @@ class CandidateMemory:
                 "matches": [],
             }
 
+    async def search(
+        self,
+        *,
+        query: str,
+        limit: int = 5,
+    ) -> dict[str, object]:
+        try:
+            async with self._lock:
+                return cast(
+                    dict[str, object],
+                    await self._run(
+                        self._search,
+                        query=query,
+                        limit=limit,
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001 - an unavailable memory is not a candidate fact
+            logger.warning("Candidate-memory search failed: %s", exc)
+            return {
+                "memory_status": "unavailable",
+                "query": query,
+                "matches": [],
+            }
+
     def close(self) -> None:
         if self._closed:
             return
@@ -177,6 +201,33 @@ class CandidateMemory:
             "field_label": field_label,
             "question": question,
             "matches": [],
+        }
+
+    def _search(self, *, query: str, limit: int) -> dict[str, object]:
+        if not self._client.collection_exists(self._collection_name):
+            return {
+                "memory_status": "empty",
+                "query": query,
+                "matches": [],
+            }
+
+        vector = self._embeddings.embed_query(query)
+        response = self._client.query_points(
+            collection_name=self._collection_name,
+            query=vector,
+            limit=limit,
+            with_payload=True,
+            with_vectors=False,
+        )
+        matches: list[dict[str, object]] = []
+        for point in response.points:
+            payload = cast(dict[str, Any], point.payload or {})
+            matches.append(self._match_from_payload(payload, similarity=point.score))
+        return {
+            "memory_status": "semantic",
+            "query": query,
+            "matches": matches,
+            "limit": limit,
         }
 
     @staticmethod

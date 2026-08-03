@@ -22,6 +22,8 @@ class HumanChannel(Protocol):
         options: list[str] | None = None,
         risk: str = "medium",
         image_path: str = "",
+        field_label: str = "",
+        reason: str = "",
     ) -> str: ...
 
     async def confirm(

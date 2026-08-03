@@ -105,6 +105,8 @@ def make_human_tools(
             role=role_name,
             options=options or [],
             image_path=resolved_image_path,
+            field_label=field_label,
+            reason=reason,
         )
         if on_answer is not None:
             on_answer(field_label)

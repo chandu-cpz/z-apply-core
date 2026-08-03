@@ -31,6 +31,8 @@ class BrokerRequest:
     approved: bool | None = None
     responder: str | None = None
     resolved_at: datetime | None = None
+    field_label: str = ""
+    reason: str = ""
 
 
 @dataclass(slots=True)
@@ -80,6 +82,8 @@ class HumanRequestBroker:
         options: list[str],
         risk: str,
         image_path: str,
+        field_label: str = "",
+        reason: str = "",
     ) -> str:
         request_id = str(uuid4())
         option_values = tuple(value.strip() for value in options if value.strip())
@@ -98,6 +102,8 @@ class HumanRequestBroker:
             allow_free_text=not option_values,
             image_path=image_path,
             created_at=_now(),
+            field_label=field_label,
+            reason=reason,
         )
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         pending = _Pending(request, future)
@@ -257,6 +263,8 @@ class BrokeredHumanChannel(HumanChannel):
         options: list[str] | None = None,
         risk: str = "medium",
         image_path: str = "",
+        field_label: str = "",
+        reason: str = "",
     ) -> str:
         return await self._broker.request(
             kind="question",
@@ -268,6 +276,8 @@ class BrokeredHumanChannel(HumanChannel):
             options=options or [],
             risk=risk,
             image_path=image_path,
+            field_label=field_label,
+            reason=reason,
         )
 
     async def confirm(

@@ -30,6 +30,8 @@ class FakeHumanChannel:
         options: list[str] | None = None,
         risk: str = "medium",
         image_path: str = "",
+        field_label: str = "",
+        reason: str = "",
     ) -> str:
         return (
             options[0]

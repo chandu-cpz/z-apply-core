@@ -93,6 +93,8 @@ class TelegramHumanChannel:
         options: list[str] | None = None,
         risk: str = "medium",
         image_path: str = "",
+        field_label: str = "",
+        reason: str = "",
     ) -> str:
         return await self.ask_with_id(
             request_id=uuid.uuid4().hex[:10],
@@ -118,6 +120,8 @@ class TelegramHumanChannel:
         options: list[str] | None = None,
         risk: str = "medium",
         image_path: str = "",
+        field_label: str = "",
+        reason: str = "",
     ) -> str:
         return await self._ask_once(
             request_id=request_id,
@@ -194,6 +198,8 @@ class TelegramHumanChannel:
         options: list[str] | None,
         risk: str,
         image_path: str,
+        field_label: str = "",
+        reason: str = "",
     ) -> str:
         if self._app is None:
             await self.start()

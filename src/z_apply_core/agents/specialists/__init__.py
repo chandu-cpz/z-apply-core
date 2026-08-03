@@ -55,6 +55,7 @@ async def build_specialists(
     fallback_model: BaseChatModel,
     candidate_resume: str = "",
     answer_writer_human_tools: Sequence[BaseTool] = (),
+    answer_writer_memory_tools: Sequence[BaseTool] = (),
     answer_writer_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
     authentication_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
@@ -88,7 +89,7 @@ async def build_specialists(
         ),
         _with_routing(
             build_answer_writer(
-                answer_writer_human_tools,
+                [*answer_writer_human_tools, *answer_writer_memory_tools],
                 candidate_resume=candidate_resume,
             ),
             provider=provider,

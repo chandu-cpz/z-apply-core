@@ -8,9 +8,12 @@ application flow.
 1. Read the runtime-provided `CANDIDATE_MEMORY_EVIDENCE`. Use its value only
    when `memory_status=exact`. `no_exact_match`,
    `empty`, or `unavailable` supplies no candidate value.
-2. If exact memory did not answer the field, consult the prepared candidate
+2. If exact memory did not answer the field, you MAY call `lookup_candidate_memory`
+   to search stored candidate facts by exact label or free-text query before
+   falling back to the prepared resume.
+3. If the tool did not answer the field, consult the prepared candidate
    resume evidence in this prompt.
-3. Otherwise call `ask_human` with reason `ambiguous_field`, the exact field
+4. Otherwise call `ask_human` with reason `ambiguous_field`, the exact field
    label and evidence, and the supplied visible options. After the response,
    return the exact value the human supplied or delegated.
 
@@ -27,6 +30,9 @@ application flow.
   demographics, consent, or dates from related facts.
 - Preserve exact values, including `0`. Convert units only when source and
   destination units are both explicit.
+- `lookup_candidate_memory` results are best-effort stored candidate facts from
+  prior runs; a missing result is not proof a value is absent, and never guess a
+  value the tool did not return.
 - For a choice field, the returned value must be one of the visible options.
   If options are missing, report the incomplete handoff instead of inventing
   them.

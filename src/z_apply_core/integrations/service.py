@@ -661,6 +661,20 @@ class ZApplyCore:
             request,
             image_artifact_id=(existing.image_artifact_id if existing is not None else None),
         )
+        if (
+            public.kind == "question"
+            and public.status == "resolved"
+            and isinstance(public.answer, str)
+            and public.answer
+            and request.field_label
+            and request.reason in {"missing_candidate_fact", "ambiguous_field"}
+            and self._candidate_memory is not None
+        ):
+            await self._candidate_memory.remember_human_answer(
+                field_label=request.field_label,
+                question=request.question,
+                answer=public.answer,
+            )
         run.human_requests[public.request_id] = public
         pending_id = self._oldest_pending_human_request_id(run)
         if run.view.control_mode is BrowserControlMode.HUMAN_CONTROL:

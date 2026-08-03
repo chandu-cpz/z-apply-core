@@ -53,6 +53,7 @@ from z_apply_core.memory.platform_playbooks import (
     PlatformPlaybooks,
     make_platform_memory_tool,
 )
+from z_apply_core.memory.tools import make_candidate_memory_tools
 from z_apply_core.stream_events import (
     FormPhaseEvent,
     FrameworkEventSink,
@@ -290,6 +291,11 @@ async def run_orchestrator(
             answer_writer_human_tools=[
                 tool for tool in human_tools if tool.name == "ask_human"
             ],
+            answer_writer_memory_tools=(
+                make_candidate_memory_tools(candidate_memory)
+                if candidate_memory is not None
+                else ()
+            ),
             answer_writer_middleware=[
                 HumanEscalationGuardMiddleware(
                     allowed_reasons=frozenset({"ambiguous_field"})
