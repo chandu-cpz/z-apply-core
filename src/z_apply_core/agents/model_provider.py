@@ -4,54 +4,73 @@ import logging
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, cast, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from nim_router import NimRouter
 from nim_router.schemas import ModelSelection
 
 logger = logging.getLogger(__name__)
 
-_reasoning_patch_installed = False
 
+def _build_llm(
+    chat_cls: type[Any],
+    *,
+    model: str,
+    base_url: str,
+    api_key: str,
+    temperature: float | None = None,
+    extra_body: dict[str, Any] | None = None,
+    **chat_kwargs: Any,
+) -> Any:
+    """Construct one OpenAI-compatible chat model with uniform core args.
 
-def _install_openai_reasoning_content_patch() -> None:
-    """Surface ``reasoning_content`` from OpenAI-compatible SSE streams.
-
-    langchain-openai's chunk converter drops non-standard ``delta`` fields, so
-    DeepAgents' ``message_stream.reasoning`` never receives thinking tokens
-    from reasoning-capable providers (Agnes, InferX). Wrap the converter so
-    each assistant chunk carries the reasoning as a content block, which
-    langchain-core's stream projection turns into reasoning deltas consumed by
-    the DeepAgents harness.
+    All provider chat classes (``ChatOpenAI``, ``ChatDeepSeek``, ``ChatGroq``)
+    accept ``model``/``api_key``/``base_url`` under their public pydantic
+    aliases, and vendor-specific options ride through ``extra_body`` or the
+    class's own typed parameters.
     """
+    from pydantic import SecretStr
 
-    global _reasoning_patch_installed
-    if _reasoning_patch_installed:
-        return
-    import langchain_openai.chat_models.base as lc_openai_base
-    from langchain_core.messages import AIMessageChunk
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "api_key": SecretStr(api_key),
+        "base_url": base_url,
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    kwargs.update(chat_kwargs)
+    return chat_cls(**kwargs)
 
-    base_module: Any = lc_openai_base
-    original = base_module._convert_delta_to_message_chunk
 
-    def _convert_with_reasoning(
-        _dict: dict[str, Any], default_class: type[Any]
-    ) -> Any:
-        chunk = original(_dict, default_class)
-        reasoning = _dict.get("reasoning_content")
-        if not reasoning or not isinstance(chunk, AIMessageChunk):
-            return chunk
-        blocks: list[dict[str, str]] = []
-        if isinstance(chunk.content, list):
-            blocks = [dict(block) for block in chunk.content if isinstance(block, dict)]
-        elif isinstance(chunk.content, str) and chunk.content:
-            blocks.append({"type": "text", "text": chunk.content})
-        blocks.insert(0, {"type": "reasoning", "reasoning": reasoning})
-        chunk.content = cast("Any", blocks)
-        return chunk
+def _selection(
+    *,
+    model_id: str,
+    provider: str,
+    pricing: str,
+    quality_hint: float,
+    llm: Any,
+    tools: bool,
+    structured: bool,
+    vision: bool,
+    reasoning: bool,
+) -> ModelSelection:
+    """Build the typed ModelSelection every provider lease returns."""
+    from nim_router.schemas import ModelCapabilities, ModelInfo
 
-    base_module._convert_delta_to_message_chunk = _convert_with_reasoning
-    _reasoning_patch_installed = True
+    info = ModelInfo(
+        id=model_id,
+        capabilities=ModelCapabilities(
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+        ),
+        quality_hint=quality_hint,
+        metadata={"provider": provider, "pricing": pricing},
+    )
+    return ModelSelection(info=info, llm=llm, callback=None)
 
 
 @runtime_checkable
@@ -76,12 +95,13 @@ class AgnesProvider:
     """Free OpenAI-compatible provider. No scoring or rate-limit tracking."""
 
     BASE_URL = "https://apihub.agnes-ai.com/v1"
-    DEFAULT_MODEL = "agnes-2.5-flash"
+    DEFAULT_MODEL = "agnes-2.0-flash"
 
     def __init__(
         self,
         api_key: str = "",
         reasoning: bool = True,
+        model: str = "",
     ) -> None:
         self._api_key = api_key or os.environ.get("AGNES_API_KEY", "")
         if not self._api_key:
@@ -90,6 +110,7 @@ class AgnesProvider:
                 "Get a key at https://platform.agnes-ai.com/"
             )
         self._reasoning = reasoning
+        self._model = model or os.environ.get("AGNES_MODEL", "") or self.DEFAULT_MODEL
 
     async def lease(
         self,
@@ -101,45 +122,35 @@ class AgnesProvider:
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:
-        from langchain_openai import ChatOpenAI
-        from pydantic import SecretStr
+        from langchain_deepseek import ChatDeepSeek
 
-        _install_openai_reasoning_content_patch()
-
-        extra_body: dict[str, Any] = {
-            "chat_template_kwargs": {"enable_thinking": self._reasoning}
-        }
-
-        llm = ChatOpenAI(
-            model=self.DEFAULT_MODEL,
+        llm = _build_llm(
+            ChatDeepSeek,
+            model=self._model,
             base_url=self.BASE_URL,
-            api_key=SecretStr(self._api_key),
+            api_key=self._api_key,
             temperature=0.3,
-            extra_body=extra_body,
-        )
-
-        from nim_router.schemas import ModelCapabilities, ModelInfo
-
-        info = ModelInfo(
-            id=self.DEFAULT_MODEL,
-            capabilities=ModelCapabilities(
-                tools=tools,
-                structured=structured,
-                vision=vision,
-                reasoning=reasoning,
-            ),
-            quality_hint=0.8,
-            metadata={"provider": "agnes", "pricing": "free"},
+            extra_body={"chat_template_kwargs": {"enable_thinking": self._reasoning}},
         )
 
         logger.info(
             "AgnesProvider: selected %s (tools=%s, vision=%s, reasoning=%s)",
-            self.DEFAULT_MODEL,
+            self._model,
             tools,
             vision,
             self._reasoning,
         )
-        return ModelSelection(info=info, llm=llm, callback=None)
+        return _selection(
+            model_id=self._model,
+            provider="agnes",
+            pricing="free",
+            quality_hint=0.8,
+            llm=llm,
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+        )
 
     def record_failure(self, model_id: str, **kwargs: Any) -> None:
         logger.debug("AgnesProvider: record_failure ignored for %s", model_id)
@@ -181,15 +192,10 @@ class InferXProvider:
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:
-        from langchain_openai import ChatOpenAI
-        from pydantic import SecretStr
+        from langchain_deepseek import ChatDeepSeek
 
         if self._reasoning:
-            effort = (
-                self._reasoning_effort
-                if self._reasoning_effort in {"high", "max"}
-                else "high"
-            )
+            effort = self._reasoning_effort if self._reasoning_effort in {"high", "max"} else "high"
             extra_body: dict[str, Any] = {
                 "thinking": {"type": "enabled"},
                 "reasoning_effort": effort,
@@ -197,32 +203,27 @@ class InferXProvider:
         else:
             extra_body = {"thinking": {"type": "disabled"}}
 
-        _install_openai_reasoning_content_patch()
-
-        llm = ChatOpenAI(
+        llm = _build_llm(
+            ChatDeepSeek,
             model=self._model,
             base_url=self.BASE_URL,
-            api_key=SecretStr(self._api_key),
+            api_key=self._api_key,
             temperature=0.3,
             extra_body=extra_body,
         )
 
-        from nim_router.schemas import ModelCapabilities, ModelInfo
-
-        info = ModelInfo(
-            id=self._model,
-            capabilities=ModelCapabilities(
-                tools=tools,
-                structured=structured,
-                vision=vision,
-                reasoning=reasoning,
-            ),
-            quality_hint=0.8,
-            metadata={"provider": "inferx", "pricing": "token"},
-        )
-
         logger.info("InferXProvider: selected %s (tools=%s, vision=%s)", self._model, tools, vision)
-        return ModelSelection(info=info, llm=llm, callback=None)
+        return _selection(
+            model_id=self._model,
+            provider="inferx",
+            pricing="token",
+            quality_hint=0.8,
+            llm=llm,
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+        )
 
     def record_failure(self, model_id: str, **kwargs: Any) -> None:
         logger.debug("InferXProvider: record_failure ignored for %s", model_id)
@@ -231,9 +232,161 @@ class InferXProvider:
         logger.debug("InferXProvider: cooldown ignored for %s", model_id)
 
 
+class GroqProvider:
+    """Groq hosted endpoints (api.groq.com) via the official langchain-groq package.
+
+    Default model is Qwen3.6-27B, a 27B dense multimodal model with tool use,
+    JSON mode, reasoning, and vision. Thinking mode maps to Groq's native
+    ``reasoning_effort`` ("default" = thinking, "none" = non-thinking) and
+    ``reasoning_format="parsed"`` so reasoning arrives in
+    ``additional_kwargs["reasoning_content"]`` instead of inline think tags
+    (Groq rejects ``raw`` format when tool use or JSON mode is enabled).
+    """
+
+    BASE_URL = "https://api.groq.com/openai/v1"
+    DEFAULT_MODEL = "qwen/qwen3.6-27b"
+
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "",
+        reasoning: bool = True,
+    ) -> None:
+        self._api_key = api_key or os.environ.get("GROQ_API_KEY", "")
+        if not self._api_key:
+            raise ValueError(
+                "GROQ_API_KEY is required for GroqProvider. Get a key at https://console.groq.com/"
+            )
+        self._model = model or os.environ.get("GROQ_MODEL", "") or self.DEFAULT_MODEL
+        self._reasoning = reasoning
+
+    def _groq_chat_kwargs(self) -> dict[str, Any]:
+        if self._model.startswith("llama-"):
+            return {}
+        if "gpt-oss" in self._model:
+            return {"reasoning_effort": "medium" if self._reasoning else "none"}
+        return {
+            "reasoning_format": "parsed",
+            "reasoning_effort": "default" if self._reasoning else "none",
+        }
+
+    async def lease(
+        self,
+        *,
+        tools: bool = False,
+        structured: bool = False,
+        vision: bool = False,
+        reasoning: bool = False,
+        priority: str = "balanced",
+        excluded_model_ids: frozenset[str] | None = None,
+    ) -> ModelSelection:
+        from langchain_groq import ChatGroq
+
+        llm = _build_llm(
+            ChatGroq,
+            model=self._model,
+            base_url=self.BASE_URL,
+            api_key=self._api_key,
+            temperature=0.6 if self._reasoning else 0.7,
+            **self._groq_chat_kwargs(),
+        )
+
+        logger.info(
+            "GroqProvider: selected %s (tools=%s, vision=%s, reasoning=%s)",
+            self._model,
+            tools,
+            vision,
+            self._reasoning,
+        )
+        return _selection(
+            model_id=self._model,
+            provider="groq",
+            pricing="token",
+            quality_hint=0.85,
+            llm=llm,
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+        )
+
+    def record_failure(self, model_id: str, **kwargs: Any) -> None:
+        logger.debug("GroqProvider: record_failure ignored for %s", model_id)
+
+    def cooldown_model(self, model_id: str, seconds: float) -> None:
+        logger.debug("GroqProvider: cooldown ignored for %s", model_id)
+
+
+class OpenGatewayProvider:
+    """OpenAI-compatible provider for OpenGateway (opengateway.gitlawb.com).
+
+    Default model is Ling 3.0 Flash (free tier), served via the gateway's
+    OpenAI-compatible endpoint.
+    """
+
+    BASE_URL = "https://opengateway.gitlawb.com/v1"
+    DEFAULT_MODEL = "inclusionai/ling-3.0-flash:free"
+
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "",
+    ) -> None:
+        self._api_key = api_key or os.environ.get("OGW_API_KEY", "")
+        if not self._api_key:
+            raise ValueError(
+                "OGW_API_KEY is required for OpenGatewayProvider. "
+                "Generate a key at https://gitlawb.com/opengateway/dashboard"
+            )
+        self._model = model or os.environ.get("OGW_MODEL", "") or self.DEFAULT_MODEL
+
+    async def lease(
+        self,
+        *,
+        tools: bool = False,
+        structured: bool = False,
+        vision: bool = False,
+        reasoning: bool = False,
+        priority: str = "balanced",
+        excluded_model_ids: frozenset[str] | None = None,
+    ) -> ModelSelection:
+        from langchain_openai import ChatOpenAI
+
+        llm = _build_llm(
+            ChatOpenAI,
+            model=self._model,
+            base_url=self.BASE_URL,
+            api_key=self._api_key,
+        )
+
+        logger.info(
+            "OpenGatewayProvider: selected %s (tools=%s, vision=%s, reasoning=%s)",
+            self._model,
+            tools,
+            vision,
+            reasoning,
+        )
+        return _selection(
+            model_id=self._model,
+            provider="opengateway",
+            pricing="free",
+            quality_hint=0.9,
+            llm=llm,
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+        )
+
+    def record_failure(self, model_id: str, **kwargs: Any) -> None:
+        logger.debug("OpenGatewayProvider: record_failure ignored for %s", model_id)
+
+    def cooldown_model(self, model_id: str, seconds: float) -> None:
+        logger.debug("OpenGatewayProvider: cooldown ignored for %s", model_id)
+
+
 class NIMProvider:
     """Wraps existing NimRouter for NVIDIA NIM models."""
-
     def __init__(self, router: NimRouter) -> None:
         self._router = router
 
@@ -313,6 +466,7 @@ def _make_agnes(_router: NimRouter | None) -> ModelProvider:
     settings = load_settings()
     return AgnesProvider(
         api_key=settings.agnes_api_key,
+        model=settings.agnes_model,
         reasoning=settings.agnes_reasoning,
     )
 
@@ -329,6 +483,27 @@ def _make_inferx(_router: NimRouter | None) -> ModelProvider:
     )
 
 
+def _make_groq(_router: NimRouter | None) -> ModelProvider:
+    from z_apply_core.config import load_settings
+
+    settings = load_settings()
+    return GroqProvider(
+        api_key=settings.groq_api_key,
+        model=settings.groq_model,
+        reasoning=settings.groq_reasoning,
+    )
+
+
+def _make_opengateway(_router: NimRouter | None) -> ModelProvider:
+    from z_apply_core.config import load_settings
+
+    settings = load_settings()
+    return OpenGatewayProvider(
+        api_key=settings.ogw_api_key,
+        model=settings.ogw_model,
+    )
+
+
 def _make_nim(router: NimRouter | None) -> ModelProvider:
     if router is None:
         raise ValueError("NIM provider requires a NimRouter instance")
@@ -337,12 +512,34 @@ def _make_nim(router: NimRouter | None) -> ModelProvider:
 
 register_provider(
     ProviderSpec(
+        name="opengateway",
+        description="OpenGateway (opengateway.gitlawb.com); free Nemotron 3 Ultra by default",
+        env_key="OGW_API_KEY",
+        env_attr="ogw_api_key",
+        default_model=OpenGatewayProvider.DEFAULT_MODEL,
+        model_env="OGW_MODEL",
+        factory=_make_opengateway,
+    )
+)
+register_provider(
+    ProviderSpec(
+        name="groq",
+        description="Groq hosted endpoints (api.groq.com); Qwen3.6-27B by default",
+        env_key="GROQ_API_KEY",
+        env_attr="groq_api_key",
+        default_model=GroqProvider.DEFAULT_MODEL,
+        model_env="GROQ_MODEL",
+        factory=_make_groq,
+    )
+)
+register_provider(
+    ProviderSpec(
         name="agnes",
         description="Free OpenAI-compatible provider (apihub.agnes-ai.com)",
         env_key="AGNES_API_KEY",
         env_attr="agnes_api_key",
         default_model=AgnesProvider.DEFAULT_MODEL,
-        model_env="",
+        model_env="AGNES_MODEL",
         factory=_make_agnes,
     )
 )

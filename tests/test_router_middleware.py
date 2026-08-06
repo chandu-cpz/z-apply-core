@@ -164,7 +164,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         router.record_failure.assert_called_once()
         router.cooldown_model.assert_called_once_with("step/model", 20.0)
 
-    async def test_removes_think_block_from_final_answer(self) -> None:
+    async def test_keeps_inline_think_tags_and_accepts_final_answer(self) -> None:
         router = MagicMock(spec=NimRouter)
         model = MagicMock()
         selection = cast(
@@ -190,7 +190,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             initial_selection=selection,
         ).awrap_model_call(request, handler)
 
-        self.assertEqual(result.result[0].content, "Gender = Male")
+        self.assertEqual(result.result[0].content, "<think>Memory lookup was exact.</think>\nGender = Male")
 
     async def test_executes_initial_exploration_selection_before_leasing_again(self) -> None:
         router = MagicMock(spec=NimRouter)

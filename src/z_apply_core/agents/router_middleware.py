@@ -70,44 +70,30 @@ def _detect_vision(messages: Sequence[AnyMessage]) -> bool:
 
 
 def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
-    """Keep provider reasoning out of assistant content and detect missing finals."""
+    """Detect assistant responses that produced no final content or tool call.
+
+    Provider reasoning arrives out-of-band via ``reasoning_content`` and never
+    enters assistant content, so no content rewriting happens here; the only
+    concern is flagging a response that is all reasoning with no final message.
+    """
     messages = getattr(response, "result", None)
     if not isinstance(messages, list):
         return response, False
 
-    changed = False
-    missing_final = False
-    normalized: list[Any] = []
-    for message in messages:
-        if not isinstance(message, AIMessage):
-            normalized.append(message)
-            continue
-
-        content = message.content
-        if isinstance(content, str) and "</think>" in content:
-            final_content = content.rpartition("</think>")[2].strip()
-            normalized.append(message.model_copy(update={"content": final_content}))
-            changed = True
-            if not final_content and not message.tool_calls:
-                missing_final = True
-            continue
-
-        if message.tool_calls or message.text.strip():
-            normalized.append(message)
-            continue
-
-        normalized.append(message)
-        missing_final = True
-
-    if not changed:
-        return response, missing_final
-    logger.info("Removed provider reasoning tags from assistant content")
+    missing_final = any(
+        isinstance(message, AIMessage)
+        and not message.tool_calls
+        and not message.text.strip()
+        for message in messages
+    )
+    if not missing_final:
+        return response, False
     return (
         ModelResponse(
-            result=normalized,
+            result=messages,
             structured_response=response.structured_response,
         ),
-        missing_final,
+        True,
     )
 
 
