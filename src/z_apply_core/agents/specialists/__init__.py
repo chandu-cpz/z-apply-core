@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import inspect
 from collections.abc import Sequence
+from dataclasses import fields, is_dataclass
 from typing import Any, cast
 
 from deepagents import SubAgent
@@ -14,13 +17,33 @@ from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
-from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialist_task_context import SpecialistTaskContextMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
 from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.agents.vision_message_compat import VisionToolMessageCompatibilityMiddleware
-from z_apply_core.stream_events import FrameworkEventSink
+from z_apply_core.context.token_metric import TokenMetricMiddleware
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
+
+
+def _emit_usage_sync(sink: FrameworkEventSink | None, event: object) -> None:
+    if sink is None:
+        return
+    result = sink.accept(_as_trace_event("token_usage", event))
+    if inspect.isawaitable(result):
+        asyncio.get_running_loop().create_task(result)
+
+
+def _as_trace_event(kind: str, event: object) -> FrameworkTraceEvent:
+    if isinstance(event, FrameworkTraceEvent):
+        return event
+    return FrameworkTraceEvent(event=kind, name=kind, data=_event_data(event), raw={})
+
+
+def _event_data(event: object) -> dict[str, object]:
+    if is_dataclass(event) and not isinstance(event, type):
+        return {field.name: getattr(event, field.name) for field in fields(event)}
+    return {"value": event}
 
 
 def _with_routing(
@@ -36,7 +59,12 @@ def _with_routing(
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
     router_middleware = NimRouterMiddleware(provider, role=role, sink=sink)
+
+    def usage_emit(event: object) -> None:
+        _emit_usage_sync(sink, event)
+
     enriched["middleware"] = [
+        TokenMetricMiddleware(agent=role, emit=usage_emit),
         *extra_middleware,
         *([SpecialistTaskContextMiddleware()] if preserve_task_context else []),
         NoProgressGuardMiddleware(on_no_progress=router_middleware.reject_active_response),
@@ -66,7 +94,6 @@ async def build_specialists(
             role="AuthenticationSpecialist",
             model=fallback_model,
             extra_middleware=[
-                SafeToolBatchMiddleware(),
                 HumanEscalationGuardMiddleware(allowed_reasons=frozenset({"human_challenge"})),
             ],
             sink=sink,

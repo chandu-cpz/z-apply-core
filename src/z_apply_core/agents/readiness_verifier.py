@@ -13,7 +13,6 @@ from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import NimRouterMiddleware
-from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
@@ -97,7 +96,6 @@ async def require_submission_readiness(
         tools=[review_ready, review_not_ready],
         system_prompt=load_prompt("readiness_verifier.md"),
         middleware=[
-            SafeToolBatchMiddleware(),
             model_retry_middleware(),
             router_middleware,
             ActiveGoalMiddleware(

@@ -20,6 +20,7 @@ from z_apply_core.agents.specialists.answer_writer import (
     CandidateFieldRequest,
 )
 from z_apply_core.browser_observation import BrowserControlState, BrowserObservation
+from z_apply_core.browser_session import BrowserSession
 
 
 def _request() -> ModelRequest[Any]:
@@ -164,6 +165,7 @@ async def test_answer_writer_result_is_applied_atomically_by_browser_executor() 
             side_effect=[
                 BrowserControlState(),
                 BrowserControlState(),
+                BrowserControlState(),
                 BrowserControlState(value="LinkedIn", has_value=True),
             ]
         ),
@@ -242,6 +244,7 @@ async def test_normalized_human_answer_is_stored_after_browser_mutation() -> Non
             side_effect=[
                 BrowserControlState(),
                 BrowserControlState(),
+                BrowserControlState(),
                 BrowserControlState(value="candidate@example.com", has_value=True),
             ]
         ),
@@ -306,6 +309,7 @@ async def test_combobox_value_must_survive_the_browser_mutation() -> None:
         ),
         inspect_control_state=AsyncMock(
             side_effect=[
+                BrowserControlState(),
                 BrowserControlState(),
                 BrowserControlState(),
                 BrowserControlState(),
@@ -423,6 +427,131 @@ async def test_atomic_candidate_failure_returns_fresh_evidence_for_recovery() ->
     assert "BROWSER OBSERVATION revision: 8" in message.text
 
 
+@pytest.mark.asyncio
+async def test_stale_target_ref_is_re_resolved_by_label_before_apply() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "Where did you hear about us?" [ref=e96v5]',
+        ),
+        inspect_control_state=AsyncMock(
+            side_effect=[
+                RuntimeError("STALE_SNAPSHOT: ref from old version"),
+                BrowserControlState(),
+                BrowserControlState(),
+                BrowserControlState(value="LinkedIn", has_value=True),
+            ]
+        ),
+        resolve_control_ref=AsyncMock(return_value="e99v22"),
+        call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
+    )
+    middleware = CandidateFieldMiddleware(browser)
+    normalized = middleware._normalize_call(_candidate_call())
+    answer = CandidateFieldAnswer(
+        source="memory",
+        field_label="Where did you hear about us?",
+        target="e96",
+        value="LinkedIn",
+    )
+
+    result = await middleware.awrap_tool_call(
+        ToolCallRequest(tool_call=normalized, tool=None, state={}, runtime=object()),  # type: ignore[arg-type]
+        AsyncMock(
+            return_value=Command(
+                update={
+                    "messages": [
+                        ToolMessage(answer.model_dump_json(), tool_call_id="candidate-1")
+                    ]
+                }
+            )
+        ),
+    )
+
+    browser.resolve_control_ref.assert_awaited_once_with(
+        "Where did you hear about us?"
+    )
+    fill_args = browser.call_tool_with_inline_snapshot.await_args.args
+    assert fill_args[0] == "browser_fill_form"
+    assert fill_args[1]["fields"][0]["target"] == "e99v22"
+    message = result.update["messages"][0]
+    assert message.status == "success"
+    assert "CANDIDATE_FIELD_APPLIED" in message.text
+
+
+@pytest.mark.asyncio
+async def test_resolve_control_ref_matches_label_across_evidence_lines() -> None:
+    browser = BrowserSession.__new__(BrowserSession)
+    browser.call_tool = AsyncMock(  # type: ignore[method-assign]
+        return_value=(
+            "- document [ref=e20v22]:\n"
+            '  - textbox "First Name" [active] [ref=e70v22]: Chandrakanth\n'
+            '  - combobox "Country selector" [ref=e87v22] [cursor=pointer]\n'
+            "  - textbox [ref=e90v22]: +91\n"
+        )
+    )
+
+    assert await browser.resolve_control_ref("First Name") == "e70v22"
+    assert await browser.resolve_control_ref("first name*") == "e70v22"
+    assert await browser.resolve_control_ref("Country selector") == "e87v22"
+    assert await browser.resolve_control_ref("Unknown Field") is None
+
+
+@pytest.mark.asyncio
+async def test_identity_mismatch_falls_back_to_evidence_verified_ref() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "Where did you hear about us?" [ref=e96v5]',
+        ),
+        inspect_control_state=AsyncMock(
+            side_effect=[
+                BrowserControlState(control_name="phone"),
+                BrowserControlState(control_name="phone"),
+                BrowserControlState(control_name="phone"),
+                BrowserControlState(control_name="phone"),
+                BrowserControlState(control_name="phone", value="LinkedIn", has_value=True),
+            ]
+        ),
+        resolve_control_ref=AsyncMock(return_value="e70v9"),
+        call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
+    )
+    middleware = CandidateFieldMiddleware(browser)
+    normalized = middleware._normalize_call(_candidate_call())
+    answer = CandidateFieldAnswer(
+        source="memory",
+        field_label="Where did you hear about us?",
+        target="e96",
+        value="LinkedIn",
+    )
+
+    result = await middleware.awrap_tool_call(
+        ToolCallRequest(tool_call=normalized, tool=None, state={}, runtime=object()),  # type: ignore[arg-type]
+        AsyncMock(
+            return_value=Command(
+                update={
+                    "messages": [
+                        ToolMessage(answer.model_dump_json(), tool_call_id="candidate-1")
+                    ]
+                }
+            )
+        ),
+    )
+
+    browser.resolve_control_ref.assert_awaited_once_with(
+        "Where did you hear about us?"
+    )
+    fill_args = browser.call_tool_with_inline_snapshot.await_args.args
+    assert fill_args[0] == "browser_fill_form"
+    assert fill_args[1]["fields"][0]["target"] == "e70v9"
+    message = result.update["messages"][0]
+    assert message.status == "success"
+    assert "CANDIDATE_FIELD_APPLIED" in message.text
+
+
 class _SerializingBrowser:
     """Fake browser that records whether mutations overlap in time."""
 
@@ -441,7 +570,7 @@ class _SerializingBrowser:
     async def inspect_control_state(self, target: str) -> BrowserControlState:
         count = self._inspect_counts.get(target, 0) + 1
         self._inspect_counts[target] = count
-        if count >= 3:
+        if count >= 4:
             return BrowserControlState(value="resolved", has_value=True)
         return BrowserControlState()
 
@@ -463,7 +592,7 @@ class _SerializingBrowser:
 
 
 @pytest.mark.asyncio
-async def test_parallel_answer_applies_serialize_their_browser_mutations() -> None:
+async def test_parallel_answer_applies_complete_without_blocking_dispatch() -> None:
     browser = _SerializingBrowser()
     executor = CandidateFieldExecutor(browser)
     requests = [
@@ -514,7 +643,7 @@ async def test_parallel_answer_applies_serialize_their_browser_mutations() -> No
 
     results = await asyncio.gather(apply_one(0), apply_one(1))
 
-    assert browser.max_concurrent_mutations == 1
+    assert browser.max_concurrent_mutations == 2
     assert sorted(browser.applied_targets) == ["e90", "e91"]
     for result in results:
         message = result.update["messages"][0]

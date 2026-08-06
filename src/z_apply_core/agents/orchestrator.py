@@ -34,7 +34,6 @@ from z_apply_core.agents.router_middleware import (
     ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     NimRouterMiddleware,
 )
-from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.specialists.answer_writer import make_candidate_field_tool
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
@@ -355,11 +354,12 @@ def _task_prompt(
 ) -> str:
     captcha_path = _captcha_path(run_id)
     resume_text = _candidate_resume_context()
-    resume_section = (
-        f"Candidate resume (authoritative candidate facts; use this text directly, never read files):\n{resume_text}"
-        if resume_text
-        else f"Configured resume: {resume_path}"
-    )
+    resume_section = f"Configured resume file for uploads: {resume_path}"
+    if resume_text:
+        resume_section += (
+            "\nCandidate resume (authoritative candidate facts; use this text directly, never read files):\n"
+            f"{resume_text}"
+        )
     return f"""Complete this job application in the already-open browser.
 
 Job URL: {job_url}
@@ -434,7 +434,6 @@ def build_orchestrator_middleware(
             run_context=run_context,
             evidence_store=evidence_store,
         ),
-        SafeToolBatchMiddleware(),
         OrchestratorActionOrderMiddleware(active_browser),
         NoProgressGuardMiddleware(
             on_no_progress=router_middleware.reject_active_response,

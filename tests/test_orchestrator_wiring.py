@@ -5,8 +5,10 @@ from unittest.mock import MagicMock
 
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
-from z_apply_core.agents.orchestrator import build_orchestrator_middleware
-from z_apply_core.agents.safe_tool_batch import SafeToolBatchMiddleware
+from z_apply_core.agents.orchestrator import (
+    OrchestratorActionOrderMiddleware,
+    build_orchestrator_middleware,
+)
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.context_budget import ContextBudgetMiddleware
 from z_apply_core.context.evidence_store import EvidenceStore
@@ -52,7 +54,7 @@ def test_chain_order_budget_outermost(tmp_path: Path) -> None:
     assert isinstance(chain[0], ContextBudgetMiddleware)
     assert isinstance(chain[1], TokenMetricMiddleware)
     assert isinstance(chain[2], CapabilityContextMiddleware)
-    assert isinstance(chain[3], SafeToolBatchMiddleware)
+    assert isinstance(chain[3], OrchestratorActionOrderMiddleware)
 
 
 def test_budget_and_token_metric_carry_run_context(tmp_path: Path) -> None:
