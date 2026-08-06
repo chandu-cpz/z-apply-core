@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
+
+from z_apply_core.browser_tools import REF_TAG_RE
 
 if TYPE_CHECKING:
     from z_apply_core.browser_observation import BrowserObservation
@@ -48,7 +49,6 @@ _COLLAPSED_RUN_ROLES = frozenset({"listitem", "option"})
 _COLLAPSED_RUN_MIN = 6
 _COLLAPSED_RUN_KEEP = 3
 
-_REF_RE = re.compile(r"\[ref=([^\]]*)\]")
 
 
 class EvidenceProjection:
@@ -140,7 +140,7 @@ def _collapse_repetitive_runs(lines: list[str]) -> list[str]:
 
 
 def _role_token(line: str) -> str | None:
-    match = _REF_RE.search(line)
+    match = REF_TAG_RE.search(line)
     if match is None:
         return None
     remainder = line[match.end() :].strip()
@@ -150,12 +150,12 @@ def _role_token(line: str) -> str | None:
 
 
 def _ref_of(line: str) -> str | None:
-    match = _REF_RE.search(line)
+    match = REF_TAG_RE.search(line)
     return match.group(1) if match is not None else None
 
 
 def _run_pattern(line: str) -> str:
-    text = _REF_RE.sub("", line)
+    text = REF_TAG_RE.sub("", line)
     quote = text.find('"')
     if quote != -1:
         text = text[:quote]

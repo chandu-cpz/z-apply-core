@@ -10,7 +10,9 @@ from typing import Annotated, Any, Protocol, cast, get_origin
 from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 
-ELEMENT_REF_PATTERN = r"^(?:f\d+)?e\d+(?:v\d+)?$"
+_ELEMENT_REF_CORE = r"(?:f\d+)?e\d+(?:v\d+)?"
+ELEMENT_REF_PATTERN = rf"^{_ELEMENT_REF_CORE}$"
+REF_TAG_RE = re.compile(r"\[ref=([^\]]+)\]")
 
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
