@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,13 @@ from z_apply_core.text_utils import alnum_key
 
 if TYPE_CHECKING:
     from z_apply_core.memory.applicant_memory import CandidateMemory
+
+_MASKED_VALUE_PATTERN = re.compile(r"<secret>.*?</secret>")
+
+
+def _is_masked_value(value: str) -> bool:
+    """Return True when a value is a redaction placeholder, not a real value."""
+    return _MASKED_VALUE_PATTERN.search(value) is not None
 
 
 async def candidate_browser_violation(
@@ -52,7 +60,11 @@ async def candidate_browser_violation(
             "CANDIDATE DELEGATION ERROR: the target is disabled and cannot accept "
             "an answer. Inspect the current form dependency instead."
         )
-    if request.current_value != control.value:
+    if (
+        not _is_masked_value(request.current_value)
+        and not _is_masked_value(control.value)
+        and request.current_value != control.value
+    ):
         return (
             "CANDIDATE DELEGATION ERROR: current_value does not match the live "
             "target. Discard stale evidence and observe the browser again."
@@ -183,18 +195,28 @@ class CandidateFieldExecutor:
                 )
             target = refreshed
             current = await browser.inspect_control_state(target)
-        if current.value == answer.value and current.has_value and not current.invalid:
+        if current.has_value and not current.invalid and (
+            current.value == answer.value or _is_masked_value(current.value)
+        ):
             self._reset_failures(request.target, answer.value)
             await self._remember_human_answer(request, answer)
             self._record_applied(answer)
+            if _is_masked_value(current.value):
+                confirmation = (
+                    "The browser already contains a masked value for this field; "
+                    "treat it as already filled. Do not rewrite or delegate it again."
+                )
+            else:
+                confirmation = (
+                    "The browser already contains this exact evidence-backed value. "
+                    "Do not rewrite or delegate it again."
+                )
             return _replace_result(
                 result,
                 ToolMessage(
                     content=(
                         "CANDIDATE_FIELD_CONFIRMED\n"
-                        f"{answer.model_dump_json()}\n"
-                        "The browser already contains this exact evidence-backed value. "
-                        "Do not rewrite or delegate it again."
+                        f"{answer.model_dump_json()}\n{confirmation}"
                     ),
                     name="task",
                     tool_call_id=tool_call_id,

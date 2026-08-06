@@ -30,7 +30,9 @@ and historical playbooks.
 6. On a newly rendered editable form step, emit `resolve_candidate_field` for
    EVERY visible required field and every material field filled by Simplify IN
    THE SAME RESPONSE, one tool call per field, so the runtime resolves them
-   concurrently. Each call carries the current browser revision, exact
+   concurrently. Skip any control whose rendered value is a masked
+   `<secret>NAME</secret>` token: it is already filled. Each call carries the
+   current browser revision, exact
    label/question, ref, value, and control type. Do not copy choice lists, call
    `task` for AnswerWriter, or include a proposed value. The runtime binds exact
    browser-owned options, confirms an accurate existing value, or applies the
@@ -67,6 +69,26 @@ For a choice field, expose its actual options before delegating. A human may
 delegate a harmless source/referral choice, but never identity, history,
 authorization, compensation, availability, dates, demographics, legal
 attestations, or consent.
+
+## Asking the human
+
+`ask_human` pauses the run for one real block. It exists only for a genuine
+block: a needed candidate fact you cannot determine, an ambiguous field, or a
+human challenge/CAPTCHA. It is not normal control flow.
+
+- One `ask_human` call per distinct missing or ambiguous fact. Never bundle
+  multiple facts, confirmations, or choices into a single `ask_human` question.
+  If several facts are missing, ask them one at a time — one `ask_human` per
+  fact. No numbered lists and no multiple asks inside one question.
+- Never paste masked tokens. A value rendered as `<secret>NAME</secret>` is
+  already filled from saved profile data; its literal value is intentionally
+  hidden and must never be unmasked or re-typed. Skip such fields: do not
+  `resolve_candidate_field`, re-fill, or ask the human about them.
+- When a genuinely required field is empty and you lack its value, ask the
+  human for that literal value in plain words. Never include a
+  `<secret>...</secret>` token or any masked placeholder in a question.
+- When confirming or submitting, keep the human confirmed exactly with one
+  clear confirm action. Do not bundle confirmations with asks for new facts.
 
 ## Browser and delegation boundaries
 

@@ -13,7 +13,10 @@ from langgraph.types import Command
 from pydantic import ValidationError
 
 from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
-from z_apply_core.agents.candidate_field_executor import CandidateFieldExecutor
+from z_apply_core.agents.candidate_field_executor import (
+    CandidateFieldExecutor,
+    candidate_browser_violation,
+)
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.specialists.answer_writer import (
     CandidateFieldAnswer,
@@ -382,6 +385,109 @@ async def test_repeated_candidate_violation_reports_the_rejected_browser_fact() 
         await middleware.awrap_model_call(_request(), handler)
 
     assert handler.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_masked_current_value_skips_stale_equality_gate() -> None:
+    browser = SimpleNamespace(
+        inspect_control_state=AsyncMock(
+            return_value=BrowserControlState(value="different-live-value", has_value=True)
+        ),
+    )
+    request = CandidateFieldRequest(
+        browser_revision=7,
+        field_label="Email",
+        target="e96",
+        current_value="<secret>DEFAULT_USERNAME</secret>",
+        control_type="textbox",
+    )
+
+    violation = await candidate_browser_violation(browser, request, target="e96")
+
+    assert violation is None
+
+
+@pytest.mark.asyncio
+async def test_unmasked_value_mismatch_still_reports_violation() -> None:
+    browser = SimpleNamespace(
+        inspect_control_state=AsyncMock(
+            return_value=BrowserControlState(value="different-live-value", has_value=True)
+        ),
+    )
+    request = CandidateFieldRequest(
+        browser_revision=7,
+        field_label="Email",
+        target="e96",
+        current_value="user@example.com",
+        control_type="textbox",
+    )
+
+    violation = await candidate_browser_violation(browser, request, target="e96")
+
+    assert violation is not None
+    assert "does not match the live" in violation
+
+
+@pytest.mark.asyncio
+async def test_masked_live_value_is_confirmed_as_already_filled() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "Email" [ref=e96]: <secret>DEFAULT_USERNAME</secret>',
+        ),
+        inspect_control_state=AsyncMock(
+            return_value=BrowserControlState(
+                value="<secret>DEFAULT_USERNAME</secret>", has_value=True
+            )
+        ),
+        call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
+    )
+    executor = CandidateFieldExecutor(browser)
+    request = CandidateFieldRequest(
+        browser_revision=7,
+        field_label="Email",
+        target="e96",
+        current_value="<secret>DEFAULT_USERNAME</secret>",
+        control_type="textbox",
+    )
+    answer = CandidateFieldAnswer(
+        source="memory",
+        field_label="Email",
+        target="e96",
+        value="someone@example.com",
+    )
+
+    result = await executor.apply(
+        ToolCallRequest(
+            tool_call={
+                "name": "task",
+                "id": "call-masked",
+                "args": {"subagent_type": "AnswerWriter", "description": ""},
+            },
+            tool=None,
+            state={},
+            runtime=object(),
+        ),  # type: ignore[arg-type]
+        Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        answer.model_dump_json(),
+                        tool_call_id="call-masked",
+                    )
+                ]
+            }
+        ),
+        request,
+    )
+
+    message = result.update["messages"][0]
+    assert message.status == "success"
+    assert "CANDIDATE_FIELD_CONFIRMED" in message.text
+    assert "already contains a masked value" in message.text
+    browser.call_tool_with_inline_snapshot.assert_not_awaited()
 
 
 @pytest.mark.asyncio
