@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Awaitable, Callable, Sequence
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
@@ -16,7 +15,6 @@ from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
 
 _LONG_TOOL_MESSAGE_CHARS = 2000
-_REVISION_RE = re.compile(r"revision[:\s]+(\d+)")
 _TRUNCATED_WITH_REVISION = (
     "[evidence truncated — full revision {revision} in evidence store; use browser_find]"
 )
@@ -98,9 +96,8 @@ class ContextBudgetMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, R
         content = message.content
         if content is None or len(content) <= _LONG_TOOL_MESSAGE_CHARS:
             return message
-        text = content if isinstance(content, str) else str(content)
-        revision = _extract_revision(text)
-        if revision is not None:
+        revision = message.additional_kwargs.get("browser_revision")
+        if isinstance(revision, int):
             replacement = _TRUNCATED_WITH_REVISION.format(revision=revision)
         else:
             replacement = _TRUNCATED_GENERIC
@@ -112,10 +109,3 @@ class ContextBudgetMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, R
             id=message.id,
             additional_kwargs=message.additional_kwargs,
         )
-
-
-def _extract_revision(text: str) -> int | None:
-    matches = list(_REVISION_RE.finditer(text))
-    if not matches:
-        return None
-    return int(matches[-1].group(1))

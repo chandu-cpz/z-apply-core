@@ -7,7 +7,14 @@ from inspect import Parameter
 from pathlib import Path
 from typing import Annotated, Any, Protocol, cast, get_origin
 
-from langchain_core.tools import BaseTool, StructuredTool, ToolException, tool
+from langchain_core.messages import ToolMessage
+from langchain_core.tools import (
+    BaseTool,
+    InjectedToolCallId,
+    StructuredTool,
+    ToolException,
+    tool,
+)
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
 
 _ELEMENT_REF_CORE = r"(?:f\d+)?e\d+(?:v\d+)?"
@@ -219,23 +226,44 @@ def make_click_upload_tool(
         )
         if not isinstance(normalized_target, str) or not normalized_target:
             raise ValueError("browser_click_upload requires a resolvable target.")
-        return await uploader(normalized_target, resolved_paths)
+        result = await uploader(normalized_target, resolved_paths)
+        return f"{fallback_note}\n{result}" if fallback_note else result
 
     browser_click_upload.handle_tool_error = True
     return browser_click_upload
 
 
-def make_observe_tool(observer: BrowserObserver) -> BaseTool:
-    """Build the Core-only revisioned browser observation operation."""
+def make_observe_tool(
+    observer: BrowserObserver,
+    revision_provider: Callable[[], int | None] | None = None,
+) -> BaseTool:
+    """Build the Core-only revisioned browser observation operation.
+
+    When a revision provider is given, the result carries the typed
+    ``browser_revision`` in the tool message's ``additional_kwargs`` so context
+    budgeting can reference the evidence store without re-parsing rendered text.
+    """
 
     @tool
-    async def browser_observe() -> str:
+    async def browser_observe(
+        tool_call_id: Annotated[str, InjectedToolCallId],
+    ) -> str | ToolMessage:
         """Inspect the current page and return revisioned accessibility evidence.
 
         Prefer this for normal current-state inspection. Use browser_snapshot only
         when the observation is insufficient for an ambiguous DOM or shadow-DOM task.
         """
-        return await observer()
+        text = await observer()
+        revision = revision_provider() if revision_provider is not None else None
+        if revision is None:
+            return text
+        message = ToolMessage(
+            content=text,
+            tool_call_id=tool_call_id,
+            name="browser_observe",
+            additional_kwargs={"browser_revision": revision},
+        )
+        return cast("str | ToolMessage", message)
 
     browser_observe.handle_tool_error = True
     return browser_observe

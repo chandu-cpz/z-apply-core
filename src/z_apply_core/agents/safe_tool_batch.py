@@ -8,6 +8,8 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
 from langchain_core.messages import AIMessage
 
+from z_apply_core.agents.tool_rewrite import replace_tool_calls
+
 logger = logging.getLogger(__name__)
 
 class SafeToolBatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -53,7 +55,7 @@ class SafeToolBatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, R
             len(message.tool_calls),
             message.tool_calls[0].get("name", "unknown"),
         )
-        return message.model_copy(update={"tool_calls": [message.tool_calls[0]]})
+        return replace_tool_calls(message, [message.tool_calls[0]])
 
     @staticmethod
     def _is_candidate_resolution_call(call: Mapping[str, Any]) -> bool:

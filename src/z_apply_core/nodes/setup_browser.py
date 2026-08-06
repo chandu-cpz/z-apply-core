@@ -99,7 +99,10 @@ def _agent_browser_tools(browser: BrowserSession) -> list[object]:
     safe_names = tuple(name for name in INITIAL_AGENT_BROWSER_TOOLS if name != "browser_tabs")
     return [
         *browser.tools.langchain_tools(safe_names),
-        make_observe_tool(browser.observe),
+        make_observe_tool(
+            browser.observe,
+            lambda: browser.last_observation_revision,
+        ),
         make_click_upload_tool(
             browser.upload_files,
             default_paths=(str(DEFAULT_RESUME_PATH),),

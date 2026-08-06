@@ -25,6 +25,7 @@ from z_apply_core.agents.specialists.answer_writer import (
     CANDIDATE_FIELD_TOOL_NAME,
     CandidateFieldRequest,
 )
+from z_apply_core.agents.tool_rewrite import rewrite_tool_calls
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.run_context import RunContext
 
@@ -76,7 +77,7 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
                     "tool_protocol_failure: model repeated an invalid candidate delegation "
                     f"after runtime correction: {repeated_violation}"
                 )
-        messages = [self._normalize_message(message) for message in result.result]
+        messages = [rewrite_tool_calls(message, self._normalize_call) for message in result.result]
         return ModelResponse(result=messages, structured_response=result.structured_response)
 
     async def awrap_tool_call(
@@ -159,14 +160,6 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
                 if violation is not None:
                     return violation
         return None
-
-    def _normalize_message(self, message: Any) -> Any:
-        if not isinstance(message, AIMessage) or not message.tool_calls:
-            return message
-        normalized = [self._normalize_call(call) for call in message.tool_calls]
-        if normalized == message.tool_calls:
-            return message
-        return message.model_copy(update={"tool_calls": normalized})
 
     def _normalize_call(self, call: Mapping[str, Any]) -> dict[str, Any]:
         if call.get("name") != CANDIDATE_FIELD_TOOL_NAME:

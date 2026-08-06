@@ -13,8 +13,16 @@ from z_apply_core.context.context_budget import (
 )
 
 
-def _long_content(rev: int) -> str:
-    return "payload " * 400 + f"\nrevision: {rev}\n" + "trailing " * 50
+def _long_content() -> str:
+    return "payload " * 400 + "\nrevision: " + "trailing " * 50
+
+
+def _tool_message(rev: int, tool_call_id: str) -> ToolMessage:
+    return ToolMessage(
+        content=_long_content(),
+        tool_call_id=tool_call_id,
+        additional_kwargs={"browser_revision": rev},
+    )
 
 
 def _messages() -> list[Any]:
@@ -23,16 +31,16 @@ def _messages() -> list[Any]:
     controller_2 = HumanMessage(content="controller guidance two", name="controller")
     mid_system = SystemMessage(content="injected earlier system text")
     tools = [
-        ToolMessage(content=_long_content(1), tool_call_id="tool-1"),
-        ToolMessage(content=_long_content(2), tool_call_id="tool-2"),
-        ToolMessage(content=_long_content(3), tool_call_id="tool-3"),
-        ToolMessage(content=_long_content(4), tool_call_id="tool-4"),
-        ToolMessage(content=_long_content(505), tool_call_id="tool-5"),
-        ToolMessage(content=_long_content(506), tool_call_id="tool-6"),
-        ToolMessage(content=_long_content(507), tool_call_id="tool-7"),
-        ToolMessage(content=_long_content(508), tool_call_id="tool-8"),
-        ToolMessage(content=_long_content(509), tool_call_id="tool-9"),
-        ToolMessage(content=_long_content(510), tool_call_id="tool-10"),
+        _tool_message(1, "tool-1"),
+        _tool_message(2, "tool-2"),
+        _tool_message(3, "tool-3"),
+        _tool_message(4, "tool-4"),
+        _tool_message(505, "tool-5"),
+        _tool_message(506, "tool-6"),
+        _tool_message(507, "tool-7"),
+        _tool_message(508, "tool-8"),
+        _tool_message(509, "tool-9"),
+        _tool_message(510, "tool-10"),
         ToolMessage(content="done revision: 511", tool_call_id="tool-11"),
         ToolMessage(content="done revision: 512", tool_call_id="tool-12"),
     ]

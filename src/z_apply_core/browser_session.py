@@ -270,6 +270,13 @@ class BrowserSession:
             raise BrowserToolExecutionError("The browser did not produce current evidence.")
         return observation.render()
 
+    @property
+    def last_observation_revision(self) -> int | None:
+        """Typed revision of the most recent observation, for tool metadata."""
+        if self._last_observation is None:
+            return None
+        return self._last_observation.revision
+
     async def capture_control_return_evidence(self) -> str:
         """Capture fresh evidence while the workspace gate still blocks agent operations."""
         result = await self._call_backend_tool("browser_snapshot", {"target": "html"})

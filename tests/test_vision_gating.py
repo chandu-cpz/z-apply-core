@@ -18,23 +18,18 @@ from z_apply_core.browser_observation import BrowserCapabilities
 
 def test_auth_dispatch_preserves_evidence_but_owns_recovery_order() -> None:
     middleware = SubagentDispatchMiddleware(["AuthenticationSpecialist"])
-    message = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "task",
-                "args": {
-                    "subagent_type": "AuthenticationSpecialist",
-                    "description": "Complete Create Account at ref=e20.",
-                },
-                "id": "auth-1",
-            }
-        ],
-    )
+    call = {
+        "name": "task",
+        "args": {
+            "subagent_type": "AuthenticationSpecialist",
+            "description": "Complete Create Account at ref=e20.",
+        },
+        "id": "auth-1",
+    }
 
-    normalized = middleware._normalize_message(message)
+    normalized_call = middleware._normalize_call(call)
 
-    description = normalized.tool_calls[0]["args"]["description"]
+    description = normalized_call["args"]["description"]
     assert description.startswith("RUNTIME AUTHENTICATION OBJECTIVE")
     assert "fixed login -> account creation -> password reset recovery order" in description
     assert "Complete Create Account at ref=e20." in description
