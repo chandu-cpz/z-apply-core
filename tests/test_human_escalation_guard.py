@@ -57,6 +57,21 @@ class HumanEscalationGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(result, ToolMessage)
         handler.assert_not_awaited()
 
+    async def test_answer_writer_guard_allows_missing_candidate_fact(self) -> None:
+        expected = ToolMessage(content="answer", tool_call_id="call-1")
+        handler = AsyncMock(return_value=expected)
+        guard = HumanEscalationGuardMiddleware(
+            allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"})
+        )
+        request = _request(
+            {"reason": "missing_candidate_fact", "field_label": "Expected salary"}
+        )
+
+        result = await guard.awrap_tool_call(request, handler)
+
+        self.assertIs(result, expected)
+        handler.assert_awaited_once_with(request)
+
 
 if __name__ == "__main__":
     unittest.main()

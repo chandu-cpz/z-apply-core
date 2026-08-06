@@ -12,7 +12,7 @@ import hashlib
 import mimetypes
 import os
 from collections.abc import AsyncIterator
-from dataclasses import replace
+from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -65,13 +65,7 @@ DEFAULT_TASK = (
     "verify the review, and require human approval before final submission."
 )
 
-_EPHEMERAL_FRAMEWORK_EVENTS = frozenset(
-    {
-        "agent.message.delta",
-        "model.tool_call.delta",
-        "tool.progress",
-    }
-)
+_LIVE_ONLY_EVENTS = frozenset({"agent.message.delta", "model.tool_call.delta"})
 
 
 class _Run:
@@ -114,6 +108,7 @@ class _GraphSink(FrameworkEventSink):
         self._run = run
         self._last_graph_payload: dict[str, Any] | None = None
         self._model_by_agent: dict[str, str] = {}
+        self._last_usage: dict[str, Any] | None = None
 
     async def accept(self, event: FrameworkTraceEvent) -> None:
         name = _public_agent_name(event.name or event.event)
@@ -125,7 +120,10 @@ class _GraphSink(FrameworkEventSink):
             if not payload or payload == self._last_graph_payload:
                 return
             self._last_graph_payload = payload
-        if event_type in _EPHEMERAL_FRAMEWORK_EVENTS:
+        if event_type in _LIVE_ONLY_EVENTS:
+            await self._service._emit_live(
+                self._run, event_type, payload, source={"component": "graph", "agent": name}
+            )
             return
         if name == "orchestrator" and self._run.view.phase is RunPhase.AUTHENTICATION:
             self._run.view = replace(self._run.view, phase=RunPhase.APPLICATION)
@@ -149,6 +147,43 @@ class _GraphSink(FrameworkEventSink):
             causal_model = self._model_by_agent.get(name)
             if causal_model is not None:
                 payload = {**payload, "model_id": causal_model}
+        if event_type == "model.usage":
+            usage_value = payload.get("usage")
+            if isinstance(usage_value, dict):
+                input_tokens = int(usage_value.get("prompt_tokens") or 0)
+            else:
+                input_tokens = (
+                    int(getattr(usage_value, "prompt_tokens", 0) or 0)
+                    if usage_value is not None and hasattr(usage_value, "prompt_tokens")
+                    else 0
+                )
+            output_tokens = int(payload.get("output_tokens_estimate") or 0)
+            payload = {
+                "model": payload.get("model"),
+                "provider": payload.get("provider"),
+                "agent": payload.get("agent"),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "duration_ms": payload.get("duration_ms"),
+                "ttft_ms": payload.get("ttft_ms"),
+                "tok_per_second": payload.get("tok_per_second"),
+            }
+            self._last_usage = {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "tok_per_second": payload.get("tok_per_second"),
+            }
+        if event_type == "agent.turn.completed":
+            last_usage = self._last_usage or {}
+            payload = {
+                **payload,
+                "model": self._model_by_agent.get(name) or payload.get("model_id"),
+                "usage": {
+                    "input_tokens": last_usage.get("input_tokens", 0),
+                    "output_tokens": last_usage.get("output_tokens", 0),
+                    "tok_per_second": last_usage.get("tok_per_second", 0),
+                },
+            }
         await self._service._emit(
             self._run, event_type, payload, source={"component": "graph", "agent": name}
         )
@@ -234,6 +269,7 @@ class ZApplyCore:
         self._state_lock = asyncio.Lock()
         self._browser_lock = asyncio.Lock()
         self._broadcaster = EventBroadcaster()
+        self._live_broadcaster = EventBroadcaster()
         self._sinks: list[CoreEventSink] = []
         self._focused_run_id: str | None = None
         self._control_run_id: str | None = None
@@ -422,6 +458,16 @@ class ZApplyCore:
                 if run_id is None or event.run_id == run_id:
                     yield event
 
+    async def subscribe_live(self) -> AsyncIterator[CoreEvent]:
+        """Subscribe to high-frequency, non-persisted streaming events.
+
+        Reasoning/text/tool-call deltas are published here so an open cockpit
+        can render them in real time without writing one DB row per token.
+        """
+        async with self._live_broadcaster.subscription() as stream:
+            async for event in stream:
+                yield event
+
     async def _schedule(self) -> None:
         while not self._closing:
             runnable = [run for run in self._runs.values() if run.view.status is RunStatus.QUEUED]
@@ -483,6 +529,7 @@ class ZApplyCore:
             outcome = {
                 "completed": RunOutcome.SUBMITTED_VERIFIED,
                 "incomplete": RunOutcome.BLOCKED,
+                "blocked": RunOutcome.BLOCKED,
                 "rejected": RunOutcome.REJECTED,
                 "failed": RunOutcome.FAILED,
             }.get(status, RunOutcome.FAILED)
@@ -797,6 +844,28 @@ class ZApplyCore:
             await sink.accept(event)
         await self._broadcaster.publish(event)
 
+    async def _emit_live(
+        self,
+        run: _Run,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        source: dict[str, str] | None = None,
+        level: str = "info",
+    ) -> None:
+        run.sequence += 1
+        run.view = replace(run.view, latest_event_sequence=run.sequence)
+        event = CoreEvent(
+            run.run_id,
+            run.sequence,
+            utc_now(),
+            event_type,
+            source or {"component": "core"},
+            level,
+            _safe_payload(payload),
+        )
+        await self._live_broadcaster.publish(event)
+
 
 def _public_human_request(
     request: BrokerRequest, *, image_artifact_id: str | None = None
@@ -838,6 +907,8 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "model_failed": "model.failed",
         "model_rotated": "model.rotated",
         "model_rate_limited": "model.rate_limited",
+        "token_usage": "model.usage",
+        "agent_turn": "agent.turn.completed",
         "recovery_started": "recovery.started",
         "recovery_completed": "recovery.completed",
         "recovery_exhausted": "recovery.exhausted",
@@ -880,6 +951,13 @@ def _safe_value(value: Any, *, depth: int = 0) -> Any:
             for item in value[:50]
             if (sanitized := _safe_value(item, depth=depth + 1)) is not None
         ]
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            field.name: sanitized
+            for field in fields(value)
+            if (sanitized := _safe_value(getattr(value, field.name), depth=depth + 1))
+            is not None
+        }
     return None
 
 

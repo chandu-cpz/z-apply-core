@@ -8,6 +8,7 @@ from typing import Any
 from uuid import uuid4
 
 from z_apply_core.human.channel import HumanChannel
+from z_apply_core.human.sanitize import sanitize_human_text
 
 
 def _now() -> datetime:
@@ -91,12 +92,12 @@ class HumanRequestBroker:
             request_id=request_id,
             run_id=self.run_id,
             kind=kind,
-            question=(
+            question=sanitize_human_text(
                 question.strip().replace(image_path, "the attached image")
                 if image_path
                 else question.strip()
             ),
-            context=context.strip(),
+            context=sanitize_human_text(context.strip()),
             options=option_values,
             risk=risk,
             allow_free_text=not option_values,

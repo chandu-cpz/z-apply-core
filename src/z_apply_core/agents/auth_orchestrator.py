@@ -21,7 +21,7 @@ from z_apply_core.agents.result import AuthOrchestratorRun, AuthStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import (
     ORCHESTRATOR_EXCLUDED_MODEL_IDS,
-    NimRouterMiddleware,
+    build_router_middleware,
 )
 from z_apply_core.context.token_metric import TokenMetricMiddleware
 from z_apply_core.log_labels import node_info
@@ -81,10 +81,10 @@ async def run_auth_orchestrator(
         verdict = ("not_verified", reason)
         return "Authentication uncertainty recorded. Stop now."
 
-    router_middleware = NimRouterMiddleware(
+    router_middleware = build_router_middleware(
         provider,
         role="auth_orchestrator",
-        initial_selection=selection,
+        selection=selection,
         sink=sink,
     )
 

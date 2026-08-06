@@ -17,7 +17,10 @@ from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.router_middleware import (
     ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     NimRouterMiddleware,
+    StaticModelRouter,
+    build_router_middleware,
 )
+from z_apply_core.stream_events import FrameworkTraceEvent
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
@@ -358,6 +361,80 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
         router.record_failure.assert_called_once()
         self.assertEqual(router.record_failure.call_args.kwargs["kind"], ErrorKind.TIMEOUT)
+
+
+class StaticRouterTests(unittest.IsolatedAsyncioTestCase):
+    def _selection(self, model_id: str = "agnes/agnes-2.0-flash") -> Any:
+        return cast(
+            Any,
+            SimpleNamespace(info=SimpleNamespace(id=model_id), llm=MagicMock()),
+        )
+
+    def test_factory_uses_nim_router_only_for_nim_provider(self) -> None:
+        router = MagicMock(spec=NimRouter)
+        nim = build_router_middleware(
+            NIMProvider(router),
+            role="orchestrator",
+            selection=self._selection(),
+        )
+        self.assertIsInstance(nim, NimRouterMiddleware)
+        plain = build_router_middleware(
+            SimpleNamespace(),
+            role="orchestrator",
+            selection=self._selection(),
+        )
+        self.assertIsInstance(plain, StaticModelRouter)
+
+    def test_static_router_announces_once_and_never_rotates(self) -> None:
+        events: list[FrameworkTraceEvent] = []
+
+        class Sink:
+            async def accept(self, event: object) -> None:
+                events.append(cast(FrameworkTraceEvent, event))
+
+        middleware = StaticModelRouter(
+            SimpleNamespace(),
+            role="orchestrator",
+            selection=self._selection(),
+            sink=Sink(),
+        )
+        request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
+        handler = AsyncMock(return_value=sentinel.response)
+
+        first = asyncio.run(middleware.awrap_model_call(request, handler))
+        second = asyncio.run(middleware.awrap_model_call(request, handler))
+
+        self.assertIs(first, sentinel.response)
+        self.assertIs(second, sentinel.response)
+        self.assertEqual(handler.await_count, 2)
+        selected = [event for event in events if event.event == "model_selected"]
+        self.assertEqual(len(selected), 1)
+        self.assertEqual(selected[0].data["model_id"], "agnes/agnes-2.0-flash")
+        self.assertEqual(middleware.last_model_id, "agnes/agnes-2.0-flash")
+
+    def test_static_router_leases_once_for_missing_selection(self) -> None:
+        selection = self._selection()
+        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
+        middleware = StaticModelRouter(provider, role="AnswerWriter")
+        request = MagicMock(tools=[], response_format=None, messages=[])
+        handler = AsyncMock(return_value=sentinel.response)
+
+        asyncio.run(middleware.awrap_model_call(request, handler))
+        asyncio.run(middleware.awrap_model_call(request, handler))
+
+        provider.lease.assert_awaited_once()
+        self.assertEqual(middleware.last_model_id, "agnes/agnes-2.0-flash")
+
+    def test_static_router_reject_logs_without_rotating(self) -> None:
+        middleware = StaticModelRouter(
+            SimpleNamespace(),
+            role="orchestrator",
+            selection=self._selection(),
+        )
+        middleware.reject_active_response(
+            ToolProtocolViolation("tool_protocol_failure: no progress")
+        )
+        self.assertEqual(middleware.last_model_id, "agnes/agnes-2.0-flash")
 
 
 if __name__ == "__main__":

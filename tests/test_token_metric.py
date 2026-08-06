@@ -56,7 +56,8 @@ def test_estimate_schema_tokens_never_raises_on_garbage() -> None:
 
 def test_token_usage_str_renders_expected_single_line() -> None:
     assert str(TokenUsage(48213, 1240, 27, 24)) == (
-        "prompt_tokens=48213 tool_schema_tokens=1240 messages=27 tools=24"
+        "prompt_tokens=48213 completion_tokens=0 "
+        "tool_schema_tokens=1240 messages=27 tools=24"
     )
 
 
@@ -139,3 +140,70 @@ def test_run_context_note_usage_stores_and_retrieves() -> None:
     usage = TokenUsage(prompt_tokens=10, tool_schema_tokens=4, message_count=3, tool_count=2)
     run_context.note_usage(usage)
     assert run_context.token_usage is usage
+
+
+@pytest.mark.asyncio
+async def test_middleware_prefers_real_usage_metadata_over_estimate() -> None:
+    emitted: list[object] = []
+    run_context = RunContext()
+    middleware = TokenMetricMiddleware(run_context=run_context, emit=emitted.append)
+    request = ModelRequest(
+        model=object(),
+        messages=[HumanMessage(content="hello world, please fill this form")],
+        tools=[],
+    )
+
+    async def handler(_req: ModelRequest[Any]) -> ModelResponse[Any]:
+        return ModelResponse(
+            result=[AIMessage(content="ok", usage_metadata={"input_tokens": 100, "output_tokens": 50, "total_tokens": 150})]
+        )
+
+    await middleware.awrap_model_call(request, handler)
+
+    assert len(emitted) == 1
+    event = emitted[0]
+    assert isinstance(event, TokenUsageEvent)
+    assert event.usage.prompt_tokens == 100
+    assert event.usage.completion_tokens == 50
+    assert event.output_tokens_estimate == 50
+    assert event.usage is run_context.token_usage
+    assert run_context.usage_totals is not None
+    assert run_context.usage_totals.completion_tokens == 50
+
+
+@pytest.mark.asyncio
+async def test_middleware_emits_streaming_usage_after_stream_consumption() -> None:
+    from types import SimpleNamespace
+
+    emitted: list[object] = []
+    middleware = TokenMetricMiddleware(emit=emitted.append)
+    request = ModelRequest(model=object(), messages=[HumanMessage(content="hi")], tools=[])
+
+    async def stream():
+        yield "chunk-a"
+        yield "chunk-b"
+        yield SimpleNamespace(usage_metadata={"input_tokens": 77, "output_tokens": 33, "total_tokens": 110})
+
+    async def handler(_req: ModelRequest[Any]) -> ModelResponse[Any]:
+        return ModelResponse(result=stream())
+
+    response = await middleware.awrap_model_call(request, handler)
+    items = [item async for item in response.result]
+    assert items == ["chunk-a", "chunk-b", SimpleNamespace(usage_metadata={"input_tokens": 77, "output_tokens": 33, "total_tokens": 110})]
+
+    assert len(emitted) == 1
+    event = emitted[0]
+    assert isinstance(event, TokenUsageEvent)
+    assert event.usage.prompt_tokens == 77
+    assert event.usage.completion_tokens == 33
+    assert event.output_tokens_estimate == 33
+
+
+def test_run_context_usage_totals_accumulate_across_calls() -> None:
+    run_context = RunContext()
+    middleware = TokenMetricMiddleware(run_context=run_context, emit=None)
+    middleware._note_totals(TokenUsage(prompt_tokens=10, tool_schema_tokens=4, message_count=3, tool_count=2, completion_tokens=5))
+    middleware._note_totals(TokenUsage(prompt_tokens=20, tool_schema_tokens=4, message_count=3, tool_count=2, completion_tokens=7))
+    assert run_context.usage_totals is not None
+    assert run_context.usage_totals.prompt_tokens == 30
+    assert run_context.usage_totals.completion_tokens == 12

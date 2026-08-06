@@ -55,6 +55,11 @@ class TokenUsageEvent:
     usage: TokenUsage
     model: str | None = None
     provider: str | None = None
+    agent: str | None = None
+    duration_ms: int | None = None
+    ttft_ms: int | None = None
+    output_tokens_estimate: int | None = None
+    tok_per_second: float | None = None
 
 
 @dataclass(slots=True)

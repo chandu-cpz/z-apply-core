@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent, V3RunResult
 
@@ -289,6 +290,18 @@ def _public_tool_output(value: Any) -> Any:
         return {str(key): _public_tool_output(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_public_tool_output(item) for item in value]
+    if isinstance(value, Command):
+        # LangGraph tool-results often come back as a Command that carries the
+        # authoritative message(s) in ``update["messages"]`` (for example the
+        # candidate-field receipts the executor rewrites into a Command). Unwrap
+        # them so the stream renders the typed verdict (CANDIDATE_FIELD_* /
+        # CANDIDATE_FIELD_EXECUTION_ERROR) instead of an opaque ``None``.
+        update = getattr(value, "update", None)
+        messages = update.get("messages", []) if isinstance(update, dict) else []
+        parts = [part for part in (_public_tool_output(m) for m in messages) if part is not None]
+        if not parts:
+            return None
+        return parts[0] if len(parts) == 1 else parts
     return None
 
 

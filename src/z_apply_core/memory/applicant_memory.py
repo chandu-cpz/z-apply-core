@@ -4,7 +4,6 @@ import asyncio
 import atexit
 import functools
 import logging
-import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -12,6 +11,8 @@ from typing import Any, Protocol, cast
 
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from qdrant_client import QdrantClient, models
+
+from z_apply_core.text_utils import alnum_key
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +22,6 @@ MEMORY_COLLECTION = "z_apply_core_applicant_memory_v1"
 MEMORY_NAMESPACE = uuid.UUID("f0e95a1d-6811-4fe6-a938-fb1153f3b8a9")
 _MEMORY_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candidate-memory")
 atexit.register(_MEMORY_EXECUTOR.shutdown, wait=True, cancel_futures=True)
-
-
-def _field_key(field_label: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", field_label.casefold())
 
 
 class EmbeddingClient(Protocol):
@@ -145,7 +142,7 @@ class CandidateMemory:
         document = f"Field: {field_label}\nQuestion: {question}\nAnswer: {answer}"
         vector = self._embeddings.embed_documents([document])[0]
         self._ensure_collection(vector_size=len(vector))
-        field_key = _field_key(field_label)
+        field_key = alnum_key(field_label)
         self._client.upsert(
             collection_name=self._collection_name,
             points=[
@@ -179,7 +176,7 @@ class CandidateMemory:
                 must=[
                     models.FieldCondition(
                         key="field_key",
-                        match=models.MatchValue(value=_field_key(field_label)),
+                        match=models.MatchValue(value=alnum_key(field_label)),
                     )
                 ]
             ),

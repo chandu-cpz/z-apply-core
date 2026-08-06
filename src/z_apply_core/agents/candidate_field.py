@@ -28,6 +28,7 @@ from z_apply_core.agents.specialists.answer_writer import (
 from z_apply_core.agents.tool_rewrite import rewrite_tool_calls
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.run_context import RunContext
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 if TYPE_CHECKING:
     from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -41,10 +42,13 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
         browser: BrowserSession | None,
         candidate_memory: CandidateMemory | None = None,
         run_context: RunContext | None = None,
+        *,
+        sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
         self._browser = browser
         self._candidate_memory = candidate_memory
+        self._sink = sink
         self._executor = CandidateFieldExecutor(
             browser,
             candidate_memory,
@@ -60,6 +64,7 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
         result: ModelResponse[ResponseT] = await handler(request)
         violation = await self._violation(result)
         if violation is not None:
+            await self._emit_rejected(violation)
             result = await handler(
                 request.override(
                     messages=[
@@ -73,12 +78,63 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
             )
             repeated_violation = await self._violation(result)
             if repeated_violation is not None:
+                await self._emit_rejected(
+                    repeated_violation, retried=True, rejected=True
+                )
                 raise ToolProtocolViolation(
                     "tool_protocol_failure: model repeated an invalid candidate delegation "
                     f"after runtime correction: {repeated_violation}"
                 )
         messages = [rewrite_tool_calls(message, self._normalize_call) for message in result.result]
         return ModelResponse(result=messages, structured_response=result.structured_response)
+
+    async def _emit_rejected(self, violation: str, *, retried: bool = False, rejected: bool = False) -> None:
+        if self._sink is None:
+            return
+        await self._sink.accept(
+            FrameworkTraceEvent(
+                event="model_call_rejected",
+                name="orchestrator",
+                data={
+                    "middleware": "CandidateFieldMiddleware",
+                    "reason": violation,
+                    "retried": retried,
+                    "rejected": rejected,
+                },
+                raw={},
+            )
+        )
+
+    async def _emit_receipt(
+        self,
+        result: ToolMessage | Command[Any],
+        field_request: CandidateFieldRequest | None,
+    ) -> None:
+        if self._sink is None or field_request is None:
+            return
+        message = _receipt_message(result)
+        if message is None:
+            return
+        text = message.content if isinstance(message.content, str) else ""
+        verdict = next(
+            (line for line in text.splitlines() if line.startswith("CANDIDATE_FIELD_")),
+            "CANDIDATE_FIELD_UNKNOWN",
+        )
+        error = "" if message.status != "error" else text
+        await self._sink.accept(
+            FrameworkTraceEvent(
+                event="candidate_field_receipt",
+                name="orchestrator",
+                data={
+                    "verdict": verdict,
+                    "field_label": field_request.field_label,
+                    "target": field_request.target,
+                    "control_type": field_request.control_type,
+                    "error": error[:1000],
+                },
+                raw={},
+            )
+        )
 
     async def awrap_tool_call(
         self,
@@ -124,11 +180,13 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
             )
 
         result = await handler(request)
-        return await self._executor.apply(
+        applied = await self._executor.apply(
             request,
             result,
             field_request,
         )
+        await self._emit_receipt(applied, field_request)
+        return applied
 
     async def _violation(self, response: ModelResponse[Any]) -> str | None:
         for message in response.result:
@@ -176,6 +234,18 @@ class CandidateFieldMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, 
                 "description": _render_request(request),
             },
         }
+
+
+def _receipt_message(result: ToolMessage | Command[Any]) -> ToolMessage | None:
+    if isinstance(result, ToolMessage):
+        return result
+    update = result.update
+    if not isinstance(update, dict):
+        return None
+    messages = update.get("messages")
+    if isinstance(messages, list) and messages and isinstance(messages[0], ToolMessage):
+        return messages[0]
+    return None
 
 
 def _render_request(

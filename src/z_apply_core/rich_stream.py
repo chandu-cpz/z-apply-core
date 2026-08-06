@@ -94,6 +94,25 @@ class RichStreamRenderer:
             self._render_deepagents_lifecycle(event)
             return
 
+        if event.event == "model_call_rejected":
+            self._end_stream_if_active()
+            self._render_rejection(event)
+            return
+
+        if event.event == "candidate_field_receipt":
+            self._end_stream_if_active()
+            self._render_candidate_receipt(event)
+            return
+
+        if event.event == "model_call_metrics":
+            self._render_model_metrics(event)
+            return
+
+        if event.event in {"recovery_started", "recovery_completed", "recovery_exhausted"}:
+            self._end_stream_if_active()
+            self._render_recovery(event)
+            return
+
         if event.event.startswith("on_"):
             # Ignore standard LangChain events to avoid duplication with agent
             # stream projections.
@@ -234,10 +253,15 @@ class RichStreamRenderer:
             data = event.data
             parts: list[str] = []
             ttft_ms = data.get("ttft_ms")
-            duration_ms = data.get("duration_ms")
-            if isinstance(ttft_ms, int):
+            if isinstance(ttft_ms, int) and ttft_ms <= 0:
+                # The consumer-side first-delta time is 0ms by construction
+                # (first delta arrives in the same burst as the part). Prefer
+                # the model-side first-chunk measurement when it exists.
+                ttft_ms = self._last_ttft_ms
+            if isinstance(ttft_ms, int) and ttft_ms > 0:
                 self._last_ttft_ms = ttft_ms
                 parts.append(f"ttft {ttft_ms}ms")
+            duration_ms = data.get("duration_ms")
             if isinstance(duration_ms, int):
                 parts.append(f"turn {duration_ms}ms")
             tool_count = len(data.get("tool_calls") or [])
@@ -293,6 +317,92 @@ class RichStreamRenderer:
                 )
             else:
                 agent_info(logger, event.name, "%s%s", status, suffix)
+
+    def _render_rejection(self, event: FrameworkTraceEvent) -> None:
+        data = event.data
+        reason = str(data.get("reason", "model call rejected"))
+        middleware = str(data.get("middleware", ""))
+        title = f"{event.name} model call rejected"
+        if middleware:
+            title = f"{title} · {middleware}"
+        self._console.print(
+            Panel(
+                Text(reason, overflow="fold"),
+                title=Text(title),
+                border_style="yellow",
+            )
+        )
+
+    def _render_candidate_receipt(self, event: FrameworkTraceEvent) -> None:
+        data = event.data
+        verdict = str(data.get("verdict", "CANDIDATE_FIELD_UNKNOWN"))
+        field_label = str(data.get("field_label", ""))
+        error = str(data.get("error", ""))
+        detail = error if error else f"field: {field_label}"
+        border_style = "red" if verdict == "CANDIDATE_FIELD_EXECUTION_ERROR" else "green"
+        self._console.print(
+            Panel(
+                Text(detail, overflow="fold"),
+                title=Text(verdict),
+                border_style=border_style,
+            )
+        )
+
+    def _render_model_metrics(self, event: FrameworkTraceEvent) -> None:
+        data = event.data
+        model_id = str(data.get("model_id", ""))
+        provider = str(data.get("provider", "?"))
+        ttft_ms = data.get("ttft_ms")
+        if isinstance(ttft_ms, int) and ttft_ms > 0:
+            self._last_ttft_ms = ttft_ms
+        parts: list[str] = []
+        if isinstance(ttft_ms, int):
+            parts.append(f"ttft {ttft_ms}ms")
+        duration_ms = data.get("duration_ms")
+        if isinstance(duration_ms, int) and duration_ms > 0:
+            parts.append(f"{duration_ms / 1000:.2f}s")
+        input_tokens = data.get("input_tokens")
+        output_tokens = data.get("output_tokens")
+        if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+            parts.append(f"in={input_tokens} out={output_tokens}")
+        suffix = f" · {' · '.join(parts)}" if parts else ""
+        logger.info("model %s [%s] call complete%s", model_id, provider, suffix)
+
+    def _render_recovery(self, event: FrameworkTraceEvent) -> None:
+        data = event.data
+        attempt = data.get("attempt")
+        error_type = data.get("error_type")
+        error = data.get("error")
+        detail = error if isinstance(error, str) and error else ""
+        if error_type is not None and not detail:
+            detail = str(error_type)
+        if event.event == "recovery_started":
+            title = Text(f"{event.name} recovery started")
+            border_style = "yellow"
+            body = (
+                Text(
+                    f"attempt {attempt}: {detail}",
+                    overflow="fold",
+                )
+                if detail
+                else Text(f"attempt {attempt}", overflow="fold")
+            )
+        elif event.event == "recovery_completed":
+            title = Text(f"{event.name} recovery recovered")
+            border_style = "green"
+            body = Text(f"attempt {attempt}", overflow="fold")
+        else:
+            title = Text(f"{event.name} recovery exhausted")
+            border_style = "red"
+            body = (
+                Text(
+                    f"attempt {attempt}: {detail}",
+                    overflow="fold",
+                )
+                if detail
+                else Text(f"attempt {attempt}", overflow="fold")
+            )
+        self._console.print(Panel(body, title=title, border_style=border_style))
 
     def _start_stream(self, model_name: str) -> None:
         self._end_stream_if_active()

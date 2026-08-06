@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
-RunStatus = Literal["not_started", "completed", "incomplete", "failed"]
+RunStatus = Literal["not_started", "completed", "incomplete", "blocked", "failed"]
 AuthStatus = Literal["authenticated", "blocked", "not_verified", "failed"]
 
 

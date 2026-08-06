@@ -658,6 +658,124 @@ async def test_identity_mismatch_falls_back_to_evidence_verified_ref() -> None:
     assert "CANDIDATE_FIELD_APPLIED" in message.text
 
 
+class _ReceiptSink:
+    def __init__(self) -> None:
+        self.events: list[Any] = []
+
+    async def accept(self, event: Any) -> None:
+        self.events.append(event)
+
+
+@pytest.mark.asyncio
+async def test_candidate_field_receipt_event_is_emitted() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "Where did you hear about us?" [ref=e96]',
+        ),
+        inspect_control_state=AsyncMock(
+            side_effect=[
+                BrowserControlState(),
+                BrowserControlState(),
+                BrowserControlState(),
+                BrowserControlState(value="LinkedIn", has_value=True),
+            ]
+        ),
+        call_tool_with_inline_snapshot=AsyncMock(return_value="changed: true"),
+    )
+    sink = _ReceiptSink()
+    middleware = CandidateFieldMiddleware(browser, sink=sink)
+    normalized = middleware._normalize_call(_candidate_call())
+    answer = CandidateFieldAnswer(
+        source="memory",
+        field_label="Where did you hear about us?",
+        target="e96",
+        value="LinkedIn",
+    )
+
+    await middleware.awrap_tool_call(
+        ToolCallRequest(tool_call=normalized, tool=None, state={}, runtime=object()),  # type: ignore[arg-type]
+        AsyncMock(
+            return_value=Command(
+                update={
+                    "messages": [
+                        ToolMessage(answer.model_dump_json(), tool_call_id="candidate-1")
+                    ]
+                }
+            )
+        ),
+    )
+
+    receipts = [
+        event for event in sink.events if getattr(event, "event", "") == "candidate_field_receipt"
+    ]
+    assert len(receipts) == 1
+    assert receipts[0].data["verdict"] == "CANDIDATE_FIELD_APPLIED"
+    assert receipts[0].data["field_label"] == "Where did you hear about us?"
+
+
+@pytest.mark.asyncio
+async def test_repeated_failures_on_same_field_escalate_after_cap() -> None:
+    browser = SimpleNamespace(
+        current_observation=BrowserObservation.create(
+            revision=7,
+            url="https://example.test/apply",
+            title="Apply",
+            evidence='textbox "Expected Salary" [ref=e96]',
+        ),
+        inspect_control_state=AsyncMock(return_value=BrowserControlState()),
+        call_tool_with_inline_snapshot=AsyncMock(return_value="changed: false"),
+        observe=AsyncMock(return_value="BROWSER OBSERVATION revision: 8"),
+    )
+    executor = CandidateFieldExecutor(browser)
+    request = CandidateFieldRequest(
+        browser_revision=7,
+        field_label="Expected Salary",
+        target="e96",
+        current_value="",
+        control_type="textbox",
+    )
+    messages: list[ToolMessage] = []
+    for index, value in enumerate(("6 LPA", "600000", "600000 per annum")):
+        answer = CandidateFieldAnswer(
+            source="resume",
+            field_label="Expected Salary",
+            target="e96",
+            value=value,
+        )
+        result = await executor.apply(
+            ToolCallRequest(
+                tool_call={
+                    "name": "task",
+                    "id": f"call-{index}",
+                    "args": {"subagent_type": "AnswerWriter", "description": ""},
+                },
+                tool=None,
+                state={},
+                runtime=object(),
+            ),  # type: ignore[arg-type]
+            Command(
+                update={
+                    "messages": [
+                        ToolMessage(answer.model_dump_json(), tool_call_id=f"call-{index}")
+                    ]
+                }
+            ),
+            request,
+        )
+        messages.append(result.update["messages"][0])
+
+    assert messages[0].status == "error"
+    assert "The answer was not consumed" in messages[0].content
+    assert messages[1].status == "error"
+    assert "The answer was not consumed" in messages[1].content
+    assert messages[2].status == "error"
+    assert "repeated candidate mutation failures on the same field (3 attempts)" in messages[2].content
+    assert "application_blocked" in messages[2].content
+
+
 class _SerializingBrowser:
     """Fake browser that records whether mutations overlap in time."""
 

@@ -5,6 +5,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.stream_events import FrameworkTraceEvent
@@ -89,6 +90,34 @@ class FakeToolStream(FakeStream):
         self.tool_calls = async_items([FakeToolCall()])
 
 
+class FakeReceiptToolCall:
+    tool_name = "task"
+    tool_call_id = "call-2"
+    parent_tool_call_id = ""
+    input = {"subagent_type": "AnswerWriter", "description": "Resolve one field"}
+    output_deltas = async_items([])
+    output = Command(
+        update={
+            "messages": [
+                ToolMessage(
+                    content=(
+                        "CANDIDATE_FIELD_EXECUTION_ERROR: the browser did not retain a valid value."
+                    ),
+                    tool_call_id="call-2",
+                )
+            ]
+        }
+    )
+    error = None
+    completed = True
+
+
+class FakeToolReceiptStream(FakeStream):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_calls = async_items([FakeReceiptToolCall()])
+
+
 class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
     async def test_orchestrator_text_deltas_are_streamed(self) -> None:
         sink = CollectingSink()
@@ -139,6 +168,16 @@ class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
                 "status": "success",
             },
         )
+
+    async def test_task_command_receipt_is_surfaced_in_stream(self) -> None:
+        sink = CollectingSink()
+
+        await consume_deepagent_stream(FakeToolReceiptStream(), sink=sink)
+
+        ended = next(event for event in sink.events if event.event == "agent_tool_end")
+        output = ended.data["output"]
+        self.assertEqual(output["status"], "success")
+        self.assertIn("CANDIDATE_FIELD_EXECUTION_ERROR", output["content"])
 
 
 if __name__ == "__main__":

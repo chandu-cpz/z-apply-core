@@ -13,6 +13,8 @@ from typing import Any
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+from z_apply_core.human.sanitize import sanitize_human_text
+
 logger = logging.getLogger(__name__)
 CORE_ROOT = Path(__file__).resolve().parents[3]
 
@@ -166,6 +168,7 @@ class TelegramHumanChannel:
         if artifact is None:
             logger.warning("Ignoring unsafe or missing Telegram artifact: %s", path)
             return
+        sanitized_caption = sanitize_human_text(caption)
 
         try:
             with artifact.open("rb") as content:
@@ -174,14 +177,14 @@ class TelegramHumanChannel:
                         chat_id=self.chat_id,
                         message_thread_id=topic_id,
                         document=content,
-                        caption=caption,
+                        caption=sanitized_caption,
                     )
                 else:
                     await self.bot.send_photo(
                         chat_id=self.chat_id,
                         message_thread_id=topic_id,
                         photo=content,
-                        caption=caption,
+                        caption=sanitized_caption,
                     )
         except Exception:
             logger.exception("Failed to send Telegram artifact: %s", artifact)
@@ -413,10 +416,10 @@ class TelegramHumanChannel:
             "<b>Z-Apply needs input</b>",
             f"<b>Request ID:</b> <code>{html.escape(request_id)}</code>",
             f"<b>Risk:</b> {html.escape(risk)}",
-            html.escape(question) + html.escape(suffix),
+            html.escape(sanitize_human_text(question)) + html.escape(suffix),
         ]
         if context:
-            parts.append(f"<b>Context:</b>\n{html.escape(context)}")
+            parts.append(f"<b>Context:</b>\n{html.escape(sanitize_human_text(context))}")
         if url:
             parts.append(f'<a href="{html.escape(url)}">Current page</a>')
         return "\n\n".join(parts)

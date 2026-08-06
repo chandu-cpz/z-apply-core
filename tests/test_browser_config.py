@@ -30,6 +30,33 @@ class BrowserConfigTests(unittest.TestCase):
             },
         )
 
+    def test_owner_email_is_seeded_as_non_lookupable_redact_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = SimpleNamespace(
+                default_username="user@example.test",
+                default_password="secret",
+                camoufox_browser="official/150.0.2-alpha.26",
+                simplify_addon_path=Path(directory),
+            )
+
+            with patch("z_apply_core.browser_config.load_settings", return_value=settings):
+                config = build_browser_config()
+
+        self.assertEqual(config["redact_values"], {"DEFAULT_USERNAME": "user@example.test"})
+
+    def test_no_redact_values_when_owner_identity_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            settings = SimpleNamespace(
+                default_username="",
+                default_password="",
+                camoufox_browser="official/150.0.2-alpha.26",
+                simplify_addon_path=Path(directory),
+            )
+            with patch("z_apply_core.browser_config.load_settings", return_value=settings):
+                config = build_browser_config()
+
+        self.assertNotIn("redact_values", config)
+
     def test_simplify_addon_is_loaded_in_every_browser_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             addon = Path(directory) / "simplify"

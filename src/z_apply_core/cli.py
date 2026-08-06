@@ -82,6 +82,7 @@ def _print_token_usage(renderer: RichStreamRenderer, state: RunState) -> None:
         Text(
             "token usage: "
             f"prompt_tokens={usage.prompt_tokens} "
+            f"completion_tokens={usage.completion_tokens} "
             f"tool_schema_tokens={usage.tool_schema_tokens} "
             f"messages={usage.message_count} "
             f"tools={usage.tool_count}",
@@ -97,7 +98,7 @@ def _last_token_usage(state: RunState) -> TokenUsage | None:
     run_context = runtime.browser.run_context
     if run_context is None:
         return None
-    return run_context.token_usage
+    return run_context.usage_totals or run_context.token_usage
 
 
 def providers_command(_args: argparse.Namespace) -> int:

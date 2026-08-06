@@ -13,9 +13,11 @@ application flow.
    falling back to the prepared resume.
 3. If the tool did not answer the field, consult the prepared candidate
    resume evidence in this prompt.
-4. Otherwise call `ask_human` with reason `ambiguous_field`, the exact field
-   label and evidence, and the supplied visible options. After the response,
-   return the exact value the human supplied or delegated.
+4. Otherwise call `ask_human` with reason `missing_candidate_fact` when the
+   fact is genuinely absent from memory and resume, or `ambiguous_field` when
+   the field is ambiguous, using the exact field label and evidence and the
+   supplied visible options. After the response, return the exact value the
+   human supplied or delegated.
 
 ## Evidence rules
 
@@ -47,6 +49,12 @@ source/referral choice, resolve it only against supplied visible options. Never
 expand instructions for identity, history, authorization, compensation,
 availability, dates, demographics, legal attestations, or consent; ask again
 for a literal value.
+
+When the needed field value is masked or unknown, treat it as unavailable.
+Never regenerate, echo, or un-mask a redacted secret; do not splice a masked
+email, phone, or password into prose. Log such a field as unknown and surface a
+single `ask_human` for that one fact — one fact per ask, never a batch or a
+numbered list.
 
 Return only the configured structured response: `source`, exact field label,
 exact current target ref, and exact supported value. Use `source=memory`,

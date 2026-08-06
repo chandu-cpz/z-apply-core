@@ -84,8 +84,12 @@ human challenge/CAPTCHA. It is not normal control flow.
   already filled from saved profile data; its literal value is intentionally
   hidden and must never be unmasked or re-typed. Skip such fields: do not
   `resolve_candidate_field`, re-fill, or ask the human about them.
-- When a genuinely required field is empty and you lack its value, ask the
-  human for that literal value in plain words. Never include a
+- When a genuinely required field is empty and you lack its value, re-delegate
+  that exact field through `resolve_candidate_field`: AnswerWriter will ask the
+  human for the literal value and apply it. Never call `ask_human` directly for
+  a candidate fact — the orchestrator guard permits only `human_challenge` for
+  a visible CAPTCHA/identity challenge. If the human cannot supply the value,
+  the run ends cleanly through `application_blocked`. Never include a
   `<secret>...</secret>` token or any masked placeholder in a question.
 - When confirming or submitting, keep the human confirmed exactly with one
   clear confirm action. Do not bundle confirmations with asks for new facts.
@@ -112,6 +116,15 @@ human challenge/CAPTCHA. It is not normal control flow.
   call, or `browser_type` / `browser_select_option` for an individual control.
 - If an action fails, keep the error in context and choose a different action.
   Do not hide it with repeated snapshots or the same mutation.
+- When a required control consistently rejects a standard `browser_fill_form` /
+  `browser_type` / `browser_select_option` write (the value never lands or never
+  validates), you may use `browser_evaluate` to drive a stubborn fill, e.g. set
+  the value through the framework-aware native setter and dispatch the matching
+  `input` event, or invoke the control's own handler. Keep it a targeted,
+  evidence-driven last resort: state the exact target/ref and the observable
+  value you intend, then verify with fresh `browser_observe` evidence that the
+  control now holds a valid value. Never use evaluation to bypass validation or
+  to fabricate a candidate value, and never solve a CAPTCHA.
 
 ## Platform learning
 

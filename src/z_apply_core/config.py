@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CORE_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_SIMPLIFY_ADDON_PATH = Path.home() / "Downloads" / "simplify_jobs-2.3.0"
-DEFAULT_CAMOUFOX_BROWSER = "official/150.0.2-alpha.26"
+DEFAULT_CAMOUFOX_BROWSER = ""
 
 
 class Settings(BaseSettings):
@@ -33,11 +33,20 @@ class Settings(BaseSettings):
         alias="SIMPLIFY_ADDON_PATH",
     )
     agnes_api_key: str = Field(default="", alias="AGNES_API_KEY")
+    agnes_model: str = Field(default="agnes-2.0-flash", alias="AGNES_MODEL")
     agnes_reasoning: bool = Field(default=True, alias="AGNES_REASONING")
     inferx_api_key: str = Field(default="", alias="INFERX_API_KEY")
     inferx_model: str = Field(default="deepseek-v4-flash-0731", alias="INFERX_MODEL")
     inferx_reasoning: bool = Field(default=True, alias="INFERX_REASONING")
     inferx_reasoning_effort: str = Field(default="high", alias="INFERX_REASONING_EFFORT")
+    groq_api_key: str = Field(default="", alias="GROQ_API_KEY")
+    groq_model: str = Field(default="qwen/qwen3.6-27b", alias="GROQ_MODEL")
+    groq_reasoning: bool = Field(default=True, alias="GROQ_REASONING")
+    ogw_api_key: str = Field(default="", alias="OGW_API_KEY")
+    ogw_model: str = Field(
+        default="inclusionai/ling-3.0-flash:free",
+        alias="OGW_MODEL",
+    )
     model_provider: str = Field(default="", alias="MODEL_PROVIDER")
 
     model_config = SettingsConfigDict(

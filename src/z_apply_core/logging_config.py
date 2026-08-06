@@ -19,3 +19,5 @@ def configure_logging(console: Console, *, level: int = logging.INFO) -> None:
         ],
         force=True,
     )
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)

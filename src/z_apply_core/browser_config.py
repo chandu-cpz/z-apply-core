@@ -49,4 +49,17 @@ def build_browser_config(run_id: str = "manual") -> dict[str, Any]:
     }
     if secrets:
         config["secrets"] = secrets
+    # Non-lookupable redaction set: the browser layer masks these values in
+    # LLM-visible text but they are NOT exposed through the credential lookup.
+    # The owner email is known at build time; runtime candidate PII is out of
+    # scope here and handled at the human-ask boundary instead.
+    redact_values = {
+        name: value
+        for name, value in {
+            "DEFAULT_USERNAME": settings.default_username,
+        }.items()
+        if value
+    }
+    if redact_values:
+        config["redact_values"] = redact_values
     return config

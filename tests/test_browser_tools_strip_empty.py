@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import unittest
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from langchain_core.tools import ToolException
 
@@ -240,6 +240,39 @@ class StripEmptyArgsTests(unittest.TestCase):
             "e40",
             ["/profiles/candidate/Chandrakanth-V-Resume.pdf"],
         )
+        self.assertEqual(result, "resume attached")
+
+    def test_atomic_click_upload_falls_back_for_nonexistent_requested_path(self) -> None:
+        uploader = AsyncMock(return_value="resume attached")
+        tool = make_click_upload_tool(
+            uploader,
+            default_paths=("/profiles/candidate/Chandrakanth-V-Resume.pdf",),
+        )
+
+        result = self._run(
+            tool.ainvoke({"target": "e40", "paths": ["/home/chandu/resume.pdf"]})
+        )
+
+        uploader.assert_awaited_once_with(
+            "e40",
+            ["/profiles/candidate/Chandrakanth-V-Resume.pdf"],
+        )
+        self.assertIn("Requested path does not exist", result)
+        self.assertIn("Chandrakanth-V-Resume.pdf", result)
+
+    def test_atomic_click_upload_honors_existing_requested_path(self) -> None:
+        uploader = AsyncMock(return_value="resume attached")
+        tool = make_click_upload_tool(
+            uploader,
+            default_paths=("/profiles/candidate/Chandrakanth-V-Resume.pdf",),
+        )
+
+        with patch("pathlib.Path.is_file", return_value=True):
+            result = self._run(
+                tool.ainvoke({"target": "e40", "paths": ["/tmp/cover-letter.pdf"]})
+            )
+
+        uploader.assert_awaited_once_with("e40", ["/tmp/cover-letter.pdf"])
         self.assertEqual(result, "resume attached")
 
     def test_auth_submit_adapter_returns_stale_ref_failure_to_agent(self) -> None:

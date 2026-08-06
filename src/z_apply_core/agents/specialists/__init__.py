@@ -16,7 +16,7 @@ from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
-from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.router_middleware import build_router_middleware
 from z_apply_core.agents.specialist_task_context import SpecialistTaskContextMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
 from z_apply_core.agents.specialists.authentication import build_authentication_specialist
@@ -58,7 +58,7 @@ def _with_routing(
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
-    router_middleware = NimRouterMiddleware(provider, role=role, sink=sink)
+    router_middleware = build_router_middleware(provider, role=role, sink=sink)
 
     def usage_emit(event: object) -> None:
         _emit_usage_sync(sink, event)

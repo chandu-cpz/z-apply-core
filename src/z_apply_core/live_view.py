@@ -69,7 +69,7 @@ class LiveView:
                     "-nopw",
                     "-forever",
                     "-listen",
-                    "localhost",
+                    "0.0.0.0",
                     "-shared",
                     "-rfbport",
                     str(port),

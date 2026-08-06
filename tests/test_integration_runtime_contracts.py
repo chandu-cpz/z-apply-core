@@ -236,11 +236,17 @@ async def test_graph_sink_does_not_publish_token_fragments() -> None:
     class Service:
         def __init__(self) -> None:
             self.events: list[str] = []
+            self.live_events: list[str] = []
 
         async def _emit(
             self, run: object, event_type: str, *args: object, **kwargs: object
         ) -> None:
             self.events.append(event_type)
+
+        async def _emit_live(
+            self, run: object, event_type: str, *args: object, **kwargs: object
+        ) -> None:
+            self.live_events.append(event_type)
 
     service = Service()
     run = _Run(StartRunRequest(job_url="https://example.com/job"), "run-1")
@@ -264,6 +270,7 @@ async def test_graph_sink_does_not_publish_token_fragments() -> None:
     )
 
     assert service.events == ["tool.started"]
+    assert service.live_events == ["agent.message.delta"]
     assert run.view.current_agent == "orchestrator"
 
 

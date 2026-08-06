@@ -16,6 +16,7 @@ class RunContext:
     action_log: ActionLog = field(default_factory=ActionLog)
     applied_fields: AppliedFieldLedger = field(default_factory=AppliedFieldLedger)
     token_usage: TokenUsage | None = None
+    usage_totals: TokenUsage | None = None
 
     def short_summary(self) -> str:
         return (

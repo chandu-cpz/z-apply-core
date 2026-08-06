@@ -21,6 +21,7 @@ from z_apply_core.browser_tools import (
     BROWSER_CHANGING_TOOL_NAMES,
     normalize_browser_arguments,
 )
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 
 class OrchestratorActionOrderMiddleware(
@@ -28,9 +29,12 @@ class OrchestratorActionOrderMiddleware(
 ):
     """Enforce cross-turn application invariants at the native action boundary."""
 
-    def __init__(self, browser: BrowserSession | None) -> None:
+    def __init__(
+        self, browser: BrowserSession | None, *, sink: FrameworkEventSink | None = None
+    ) -> None:
         super().__init__()
         self._browser = browser
+        self._sink = sink
         self._candidate_answers: list[CandidateFieldAnswer] = []
 
     async def awrap_model_call(
@@ -43,6 +47,7 @@ class OrchestratorActionOrderMiddleware(
         if violation is None:
             return response
 
+        await self._emit_rejected(violation)
         retry: ModelResponse[ResponseT] = await handler(
             request.override(
                 messages=[
@@ -53,11 +58,31 @@ class OrchestratorActionOrderMiddleware(
         )
         retry_violation = await self._violation(retry)
         if retry_violation is not None:
+            await self._emit_rejected(
+                retry_violation, retried=True, rejected=True
+            )
             raise ToolProtocolViolation(
                 "tool_protocol_failure: model repeated an action-order violation "
                 "after controller correction"
             )
         return retry
+
+    async def _emit_rejected(self, violation: str, *, retried: bool = False, rejected: bool = False) -> None:
+        if self._sink is None:
+            return
+        await self._sink.accept(
+            FrameworkTraceEvent(
+                event="model_call_rejected",
+                name="orchestrator",
+                data={
+                    "middleware": "OrchestratorActionOrderMiddleware",
+                    "reason": violation,
+                    "retried": retried,
+                    "rejected": rejected,
+                },
+                raw={},
+            )
+        )
 
     async def awrap_tool_call(
         self,

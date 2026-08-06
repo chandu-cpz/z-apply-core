@@ -42,6 +42,7 @@ INITIAL_AGENT_BROWSER_TOOLS = (
     "browser_type",
     "browser_fill_form",
     "browser_select_option",
+    "browser_evaluate",
     "browser_tabs",
     "browser_wait_for",
     "browser_handle_dialog",
@@ -85,6 +86,7 @@ BROWSER_CHANGING_TOOL_NAMES = frozenset(
         "browser_type",
         "browser_fill_form",
         "browser_select_option",
+        "browser_evaluate",
         "browser_file_upload",
         "browser_handle_dialog",
     }
@@ -212,11 +214,16 @@ def make_click_upload_tool(
     ) -> str:
         """Attach the configured resume directly to a file control without a native chooser."""
         resolved_paths = paths or configured_paths
+        fallback_note = ""
         if len(resolved_paths) == 1 and len(configured_paths) == 1:
             requested = Path(resolved_paths[0])
             configured = Path(configured_paths[0])
-            if not requested.is_absolute() and requested.name == configured.name:
+            if not requested.is_file():
                 resolved_paths = configured_paths
+                if requested.name != configured.name:
+                    fallback_note = (
+                        f"Requested path does not exist, using configured resume: {configured}"
+                    )
         if not resolved_paths or any(
             not isinstance(path, str) or not path for path in resolved_paths
         ):

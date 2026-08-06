@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from enum import StrEnum
@@ -36,12 +37,14 @@ from z_apply_core.browser_targeting import (
 )
 from z_apply_core.browser_tools import (
     BROWSER_CHANGING_TOOL_NAMES,
+    REF_TAG_RE,
     BrowserToolRegistry,
     normalize_browser_arguments,
     validate_bounded_wait_arguments,
 )
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
+from z_apply_core.text_utils import collapsed_label
 
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
 VISUAL_EVIDENCE_UNAVAILABLE_NOTE = (
@@ -51,6 +54,17 @@ VISUAL_EVIDENCE_UNAVAILABLE_NOTE = (
 )
 CORE_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
+
+_CONTROL_LABEL_LINE_PATTERN = re.compile(
+    r'^\s*(?:- )?(?:textbox|combobox|checkbox|radio|listbox) "([^"]+)"'
+)
+
+
+def _control_label_from_line(line: str) -> str | None:
+    match = _CONTROL_LABEL_LINE_PATTERN.match(line)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 class BrowserToolExecutionError(ToolException):
@@ -454,6 +468,28 @@ class BrowserSession:
             tab = await self._backend._ensure_tab()
             resolved = await tab.resolve_target(target=target)
             return await inspect_control_options(tab.page, resolved.locator)
+
+    async def resolve_control_ref(self, field_label: str) -> str | None:
+        """Return the current live ref for the control whose evidence label matches.
+
+        SPA pages re-render between snapshot capture and mutation, which wipes the
+        injected ``aria-ref`` attributes that element refs depend on. The request
+        ref then fails to resolve even though the control still exists. This
+        re-observes and maps the field label back to its current live ref so
+        the executor can act on live identity instead of dead evidence.
+        """
+        label = collapsed_label(field_label)
+        if not label:
+            return None
+        evidence = str(await self.call_tool("browser_snapshot"))
+        for line in evidence.splitlines():
+            quoted = _control_label_from_line(line)
+            if quoted is None or collapsed_label(quoted) != label:
+                continue
+            match = REF_TAG_RE.search(line)
+            if match is not None:
+                return match.group(1)
+        return None
 
     async def submit_auth_form(self, target: str) -> str:
         """Submit only a form whose live DOM structure proves an auth purpose."""

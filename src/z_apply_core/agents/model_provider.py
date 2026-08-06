@@ -41,7 +41,11 @@ def _build_llm(
     if extra_body:
         kwargs["extra_body"] = extra_body
     kwargs.update(chat_kwargs)
-    return chat_cls(**kwargs)
+    llm = chat_cls(**kwargs)
+    from z_apply_core.context.model_metrics import attach_first_token_callback
+
+    attach_first_token_callback(llm)
+    return llm
 
 
 def _selection(
@@ -403,7 +407,7 @@ class NIMProvider:
         lease_kwargs: dict[str, Any] = {}
         if excluded_model_ids:
             lease_kwargs["excluded_model_ids"] = excluded_model_ids
-        return await self._router.lease(
+        selection = await self._router.lease(
             tools=tools,
             structured=structured,
             vision=vision,
@@ -411,6 +415,10 @@ class NIMProvider:
             priority=priority,
             **lease_kwargs,
         )
+        from z_apply_core.context.model_metrics import attach_first_token_callback
+
+        attach_first_token_callback(selection.llm)
+        return selection
 
     def record_failure(self, model_id: str, **kwargs: Any) -> None:
         self._router.record_failure(model_id, **kwargs)

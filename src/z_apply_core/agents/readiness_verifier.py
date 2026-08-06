@@ -12,7 +12,7 @@ from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent
 from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.retry_policy import model_retry_middleware
-from z_apply_core.agents.router_middleware import NimRouterMiddleware
+from z_apply_core.agents.router_middleware import build_router_middleware
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
@@ -85,10 +85,10 @@ async def require_submission_readiness(
         )
         return "Readiness rejection recorded."
 
-    router_middleware = NimRouterMiddleware(
+    router_middleware = build_router_middleware(
         provider,
         role="ReadinessVerifier",
-        initial_selection=selection,
+        selection=selection,
         sink=sink,
     )
     agent = create_deep_agent(

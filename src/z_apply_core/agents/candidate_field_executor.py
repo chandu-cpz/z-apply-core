@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from z_apply_core.memory.applicant_memory import CandidateMemory
 
 _MASKED_VALUE_PATTERN = re.compile(r"<secret>.*?</secret>")
+_MAX_CANDIDATE_FIELD_ATTEMPTS = 3
 
 
 def _is_masked_value(value: str) -> bool:
@@ -170,6 +171,7 @@ class CandidateFieldExecutor:
                 tool_call_id,
                 "The browser target no longer resolves and its control could not "
                 "be re-found by label.",
+                field_label=request.field_label,
                 target=request.target,
                 value=answer.value,
             )
@@ -178,6 +180,7 @@ class CandidateFieldExecutor:
                 result,
                 tool_call_id,
                 "The browser field changed before its answer could be applied.",
+                field_label=request.field_label,
                 target=request.target,
                 value=answer.value,
             )
@@ -190,6 +193,7 @@ class CandidateFieldExecutor:
                     tool_call_id,
                     "The browser target now resolves to a different control than the "
                     "requested field label.",
+                    field_label=request.field_label,
                     target=request.target,
                     value=answer.value,
                 )
@@ -198,7 +202,7 @@ class CandidateFieldExecutor:
         if current.has_value and not current.invalid and (
             current.value == answer.value or _is_masked_value(current.value)
         ):
-            self._reset_failures(request.target, answer.value)
+            self._reset_failures(request.field_label, request.target)
             await self._remember_human_answer(request, answer)
             self._record_applied(answer)
             if _is_masked_value(current.value):
@@ -265,6 +269,7 @@ class CandidateFieldExecutor:
                 tool_call_id,
                 "Browser executor could not apply the validated answer: "
                 f"{type(exc).__name__}: {exc}",
+                field_label=request.field_label,
                 target=request.target,
                 value=answer.value,
             )
@@ -280,10 +285,11 @@ class CandidateFieldExecutor:
                 result,
                 tool_call_id,
                 "The browser did not retain a valid value after the candidate mutation.",
+                field_label=request.field_label,
                 target=request.target,
                 value=answer.value,
             )
-        self._reset_failures(request.target, answer.value)
+        self._reset_failures(request.field_label, request.target)
         await self._remember_human_answer(request, answer)
         self._record_applied(answer)
         result_name = (
@@ -336,21 +342,26 @@ class CandidateFieldExecutor:
         tool_call_id: str,
         reason: str,
         *,
+        field_label: str,
         target: str,
         value: str,
     ) -> ToolMessage | Command[Any]:
-        key = (target, value)
+        key = (field_label, target)
         self._consecutive_failures[key] = self._consecutive_failures.get(key, 0) + 1
-        if self._consecutive_failures[key] >= 2:
+        if self._consecutive_failures[key] >= _MAX_CANDIDATE_FIELD_ATTEMPTS:
             return _error(
                 result,
                 tool_call_id,
-                f"repeated identical candidate mutation failure; not retrying: {reason}",
+                "repeated candidate mutation failures on the same field "
+                f"({_MAX_CANDIDATE_FIELD_ATTEMPTS} attempts): {reason} Re-observe the "
+                "field. If it is still unresolved, delegate once more to AnswerWriter "
+                "so it can ask the human for the exact value, or call application_blocked "
+                "when no value can be obtained.",
             )
         return await self._recoverable_error(result, tool_call_id, reason)
 
-    def _reset_failures(self, target: str, value: str) -> None:
-        self._consecutive_failures.pop((target, value), None)
+    def _reset_failures(self, field_label: str, target: str) -> None:
+        self._consecutive_failures.pop((field_label, target), None)
 
     async def _recoverable_error(
         self,

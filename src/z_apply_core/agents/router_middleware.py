@@ -21,6 +21,15 @@ from nim_router.schemas import ModelSelection
 
 from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
+from z_apply_core.context.model_metrics import (
+    CallMetrics,
+    MetricStream,
+    begin_model_call,
+    extract_usage_tokens,
+    format_call_metrics,
+    is_async_iterable,
+    last_call_timing,
+)
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 logger = logging.getLogger(__name__)
@@ -260,6 +269,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         )
 
         start = time.monotonic()
+        begin_model_call()
         try:
             leased_model: BaseChatModel = selection.llm
             sanitized_messages = _drop_orphan_tool_messages(request.messages)
@@ -355,34 +365,105 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                     {"role": self._role, "reason": "missing_native_action"},
                 )
                 raise failure
-            logger.info(
-                "router %s model %s succeeded in %.2fs",
-                self._role,
-                selection.info.id,
-                latency,
-            )
+            info_metadata = getattr(selection.info, "metadata", None) or {}
+            provider = str(info_metadata.get("provider") or "?")
+            stream_result = getattr(result, "result", None)
+
+            def _emit_call_metrics(
+                metrics: CallMetrics, *, model_id: str, role: str, provider_id: str
+            ) -> None:
+                timing = last_call_timing()
+                if timing is not None and timing.ttft_ms is not None:
+                    metrics.ttft_ms = timing.ttft_ms
+                logger.info(
+                    "router %s model %s [%s] succeeded in %.2fs %s",
+                    role,
+                    model_id,
+                    provider_id,
+                    metrics.duration_ms / 1000.0,
+                    format_call_metrics(metrics),
+                )
+                _emit_router_event_sync(
+                    self._sink,
+                    role,
+                    "model_call_metrics",
+                    model_id,
+                    {
+                        "role": role,
+                        "provider": provider_id,
+                        "duration_ms": metrics.duration_ms,
+                        "ttft_ms": metrics.ttft_ms,
+                        "input_tokens": metrics.input_tokens,
+                        "output_tokens": metrics.output_tokens,
+                    },
+                )
+
+            if is_async_iterable(stream_result):
+                result.result = MetricStream(  # type: ignore[assignment]
+                    result.result,
+                    started=start,
+                    on_done=lambda metrics: _emit_call_metrics(
+                        metrics,
+                        model_id=selection.info.id,
+                        role=self._role,
+                        provider_id=provider,
+                    ),
+                )
+            else:
+                tokens = extract_usage_tokens(result)
+                metrics = CallMetrics(
+                    input_tokens=tokens[0] if tokens is not None else None,
+                    output_tokens=tokens[1] if tokens is not None else None,
+                    duration_ms=int(latency * 1000),
+                )
+                _emit_call_metrics(
+                    metrics,
+                    model_id=selection.info.id,
+                    role=self._role,
+                    provider_id=provider,
+                )
             return result
 
     async def _emit(self, event: str, model_id: str, data: dict[str, Any]) -> None:
-        if self._sink is None:
-            return
-        await self._sink.accept(
-            FrameworkTraceEvent(
-                event=event,
-                name=self._role,
-                data={"model_id": model_id, **data},
-                raw={},
-            )
-        )
+        await _emit_router_event(self._sink, self._role, event, model_id, data)
 
     def _emit_from_sync(self, event: str, model_id: str, data: dict[str, Any]) -> None:
-        if self._sink is None:
-            return
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return
-        loop.create_task(self._emit(event, model_id, {"role": self._role, **data}))
+        _emit_router_event_sync(self._sink, self._role, event, model_id, data)
+
+
+async def _emit_router_event(
+    sink: FrameworkEventSink | None,
+    role: str,
+    event: str,
+    model_id: str,
+    data: dict[str, Any],
+) -> None:
+    if sink is None:
+        return
+    await sink.accept(
+        FrameworkTraceEvent(
+            event=event,
+            name=role,
+            data={"model_id": model_id, **data},
+            raw={},
+        )
+    )
+
+
+def _emit_router_event_sync(
+    sink: FrameworkEventSink | None,
+    role: str,
+    event: str,
+    model_id: str,
+    data: dict[str, Any],
+) -> None:
+    if sink is None:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    loop.create_task(_emit_router_event(sink, role, event, model_id, {"role": role, **data}))
 
 
 def _model_call_timeout_seconds(provider: ModelProvider) -> float | None:
@@ -411,3 +492,171 @@ def _attach_tracking_callback(selection: ModelSelection) -> None:
         )
     if callback not in callbacks:
         selection.llm.callbacks = [*callbacks, callback]
+
+
+class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
+    """Single-model stand-in used when the provider is not NIM.
+
+    Non-NIM providers expose exactly one model, so per-call lease rotation,
+    cooldowns, failure bookkeeping, and timing measurement are meaningless.
+    This middleware keeps the shared surface (one model announcement, the run
+    model id, no-progress logging) without any routing behavior.
+    """
+
+    def __init__(
+        self,
+        provider: ModelProvider,
+        role: str,
+        *,
+        selection: ModelSelection | None = None,
+        sink: FrameworkEventSink | None = None,
+    ) -> None:
+        super().__init__()
+        self._provider = provider
+        self._role = role
+        self._selection = selection
+        self._sink = sink
+        self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": True})
+        self._announced = False
+        class_name = type(provider).__name__
+        if class_name.endswith("Provider"):
+            class_name = class_name[: -len("Provider")]
+        self._provider_name = class_name.lower() or type(provider).__name__
+
+    @property
+    def name(self) -> str:
+        return f"StaticModelRouter[{self._role}]"
+
+    @property
+    def last_model_id(self) -> str:
+        selection = self._selection
+        return selection.info.id if selection is not None else ""
+
+    def reject_active_response(self, error: ToolProtocolViolation) -> None:
+        """Log only: a single-model provider has no alternative model to rotate to."""
+        logger.warning(
+            "router %s rejected no-progress response from %s; single-model "
+            "provider, the run recovery loop owns the failure",
+            self._role,
+            self.last_model_id or "model",
+        )
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[ContextT],
+        handler: Any,
+    ) -> Any:
+        selection = self._selection
+        if selection is None:
+            selection = await self._provider.lease(
+                tools=bool(request.tools),
+                structured=request.response_format is not None,
+                vision=_detect_vision(request.messages)
+                or bool(self._policy.get("force_vision")),
+                reasoning=bool(self._policy.get("reasoning", False)),
+                priority=cast(
+                    "Literal['fast', 'quality', 'balanced']",
+                    self._policy.get("priority", "balanced"),
+                ),
+            )
+            self._selection = selection
+        if not self._announced:
+            await self._emit(
+                "model_selected",
+                selection.info.id,
+                {
+                    "role": self._role,
+                    "priority": self._policy.get("priority", "balanced"),
+                    "tools": bool(request.tools),
+                    "structured": request.response_format is not None,
+                    "vision": _detect_vision(request.messages)
+                    or bool(self._policy.get("force_vision")),
+                    "reasoning": bool(self._policy.get("reasoning", False)),
+                },
+            )
+            self._announced = True
+
+        start = time.monotonic()
+        begin_model_call()
+        result: ModelResponse[ResponseT] = await handler(request)
+        latency = time.monotonic() - start
+
+        def _emit_call_metrics(
+            metrics: CallMetrics, *, model_id: str, role: str, provider_id: str
+        ) -> None:
+            timing = last_call_timing()
+            if timing is not None and timing.ttft_ms is not None:
+                metrics.ttft_ms = timing.ttft_ms
+            _emit_router_event_sync(
+                self._sink,
+                role,
+                "model_call_metrics",
+                model_id,
+                {
+                    "role": role,
+                    "provider": provider_id,
+                    "duration_ms": metrics.duration_ms,
+                    "ttft_ms": metrics.ttft_ms,
+                    "input_tokens": metrics.input_tokens,
+                    "output_tokens": metrics.output_tokens,
+                },
+            )
+
+        stream_result = getattr(result, "result", None)
+        if is_async_iterable(stream_result):
+            result.result = MetricStream(  # type: ignore[assignment]
+                result.result,
+                started=start,
+                on_done=lambda metrics: _emit_call_metrics(
+                    metrics,
+                    model_id=selection.info.id,
+                    role=self._role,
+                    provider_id=self._provider_name,
+                ),
+            )
+        else:
+            tokens = extract_usage_tokens(result)
+            metrics = CallMetrics(
+                input_tokens=tokens[0] if tokens is not None else None,
+                output_tokens=tokens[1] if tokens is not None else None,
+                duration_ms=int(latency * 1000),
+            )
+            _emit_call_metrics(
+                metrics,
+                model_id=selection.info.id,
+                role=self._role,
+                provider_id=self._provider_name,
+            )
+        return result
+
+    async def _emit(self, event: str, model_id: str, data: dict[str, Any]) -> None:
+        await _emit_router_event(self._sink, self._role, event, model_id, data)
+
+
+ModelRouter = NimRouterMiddleware | StaticModelRouter
+"""Routing middleware surface: NIM gets lease rotation, everything else a static stand-in."""
+
+
+def is_nim_provider(provider: ModelProvider) -> bool:
+    """True only for the NIM provider, the sole provider with a routing catalog."""
+    from z_apply_core.agents.model_provider import NIMProvider
+
+    return isinstance(provider, NIMProvider)
+
+
+def build_router_middleware(
+    provider: ModelProvider,
+    role: str,
+    *,
+    selection: ModelSelection | None = None,
+    sink: FrameworkEventSink | None = None,
+) -> ModelRouter:
+    """Return the routing middleware for NIM, a static single-model stand-in otherwise."""
+    if is_nim_provider(provider):
+        return NimRouterMiddleware(
+            provider,
+            role=role,
+            initial_selection=selection,
+            sink=sink,
+        )
+    return StaticModelRouter(provider, role=role, selection=selection, sink=sink)

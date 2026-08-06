@@ -32,7 +32,8 @@ from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import (
     ORCHESTRATOR_EXCLUDED_MODEL_IDS,
-    NimRouterMiddleware,
+    ModelRouter,
+    build_router_middleware,
 )
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.specialists.answer_writer import make_candidate_field_tool
@@ -145,18 +146,33 @@ async def run_orchestrator(
         if on_submit_approval is not None:
             on_submit_approval(value)
 
+    active_browser = browser or (
+        artifact_publisher.browser if artifact_publisher is not None else None
+    )
+    event_sink = SequencedEventSink(sink, run_id=run_id)
     if human_channel is not None:
+        if active_browser is None:
+            return OrchestratorRun(
+                "A human channel is configured but no live browser is available "
+                "for submission readiness review.",
+                "",
+                "failed",
+            )
 
         async def prepare_submission_review(
             final_review: str,
             submission_target: str,
         ) -> dict[str, object]:
-            publisher = artifact_publisher
-            if publisher is None:
-                raise ToolException("Submission artifacts are unavailable for this run.")
-            await publisher.publish_review_artifact()
+            if artifact_publisher is not None:
+                try:
+                    await artifact_publisher.publish_review_artifact()
+                except Exception as exc:  # noqa: BLE001 - artifacts must never block approval
+                    logger.warning(
+                        "Submission review artifact publish failed; continuing without it: %s",
+                        exc,
+                    )
             verdict = await require_submission_readiness(
-                browser=publisher.browser,
+                browser=active_browser,
                 provider=provider,
                 final_review=final_review,
                 config=config,
@@ -164,11 +180,11 @@ async def run_orchestrator(
                 run_id=run_id,
             )
             if verdict.ready:
-                await publisher.browser.prepare_submission_review(
+                await active_browser.prepare_submission_review(
                     submission_target,
                 )
             else:
-                publisher.browser.set_submit_approval(False)
+                active_browser.set_submit_approval(False)
             return {
                 "ready": verdict.ready,
                 "evidence": verdict.evidence,
@@ -181,12 +197,10 @@ async def run_orchestrator(
             human_channel,
             candidate_memory=candidate_memory,
             on_approval=record_approval,
-            before_submit_approval=(
-                prepare_submission_review if artifact_publisher is not None else None
-            ),
+            before_submit_approval=prepare_submission_review,
             capture_human_challenge=(
-                artifact_publisher.browser.capture_human_challenge
-                if artifact_publisher is not None
+                active_browser.capture_human_challenge
+                if active_browser is not None
                 else None
             ),
         )
@@ -214,10 +228,20 @@ async def run_orchestrator(
         terminal = ("completed", confirmation)
         return "Application submission recorded."
 
-    event_sink = SequencedEventSink(sink, run_id=run_id)
-    active_browser = browser or (
-        artifact_publisher.browser if artifact_publisher is not None else None
-    )
+    @tool(return_direct=True)
+    async def application_blocked(reason: str, evidence: str = "") -> str:
+        """Stop the run cleanly when a required value or action is unobtainable.
+
+        Use only when fresh evidence proves the application cannot continue: a
+        required candidate fact the human cannot supply, a page that rejects
+        every legal action, or a human-declined blocking state. This is a clean
+        terminal exit, never normal control flow.
+        """
+        nonlocal terminal
+        summary = reason if not evidence else f"{reason}\n{evidence}"
+        terminal = ("blocked", summary)
+        return "Application blocked; the run stopped cleanly."
+
     run_context = RunContext(run_id=run_id)
     evidence_store = EvidenceStore(
         base_dir=CORE_ROOT / ".z-apply" / "runs" / run_id / "context"
@@ -225,10 +249,10 @@ async def run_orchestrator(
     if active_browser is not None:
         active_browser.bind_run_context(run_context)
         active_browser.bind_evidence_store(evidence_store)
-    router_middleware = NimRouterMiddleware(
+    router_middleware = build_router_middleware(
         provider,
         role="orchestrator",
-        initial_selection=selection,
+        selection=selection,
         sink=event_sink,
     )
     active_goal_middleware = ActiveGoalMiddleware(
@@ -261,6 +285,7 @@ async def run_orchestrator(
             *platform_memory_tools,
             make_candidate_field_tool(),
             *human_tools,
+            application_blocked,
             application_submitted,
         ],
         system_prompt=load_prompt("orchestrator.md"),
@@ -293,7 +318,7 @@ async def run_orchestrator(
             ),
             answer_writer_middleware=[
                 HumanEscalationGuardMiddleware(
-                    allowed_reasons=frozenset({"ambiguous_field"})
+                    allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"})
                 )
             ],
             authentication_tools=[
@@ -404,7 +429,7 @@ def build_orchestrator_middleware(
     job_url: str,
     context_inbox: ContextInbox | None,
     candidate_memory: CandidateMemory | None,
-    router_middleware: NimRouterMiddleware,
+    router_middleware: ModelRouter,
     orchestrator_human_guard: HumanEscalationGuardMiddleware,
     active_goal_middleware: ActiveGoalMiddleware,
     terminal: tuple[RunStatus, str] | None = None,
@@ -434,7 +459,7 @@ def build_orchestrator_middleware(
             run_context=run_context,
             evidence_store=evidence_store,
         ),
-        OrchestratorActionOrderMiddleware(active_browser),
+        OrchestratorActionOrderMiddleware(active_browser, sink=event_sink),
         NoProgressGuardMiddleware(
             on_no_progress=router_middleware.reject_active_response,
         ),
@@ -442,6 +467,7 @@ def build_orchestrator_middleware(
             active_browser,
             candidate_memory,
             run_context=run_context,
+            sink=event_sink,
         ),
         SubagentDispatchMiddleware(
             ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],

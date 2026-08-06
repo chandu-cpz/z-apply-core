@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,11 @@ from langchain.agents.middleware.types import AgentState, ContextT, ModelRespons
 from langchain_core.messages import BaseMessage
 
 from z_apply_core.context.context_budget import estimate_tokens
+from z_apply_core.context.model_metrics import (
+    chunk_usage,
+    extract_usage_tokens,
+    is_async_iterable,
+)
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.stream_events import TokenUsageEvent
 
@@ -119,14 +125,21 @@ class TokenUsage:
     tool_schema_tokens: int
     message_count: int
     tool_count: int
+    completion_tokens: int = 0
 
     def __str__(self) -> str:
         return (
             f"prompt_tokens={self.prompt_tokens} "
+            f"completion_tokens={self.completion_tokens} "
             f"tool_schema_tokens={self.tool_schema_tokens} "
             f"messages={self.message_count} "
             f"tools={self.tool_count}"
         )
+
+
+class _StreamResult:
+    def __init__(self, result: Any) -> None:
+        self.result = result
 
 
 class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -142,12 +155,16 @@ class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
         *,
         run_context: RunContext | None = None,
         emit: Callable[[object], None] | None = None,
+        agent: str | None = None,
     ) -> None:
         super().__init__()
         self._run_context = run_context
         self._emit = emit
+        self._agent = agent
         self._last_before_usage: TokenUsage | None = None
         self._last_after_usage: TokenUsage | None = None
+        self._last_ttft_ms: int | None = None
+        self._last_stream_usage: dict[str, Any] | None = None
 
     @property
     def last_before_usage(self) -> TokenUsage | None:
@@ -166,13 +183,86 @@ class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
         if before is not None:
             self._last_before_usage = before
             self._note(before)
+        t0 = time.monotonic()
         result = await handler(request)
-        after = _safe_usage(lambda: _usage_from_response(result, request))
-        if after is not None:
-            self._last_after_usage = after
-            self._note(after)
-            self._publish(after, request)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        if is_async_iterable(result.result):
+            self._last_ttft_ms = 0
+            result.result = self._timed_stream(  # type: ignore[assignment]
+                result.result, t0, request, before, duration_ms
+            )
+        else:
+            self._last_ttft_ms = duration_ms
+            self._finish_call(request, before, duration_ms, result)
         return result
+
+    def _finish_call(
+        self,
+        request: ModelRequest[ContextT],
+        before: TokenUsage | None,
+        duration_ms: int,
+        response: Any,
+    ) -> None:
+        after = _safe_usage(
+            lambda: _usage_from_response(response, request, self._last_stream_usage)
+        )
+        if after is None:
+            return
+        self._last_after_usage = after
+        self._note(after)
+        self._note_totals(after)
+        output_tokens_estimate = (
+            after.completion_tokens
+            if after.completion_tokens > 0
+            else (max(0, after.prompt_tokens - before.prompt_tokens) if before is not None else 0)
+        )
+        ttft_ms = self._last_ttft_ms
+        if ttft_ms is not None and 0 < ttft_ms < duration_ms:
+            generation_ms = duration_ms - ttft_ms
+        else:
+            generation_ms = duration_ms
+        tok_per_second = (
+            output_tokens_estimate / (generation_ms / 1000.0)
+            if generation_ms > 0
+            else 0.0
+        )
+        self._publish(after, request, duration_ms, output_tokens_estimate, tok_per_second)
+
+    def _measure_ttft(
+        self,
+        result: ModelResponse[ResponseT],
+        t0: float,
+        duration_ms: int,
+    ) -> None:
+        response = result.result
+        if is_async_iterable(response):
+            self._last_ttft_ms = 0
+        else:
+            self._last_ttft_ms = duration_ms
+
+    async def _timed_stream(
+        self,
+        stream: Any,
+        t0: float,
+        request: ModelRequest[ContextT],
+        before: TokenUsage | None,
+        duration_ms: int,
+    ) -> AsyncIterator[Any]:
+        first: float | None = None
+        try:
+            async for item in stream:
+                if first is None:
+                    first = time.monotonic()
+                usage = chunk_usage(item)
+                if usage is not None:
+                    self._last_stream_usage = usage
+                yield item
+        finally:
+            if first is not None:
+                self._last_ttft_ms = int((first - t0) * 1000)
+            else:
+                self._last_ttft_ms = int((time.monotonic() - t0) * 1000)
+            self._finish_call(request, before, duration_ms, _StreamResult(stream))
 
     def _note(self, usage: TokenUsage) -> None:
         if self._run_context is None:
@@ -182,7 +272,31 @@ class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
         except Exception as exc:
             logger.warning("token metric could not record usage: %s", exc)
 
-    def _publish(self, usage: TokenUsage, request: ModelRequest[ContextT]) -> None:
+    def _note_totals(self, usage: TokenUsage) -> None:
+        if self._run_context is None:
+            return
+        try:
+            previous = self._run_context.usage_totals
+            self._run_context.usage_totals = TokenUsage(
+                prompt_tokens=(previous.prompt_tokens if previous else 0) + usage.prompt_tokens,
+                completion_tokens=(previous.completion_tokens if previous else 0)
+                + usage.completion_tokens,
+                tool_schema_tokens=(previous.tool_schema_tokens if previous else 0)
+                + usage.tool_schema_tokens,
+                message_count=(previous.message_count if previous else 0) + usage.message_count,
+                tool_count=(previous.tool_count if previous else 0) + usage.tool_count,
+            )
+        except Exception as exc:
+            logger.warning("token metric could not record usage totals: %s", exc)
+
+    def _publish(
+        self,
+        usage: TokenUsage,
+        request: ModelRequest[ContextT],
+        duration_ms: int,
+        output_tokens_estimate: int,
+        tok_per_second: float,
+    ) -> None:
         if self._emit is None:
             return
         try:
@@ -192,6 +306,11 @@ class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
                     usage=usage,
                     model=_model_label(request),
                     provider=_provider_label(request),
+                    agent=self._agent,
+                    duration_ms=duration_ms,
+                    ttft_ms=0 if self._last_ttft_ms is None else self._last_ttft_ms,
+                    output_tokens_estimate=output_tokens_estimate,
+                    tok_per_second=tok_per_second,
                 )
             )
         except Exception as exc:
@@ -210,13 +329,28 @@ def _usage_from_request(request: ModelRequest[ContextT]) -> TokenUsage:
 def _usage_from_response(
     response: ModelResponse[ResponseT],
     request: ModelRequest[ContextT],
+    stream_usage: dict[str, Any] | None = None,
 ) -> TokenUsage:
-    response_messages = list(response.result or [])
+    result = response.result
+    real = extract_usage_tokens(result, stream_usage)
+    if is_async_iterable(result):
+        response_messages: list[Any] = []
+    else:
+        response_messages = list(result or [])
     messages = [*request.messages, *response_messages]
+    message_count = len(messages) + (1 if is_async_iterable(result) else 0)
+    if real is not None:
+        return TokenUsage(
+            prompt_tokens=real[0],
+            completion_tokens=real[1],
+            tool_schema_tokens=estimate_schema_tokens(request.tools),
+            message_count=message_count,
+            tool_count=len(request.tools),
+        )
     return TokenUsage(
         prompt_tokens=estimate_messages_tokens(messages),
         tool_schema_tokens=estimate_schema_tokens(request.tools),
-        message_count=len(messages),
+        message_count=message_count,
         tool_count=len(request.tools),
     )
 
