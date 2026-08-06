@@ -45,6 +45,7 @@ class RichStreamRenderer:
         self._stream_source = "model"
         self._last_token_usage: TokenUsage | None = None
         self._last_token_usage_time = 0.0
+        self._last_ttft_ms: int | None = None
 
     @property
     def console(self) -> Console:
@@ -74,6 +75,7 @@ class RichStreamRenderer:
         if event.event in {
             "agent_message",
             "agent_message_delta",
+            "agent_turn",
             "agent_tool_start",
             "agent_tool_delta",
             "agent_tool_end",
@@ -122,6 +124,8 @@ class RichStreamRenderer:
             )
         )
         run_info(logger, "streamed %s events in %sms", result.event_count, result.duration_ms)
+        if self._last_ttft_ms is not None:
+            run_info(logger, "last agent turn ttft: %sms", self._last_ttft_ms)
 
     def _render_token_usage(self, event: TokenUsageEvent) -> None:
         now = time.monotonic()
@@ -222,6 +226,25 @@ class RichStreamRenderer:
                         border_style="cyan",
                     )
                 )
+            return
+
+        if event.event == "agent_turn":
+            self._end_stream_if_active()
+            agent = event.name
+            data = event.data
+            parts: list[str] = []
+            ttft_ms = data.get("ttft_ms")
+            duration_ms = data.get("duration_ms")
+            if isinstance(ttft_ms, int):
+                self._last_ttft_ms = ttft_ms
+                parts.append(f"ttft {ttft_ms}ms")
+            if isinstance(duration_ms, int):
+                parts.append(f"turn {duration_ms}ms")
+            tool_count = len(data.get("tool_calls") or [])
+            if tool_count:
+                parts.append(f"{tool_count} tool calls")
+            suffix = f" · {' · '.join(parts)}" if parts else ""
+            agent_info(logger, agent, "turn complete%s", suffix)
             return
 
         if event.event == "agent_tool_start":

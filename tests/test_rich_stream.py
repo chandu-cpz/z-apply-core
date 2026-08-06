@@ -14,6 +14,54 @@ def event(event_name: str, *, name: str, **data: object) -> FrameworkTraceEvent:
 
 
 class RichStreamRendererTests(unittest.IsolatedAsyncioTestCase):
+    async def test_agent_turn_renders_ttft_duration_and_tool_count(self) -> None:
+        output = StringIO()
+        renderer = RichStreamRenderer(
+            Console(file=output, color_system=None, force_terminal=False, width=100)
+        )
+
+        with self.assertLogs("z_apply_core.rich_stream", level="INFO") as captured:
+            await renderer.accept(
+                event(
+                    "agent_turn",
+                    name="orchestrator",
+                    agent="orchestrator",
+                    text="",
+                    reasoning="",
+                    tool_calls=[{"name": "browser_observe"}],
+                    duration_ms=4867,
+                    ttft_ms=1234,
+                )
+            )
+
+        self.assertIn("orchestrator", captured.output[0])
+        self.assertIn("ttft 1234ms", captured.output[0])
+        self.assertIn("turn 4867ms", captured.output[0])
+        self.assertIn("1 tool calls", captured.output[0])
+        self.assertEqual(output.getvalue(), "")
+
+    async def test_print_result_reports_last_agent_turn_ttft(self) -> None:
+        output = StringIO()
+        renderer = RichStreamRenderer(
+            Console(file=output, color_system=None, force_terminal=False, width=100)
+        )
+        await renderer.accept(
+            event(
+                "agent_turn",
+                name="orchestrator",
+                agent="orchestrator",
+                ttft_ms=900,
+                duration_ms=2000,
+            )
+        )
+
+        with self.assertLogs("z_apply_core.rich_stream", level="INFO") as captured:
+            renderer.print_result(V3RunResult(event_count=1, duration_ms=5), {})
+
+        self.assertTrue(
+            any("last agent turn ttft: 900ms" in line for line in captured.output)
+        )
+
     async def test_agent_lifecycle_uses_logger_instead_of_direct_console_output(self) -> None:
         output = StringIO()
         renderer = RichStreamRenderer(

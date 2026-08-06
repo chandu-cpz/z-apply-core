@@ -87,11 +87,38 @@ async def _consume_messages(
     sink: FrameworkEventSink | None,
 ) -> None:
     async for message_stream in messages:
+        turn_started = time.monotonic()
+        turn: dict[str, Any] = {
+            "text": "",
+            "reasoning": "",
+            "tool_calls": [],
+            "first_delta_seen": None,
+        }
         await asyncio.gather(
-            _consume_message_text(source, message_stream.text, sink),
-            _consume_message_reasoning(source, message_stream.reasoning, sink),
-            _consume_message_tool_call_chunks(source, message_stream.tool_calls, sink),
+            _consume_message_text(source, message_stream.text, sink, turn),
+            _consume_message_reasoning(source, message_stream.reasoning, sink, turn),
+            _consume_message_tool_call_chunks(source, message_stream.tool_calls, sink, turn),
             _read_message_output(message_stream),
+        )
+        text = turn["text"]
+        reasoning = turn["reasoning"]
+        tool_calls = turn["tool_calls"]
+        if not text and not reasoning and not tool_calls:
+            continue
+        first_delta_seen = turn["first_delta_seen"]
+        ttft_ms = 0 if first_delta_seen is None else int((first_delta_seen - turn_started) * 1000)
+        await _emit(
+            sink,
+            "agent_turn",
+            source,
+            {
+                "agent": source,
+                "text": text,
+                "reasoning": reasoning,
+                "tool_calls": tool_calls,
+                "duration_ms": int((time.monotonic() - turn_started) * 1000),
+                "ttft_ms": ttft_ms,
+            },
         )
 
 
@@ -99,10 +126,14 @@ async def _consume_message_text(
     source: str,
     text: AsyncIterable[str],
     sink: FrameworkEventSink | None,
+    turn: dict[str, Any],
 ) -> None:
     async for delta in text:
         if not delta:
             continue
+        turn["text"] += delta
+        if turn["first_delta_seen"] is None:
+            turn["first_delta_seen"] = time.monotonic()
         await _emit(
             sink,
             "agent_message_delta",
@@ -118,10 +149,14 @@ async def _consume_message_reasoning(
     source: str,
     reasoning: AsyncIterable[str],
     sink: FrameworkEventSink | None,
+    turn: dict[str, Any],
 ) -> None:
     async for delta in reasoning:
         if not delta:
             continue
+        turn["reasoning"] += delta
+        if turn["first_delta_seen"] is None:
+            turn["first_delta_seen"] = time.monotonic()
         await _emit(
             sink,
             "agent_message_delta",
@@ -137,16 +172,43 @@ async def _consume_message_tool_call_chunks(
     source: str,
     tool_calls: AsyncIterable[Any],
     sink: FrameworkEventSink | None,
+    turn: dict[str, Any],
 ) -> None:
     async for chunk in tool_calls:
+        chunk_data = _serialize_tool_call_chunk(chunk)
         await _emit(
             sink,
             "agent_model_tool_call",
             source,
-            {
-                "chunk": chunk,
-            },
+            chunk_data,
         )
+        _record_tool_call_chunk(turn, chunk_data)
+
+
+def _serialize_tool_call_chunk(chunk: Any) -> dict[str, Any]:
+    index = getattr(chunk, "tool_call_index", None) or getattr(chunk, "index", 0) or 0
+    args = getattr(chunk, "args", "")
+    if not isinstance(args, str):
+        args = str(args)
+    return {
+        "index": int(index),
+        "id": str(getattr(chunk, "id", "") or getattr(chunk, "tool_call_id", "") or ""),
+        "name": str(getattr(chunk, "name", "") or ""),
+        "args": args,
+    }
+
+
+def _record_tool_call_chunk(turn: dict[str, Any], chunk_data: dict[str, Any]) -> None:
+    tool_calls = turn["tool_calls"]
+    for entry in tool_calls:
+        if entry["index"] == chunk_data["index"]:
+            entry["args"] += chunk_data["args"]
+            if chunk_data["id"]:
+                entry["id"] = chunk_data["id"]
+            if chunk_data["name"]:
+                entry["name"] = chunk_data["name"]
+            return
+    tool_calls.append(dict(chunk_data))
 
 
 async def _read_message_output(message_stream: Any) -> None:
@@ -170,6 +232,7 @@ async def _consume_tool_calls(
             {
                 "tool_name": tool_name,
                 "input": call.input,
+                "input_full": _public_tool_output(call.input),
                 "tool_call_id": tool_call_id,
                 "parent_tool_call_id": parent_tool_call_id,
             },
@@ -192,6 +255,7 @@ async def _consume_tool_calls(
             {
                 "tool_name": tool_name,
                 "output": _public_tool_output(call.output),
+                "output_full": _public_tool_output(call.output),
                 "error": str(call.error) if call.error is not None else "",
                 "completed": call.completed,
                 "tool_call_id": tool_call_id,
