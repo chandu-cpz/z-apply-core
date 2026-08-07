@@ -25,8 +25,7 @@ logger = logging.getLogger(__name__)
 def estimate_messages_tokens(messages: Sequence[BaseMessage]) -> int:
     """Estimate prompt tokens for messages with str or list-of-part content.
 
-    Unlike ``context_budget.estimate_messages_tokens`` (a raw character count
-    used for budget decisions), this applies the shared ``estimate_tokens``
+    Unlike a raw character count, this applies the shared ``estimate_tokens``
     heuristic to every text part so structured content is counted as well.
     """
     total = 0

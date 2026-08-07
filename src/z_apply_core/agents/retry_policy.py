@@ -9,10 +9,16 @@ def should_retry_model_error(exc: Exception) -> bool:
     """Return True for transport/provider failures safe to retry.
 
     Returns False for intentional agent or runtime control failures that
-    carry their own recovery semantics.
+    carry their own recovery semantics, and for permanent client errors
+    (HTTP 400 invalid_request_error and friends) that re-sending the same
+    request can never fix.
     """
-    blocked = (NoProgressCircuitOpen,)
-    return not isinstance(exc, blocked)
+    if isinstance(exc, NoProgressCircuitOpen):
+        return False
+    status_code = getattr(exc, "status_code", None)
+    return not (
+        isinstance(status_code, int) and status_code in {400, 401, 403, 404, 422}
+    )
 
 
 def model_retry_middleware() -> ModelRetryMiddleware:

@@ -16,15 +16,18 @@ from langchain_core.tools import BaseTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from nim_router import NimRouter
 
-from z_apply_core.agents.action_order import OrchestratorActionOrderMiddleware
-from z_apply_core.agents.candidate_field import CandidateFieldMiddleware
+from z_apply_core.agents.browser_mutation_serializer import SerializeBrowserMutationsMiddleware
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
-from z_apply_core.agents.goal_runner import ActiveGoalMiddleware, run_persistent_goal
+from z_apply_core.agents.goal_runner import (
+    ActiveGoalExhausted,
+    ActiveGoalMiddleware,
+    run_persistent_goal,
+)
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.model_provider import ModelProvider, get_provider
-from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
+from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen, NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.readiness_verifier import require_submission_readiness
@@ -36,11 +39,9 @@ from z_apply_core.agents.router_middleware import (
     build_router_middleware,
 )
 from z_apply_core.agents.specialists import build_specialists
-from z_apply_core.agents.specialists.answer_writer import make_candidate_field_tool
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_session import BrowserSession
-from z_apply_core.context.context_budget import ContextBudgetMiddleware
 from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.context.token_metric import TokenMetricMiddleware
@@ -60,6 +61,38 @@ from z_apply_core.stream_events import (
 )
 
 logger = logging.getLogger(__name__)
+
+GOAL_STALL_LIMIT = 3
+
+
+def decide_goal_stall(
+    exc: Exception,
+    stall_count: int,
+    *,
+    limit: int = GOAL_STALL_LIMIT,
+    observation_signature: str | None = None,
+    previous_signature: str | None = None,
+) -> tuple[int, bool]:
+    """Return ``(updated_stall_count, terminate)`` for one goal recovery event.
+
+    Only no-progress circuit exceptions count toward the stall limit; any other
+    recovery (provider timeouts, graph failures) resets the counter. Browser
+    evidence advancing between no-progress events is real progress and resets
+    the counter too, so a long healthy run that occasionally trips a per-turn
+    circuit on separate stubborn controls is never falsely blocked. The frozen
+    page signature of a genuine churn loop keeps the counter growing.
+    """
+    if not isinstance(exc, (NoProgressCircuitOpen, ActiveGoalExhausted)):
+        return 0, False
+    if (
+        observation_signature is not None
+        and previous_signature is not None
+        and observation_signature != previous_signature
+    ):
+        stall_count = 0
+    stall_count += 1
+    return stall_count, stall_count >= limit
+
 
 CORE_ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/runs"
@@ -136,6 +169,15 @@ async def run_orchestrator(
     except (ImportError, ValueError) as exc:
         return OrchestratorRun(f"Model selection failed: {exc}", "", "failed")
 
+    await _seed_candidate_memory_from_resume(candidate_memory)
+    # Embed the stored facts directly into the AnswerWriter prompt so they are
+    # visible to the model even when a weak free-tier model skips the lookup
+    # tool call. Sanitization (secrets, placeholders, masked values) happens at
+    # the prompt boundary in build_answer_writer.
+    candidate_facts: list[dict[str, object]] = (
+        await candidate_memory.all_facts() if candidate_memory is not None else []
+    )
+
     node_info(logger, "orchestrator", "initial model: %s", selection.info.id)
     approval: bool | None = None
     terminal: tuple[RunStatus, str] | None = None
@@ -150,6 +192,12 @@ async def run_orchestrator(
         artifact_publisher.browser if artifact_publisher is not None else None
     )
     event_sink = SequencedEventSink(sink, run_id=run_id)
+    # Subagents get their own ask_human instance with the browser
+    # challenge-capture path stripped: a subagent (e.g. AnswerWriter) must
+    # never be able to drive the browser through ask_human internals, even
+    # if a model misclassifies an upload control or CAPTCHA as a challenge.
+    subagent_human_tools: list[BaseTool] = []
+    submission_gate: list[BaseTool] = []
     if human_channel is not None:
         if active_browser is None:
             return OrchestratorRun(
@@ -162,6 +210,9 @@ async def run_orchestrator(
         async def prepare_submission_review(
             final_review: str,
             submission_target: str,
+            url: str = "",
+            company_name: str = "System",
+            role_name: str = "Application",
         ) -> dict[str, object]:
             if artifact_publisher is not None:
                 try:
@@ -171,6 +222,32 @@ async def run_orchestrator(
                         "Submission review artifact publish failed; continuing without it: %s",
                         exc,
                     )
+
+            async def request_pending_approval(
+                review_context: str,
+            ) -> dict[str, object]:
+                approved = await human_channel.confirm(
+                    question="Submit this application?",
+                    context=review_context,
+                    url=url,
+                    company=company_name,
+                    role=role_name,
+                )
+                record_approval(approved)
+                if approved:
+                    return {"approved": True}
+                correction = await human_channel.ask(
+                    question="What should I correct before requesting submission approval again?",
+                    context=(
+                        "Submission was not approved. Give one precise correction or say "
+                        "that the application should be stopped."
+                    ),
+                    url=url,
+                    company=company_name,
+                    role=role_name,
+                )
+                return {"approved": False, "correction": correction}
+
             verdict = await require_submission_readiness(
                 browser=active_browser,
                 provider=provider,
@@ -178,6 +255,7 @@ async def run_orchestrator(
                 config=config,
                 sink=event_sink,
                 run_id=run_id,
+                request_pending_approval=request_pending_approval,
             )
             if verdict.ready:
                 await active_browser.prepare_submission_review(
@@ -187,23 +265,62 @@ async def run_orchestrator(
                 active_browser.set_submit_approval(False)
             return {
                 "ready": verdict.ready,
+                "submit_approval": verdict.submit_approval
+                or ("approved" if verdict.ready else "not_ready"),
+                "correction": verdict.correction,
                 "evidence": verdict.evidence,
                 "unresolved_required_fields": list(verdict.unresolved_required_fields),
                 "visible_errors": list(verdict.visible_errors),
                 "questionable_values": list(verdict.questionable_values),
             }
 
-        human_tools = make_human_tools(
-            human_channel,
-            candidate_memory=candidate_memory,
-            on_approval=record_approval,
-            before_submit_approval=prepare_submission_review,
-            capture_human_challenge=(
-                active_browser.capture_human_challenge
-                if active_browser is not None
-                else None
-            ),
-        )
+        @tool(return_direct=True)
+        async def submit_application_review(
+            final_review: str,
+            submission_target: str,
+            url: str = "",
+            company_name: str = "System",
+            role_name: str = "Application",
+        ) -> dict[str, object]:
+            """Pass the finished form through the independent readiness verifier.
+
+            This handoff is the only path to pending submission approval: the
+            verifier must record a ready verdict first, and it never asks the
+            human while readiness findings are unresolved.
+            """
+            return await prepare_submission_review(
+                final_review,
+                submission_target,
+                url,
+                company_name,
+                role_name,
+            )
+
+        submission_gate = [submit_application_review]
+
+        human_tools = [
+            tool
+            for tool in make_human_tools(
+                human_channel,
+                candidate_memory=candidate_memory,
+                capture_human_challenge=(
+                    active_browser.capture_human_challenge
+                    if active_browser is not None
+                    else None
+                ),
+            )
+            if tool.name == "ask_human"
+        ]
+
+        subagent_human_tools = [
+            tool
+            for tool in make_human_tools(
+                human_channel,
+                candidate_memory=candidate_memory,
+                allow_human_challenge=False,
+            )
+            if tool.name == "ask_human"
+        ]
     manual_auth_tools = (
         [
             make_manual_auth_tool(
@@ -221,7 +338,7 @@ async def run_orchestrator(
         nonlocal terminal
         if approval is not True:
             raise ToolException(
-                "Submission cannot finish until request_submit_approval returns approved."
+                "Submission cannot finish until submit_application_review returns approved."
             )
         if artifact_publisher is not None:
             await artifact_publisher.publish_submission_screenshot()
@@ -258,6 +375,7 @@ async def run_orchestrator(
     active_goal_middleware = ActiveGoalMiddleware(
         is_terminal=lambda: terminal is not None,
         on_no_progress=router_middleware.reject_active_response,
+        sink=event_sink,
     )
     orchestrator_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"human_challenge"})
@@ -265,6 +383,11 @@ async def run_orchestrator(
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
+    orchestrator_memory_tools = (
+        make_candidate_memory_tools(candidate_memory)
+        if candidate_memory is not None
+        else ()
+    )
     platform_playbooks = PlatformPlaybooks()
     platform_memory_tools = (
         [
@@ -278,13 +401,18 @@ async def run_orchestrator(
         else []
     )
     deepagent_backend = FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True)
+    # One lock shared by the orchestrator and every specialist so browser
+    # mutations never overlap even when a subagent and the orchestrator act in
+    # the same response.
+    mutation_lock = asyncio.Lock()
     agent = create_deep_agent(
         model=selection.llm,
         tools=[
             *orchestrator_browser_tools,
             *platform_memory_tools,
-            make_candidate_field_tool(),
+            *orchestrator_memory_tools,
             *human_tools,
+            *submission_gate,
             application_blocked,
             application_submitted,
         ],
@@ -297,20 +425,19 @@ async def run_orchestrator(
             platform_playbooks=platform_playbooks,
             job_url=job_url,
             context_inbox=context_inbox,
-            candidate_memory=candidate_memory,
             router_middleware=router_middleware,
             orchestrator_human_guard=orchestrator_human_guard,
             active_goal_middleware=active_goal_middleware,
             terminal=terminal,
+            mutation_lock=mutation_lock,
         ),
         subagents=await build_specialists(
             provider,
             browser_tools,
             fallback_model=selection.llm,
             candidate_resume=_candidate_resume_context(),
-            answer_writer_human_tools=[
-                tool for tool in human_tools if tool.name == "ask_human"
-            ],
+            answer_writer_candidate_facts=candidate_facts,
+            answer_writer_human_tools=subagent_human_tools,
             answer_writer_memory_tools=(
                 make_candidate_memory_tools(candidate_memory)
                 if candidate_memory is not None
@@ -326,6 +453,7 @@ async def run_orchestrator(
                 *manual_auth_tools,
             ],
             sink=event_sink,
+            mutation_lock=mutation_lock,
         ),
         backend=deepagent_backend,
         permissions=deepagent_filesystem_permissions(run_id),
@@ -343,6 +471,42 @@ async def run_orchestrator(
         resume_path=resume_path,
         run_id=run_id,
     )
+    stall_count = 0
+    stall_signature: str | None = None
+
+    def goal_recovery(exc: Exception, _attempt: int) -> bool:
+        """End the run cleanly when the goal loop repeatedly makes no progress.
+
+        Per-turn no-progress circuits only end the turn; the persistent goal then
+        re-enters with fresh evidence and the same stuck page, which is how a
+        churn loop outlives every middleware budget. Consecutive no-progress
+        recoveries are converted into a clean ``application_blocked`` terminal.
+        Browser evidence advancing between recoveries counts as real progress
+        and resets the stall counter.
+        """
+        nonlocal stall_count, stall_signature, terminal
+        observation = (
+            active_browser.current_observation if active_browser is not None else None
+        )
+        signature = observation.signature if observation is not None else None
+        stall_count, terminate = decide_goal_stall(
+            exc,
+            stall_count,
+            observation_signature=signature,
+            previous_signature=stall_signature,
+        )
+        if signature is not None:
+            stall_signature = signature
+        if not terminate:
+            return False
+        terminal = (
+            "blocked",
+            "stuck_loop: the application loop repeatedly made no progress "
+            f"({stall_count} consecutive recoveries); stopping cleanly.",
+        )
+        logger.warning("orchestrator goal stalled; blocking the run cleanly")
+        return True
+
     try:
         await run_persistent_goal(
             agent,
@@ -350,6 +514,7 @@ async def run_orchestrator(
             config=run_config,
             sink=event_sink,
             is_terminal=lambda: terminal is not None,
+            on_recovery=goal_recovery,
         )
     except Exception as exc:  # noqa: BLE001 - return a clear infrastructure status
         logger.exception("Persistent job-application agent failed")
@@ -399,7 +564,7 @@ BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE
 END UNTRUSTED CURRENT BROWSER EVIDENCE
 
 Use browser tools directly. Finish only through application_submitted after
-explicit request_submit_approval. If ordinary work fails, recover through fresh
+explicit submit_application_review. If ordinary work fails, recover through fresh
 evidence and another legal action; do not invent a terminal blocker.
 """
 
@@ -419,6 +584,48 @@ def _candidate_resume_context() -> str:
         return ""
 
 
+async def _seed_candidate_memory_from_resume(candidate_memory: CandidateMemory | None) -> None:
+    """Preload resume profile facts into candidate memory for this run.
+
+    This makes the AnswerWriter's mandatory exact-label lookup resolve
+    identity facts (First name, Last name, Email, ...) without a human answer,
+    so a model that insists on an exact memory match never loops on the same
+    lookup or asks for a value the resume already contains. Explicit human
+    answers always win over the resume copy; the memory method itself is
+    best-effort and never blocks the run.
+    """
+    if candidate_memory is None:
+        return
+    for field_label, answer in _resume_profile_facts(_candidate_resume_context()).items():
+        await candidate_memory.remember_resume_fact(
+            field_label=field_label,
+            answer=answer,
+        )
+
+
+def _resume_profile_facts(resume_text: str) -> dict[str, str]:
+    """Parse ``- Key: Value`` lines under the resume's ``## Candidate Profile Facts`` section."""
+    facts: dict[str, str] = {}
+    in_section = False
+    for line in resume_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            in_section = stripped.casefold().startswith("## candidate profile facts")
+            continue
+        if not in_section:
+            continue
+        key, separator, value = (stripped[2:] if stripped.startswith("- ") else "").partition(
+            ": "
+        )
+        if not separator:
+            continue
+        key = key.strip()
+        value = value.strip()
+        if key and value:
+            facts[key] = value
+    return facts
+
+
 def build_orchestrator_middleware(
     *,
     run_context: RunContext,
@@ -428,17 +635,17 @@ def build_orchestrator_middleware(
     platform_playbooks: PlatformPlaybooks,
     job_url: str,
     context_inbox: ContextInbox | None,
-    candidate_memory: CandidateMemory | None,
     router_middleware: ModelRouter,
     orchestrator_human_guard: HumanEscalationGuardMiddleware,
     active_goal_middleware: ActiveGoalMiddleware,
     terminal: tuple[RunStatus, str] | None = None,
+    mutation_lock: asyncio.Lock | None = None,
 ) -> list[AgentMiddleware]:
     """Build the orchestrator middleware chain in execution order.
 
-    The first element is the outermost wrapper. ``ContextBudgetMiddleware`` and
-    ``TokenMetricMiddleware`` wrap every other middleware, and their emit
-    adapters forward typed events into the run-sequenced sink.
+    The first element is the outermost wrapper. ``TokenMetricMiddleware``
+    wraps every other middleware, and its emit adapter forwards typed events
+    into the run-sequenced sink.
     """
     del terminal
 
@@ -446,10 +653,6 @@ def build_orchestrator_middleware(
         _emit_usage_sync(event_sink, event)
 
     return [
-        ContextBudgetMiddleware(
-            evidence_store=evidence_store,
-            run_context=run_context,
-        ),
         TokenMetricMiddleware(agent="orchestrator", run_context=run_context, emit=usage_emit),
         *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
         CapabilityContextMiddleware(
@@ -459,16 +662,14 @@ def build_orchestrator_middleware(
             run_context=run_context,
             evidence_store=evidence_store,
         ),
-        OrchestratorActionOrderMiddleware(active_browser, sink=event_sink),
         NoProgressGuardMiddleware(
+            browser=active_browser,
             on_no_progress=router_middleware.reject_active_response,
+            max_stagnant_tool_calls=30,
+            max_identical_denials=3,
+            max_non_progress=8,
         ),
-        CandidateFieldMiddleware(
-            active_browser,
-            candidate_memory,
-            run_context=run_context,
-            sink=event_sink,
-        ),
+        SerializeBrowserMutationsMiddleware(sink=event_sink, lock=mutation_lock),
         SubagentDispatchMiddleware(
             ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
             browser=active_browser,
