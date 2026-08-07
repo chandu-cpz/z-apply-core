@@ -47,6 +47,8 @@ class Settings(BaseSettings):
         default="inclusionai/ling-3.0-flash:free",
         alias="OGW_MODEL",
     )
+    opencodego_api_key: str = Field(default="", alias="OPENCODEGO_API_KEY")
+    opencodego_model: str = Field(default="deepseek-v4-flash", alias="OPENCODEGO_MODEL")
     model_provider: str = Field(default="", alias="MODEL_PROVIDER")
 
     model_config = SettingsConfigDict(

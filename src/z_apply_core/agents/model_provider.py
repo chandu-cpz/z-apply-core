@@ -389,8 +389,124 @@ class OpenGatewayProvider:
         logger.debug("OpenGatewayProvider: cooldown ignored for %s", model_id)
 
 
+class OpenCodeGoProvider:
+    """OpenAI-compatible provider for the opencode Zen gateway.
+
+    Serves a single model, DeepSeek V4 Flash, via the gateway's
+    ``/zen/go/v1`` chat-completions endpoint. Thinking maps to the gateway's
+    DeepSeek-style ``thinking``/``reasoning_effort`` body fields.
+    """
+
+    BASE_URL = "https://opencode.ai/zen/go/v1"
+    DEFAULT_MODEL = "deepseek-v4-flash"
+
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "",
+    ) -> None:
+        self._api_key = api_key or os.environ.get("OPENCODEGO_API_KEY", "")
+        if not self._api_key:
+            raise ValueError(
+                "OPENCODEGO_API_KEY is required for OpenCodeGoProvider. "
+                "Create a key at https://opencode.ai/"
+            )
+        self._model = model or os.environ.get("OPENCODEGO_MODEL", "") or self.DEFAULT_MODEL
+
+    async def lease(
+        self,
+        *,
+        tools: bool = False,
+        structured: bool = False,
+        vision: bool = False,
+        reasoning: bool = False,
+        priority: str = "balanced",
+        excluded_model_ids: frozenset[str] | None = None,
+    ) -> ModelSelection:
+        from collections.abc import Sequence
+
+        from langchain_core.language_models import LanguageModelInput
+        from langchain_core.messages import AIMessage
+        from langchain_core.runnables import Runnable
+        from langchain_core.tools import BaseTool
+        from langchain_deepseek import ChatDeepSeek
+
+        class ZenGatewayDeepSeek(ChatDeepSeek):
+            """DeepSeek V4 reasoner adapted to the opencode Zen gateway.
+
+            DeepSeek V4 models run in thinking mode by default and reject any
+            forced ``tool_choice`` ("required", "any", and dict forms) with
+            HTTP 400 ``Thinking mode does not support this tool_choice``; only
+            "auto" and "none" are accepted. LangChain's structured-output
+            strategy forces ``tool_choice="any"`` to pin the schema tool,
+            which the gateway rejects. Relax forced tool selection to "auto":
+            the schema tool stays bound and the subagent prompt demands it.
+            This mirrors the documented DeepSeek V4 integration guidance
+            (``supportsToolChoice: false``) and the LiteLLM workaround.
+            """
+
+            def bind_tools(
+                self,
+                tools: Sequence[dict[str, Any] | type | Callable[..., Any] | BaseTool],
+                *,
+                tool_choice: dict[str, Any] | str | bool | None = None,
+                strict: bool | None = None,
+                parallel_tool_calls: bool | None = None,
+                **kwargs: Any,
+            ) -> Runnable[LanguageModelInput, AIMessage]:
+                if isinstance(tool_choice, dict) or tool_choice in {"any", "required"}:
+                    tool_choice = "auto"
+                return super().bind_tools(
+                    tools,
+                    tool_choice=tool_choice,
+                    strict=strict,
+                    parallel_tool_calls=parallel_tool_calls,
+                    **kwargs,
+                )
+
+        extra_body: dict[str, Any] = {
+            "thinking": {"type": "enabled"},
+            "reasoning_effort": "high",
+        }
+
+        llm = _build_llm(
+            ZenGatewayDeepSeek,
+            model=self._model,
+            base_url=self.BASE_URL,
+            api_key=self._api_key,
+            temperature=0.3,
+            extra_body=extra_body,
+        )
+
+        logger.info(
+            "OpenCodeGoProvider: selected %s (tools=%s, vision=%s, reasoning=%s)",
+            self._model,
+            tools,
+            vision,
+            reasoning,
+        )
+        return _selection(
+            model_id=self._model,
+            provider="opencodego",
+            pricing="token",
+            quality_hint=0.8,
+            llm=llm,
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+        )
+
+    def record_failure(self, model_id: str, **kwargs: Any) -> None:
+        logger.debug("OpenCodeGoProvider: record_failure ignored for %s", model_id)
+
+    def cooldown_model(self, model_id: str, seconds: float) -> None:
+        logger.debug("OpenCodeGoProvider: cooldown ignored for %s", model_id)
+
+
 class NIMProvider:
     """Wraps existing NimRouter for NVIDIA NIM models."""
+
     def __init__(self, router: NimRouter) -> None:
         self._router = router
 
@@ -512,6 +628,16 @@ def _make_opengateway(_router: NimRouter | None) -> ModelProvider:
     )
 
 
+def _make_opencodego(_router: NimRouter | None) -> ModelProvider:
+    from z_apply_core.config import load_settings
+
+    settings = load_settings()
+    return OpenCodeGoProvider(
+        api_key=settings.opencodego_api_key,
+        model=settings.opencodego_model,
+    )
+
+
 def _make_nim(router: NimRouter | None) -> ModelProvider:
     if router is None:
         raise ValueError("NIM provider requires a NimRouter instance")
@@ -560,6 +686,17 @@ register_provider(
         default_model=InferXProvider.DEFAULT_MODEL,
         model_env="INFERX_MODEL",
         factory=_make_inferx,
+    )
+)
+register_provider(
+    ProviderSpec(
+        name="opencodego",
+        description="opencode Zen gateway (opencode.ai/zen/go/v1); DeepSeek V4 Flash only",
+        env_key="OPENCODEGO_API_KEY",
+        env_attr="opencodego_api_key",
+        default_model=OpenCodeGoProvider.DEFAULT_MODEL,
+        model_env="OPENCODEGO_MODEL",
+        factory=_make_opencodego,
     )
 )
 register_provider(

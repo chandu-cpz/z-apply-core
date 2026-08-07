@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import patch
 
@@ -7,6 +8,7 @@ from z_apply_core.agents.model_provider import (
     AgnesProvider,
     GroqProvider,
     InferXProvider,
+    OpenCodeGoProvider,
     OpenGatewayProvider,
     default_provider_name,
     get_provider,
@@ -26,6 +28,8 @@ class ProviderSelectionTests(unittest.TestCase):
             "AGNES_API_KEY": "",
             "INFERX_API_KEY": "",
             "INFERX_MODEL": "deepseek-v4-flash-0731",
+            "OPENCODEGO_API_KEY": "",
+            "OPENCODEGO_MODEL": "deepseek-v4-flash",
         }
         values.update(overrides)
         return patch(
@@ -69,6 +73,14 @@ class ProviderSelectionTests(unittest.TestCase):
 
         self.assertIsInstance(provider, InferXProvider)
 
+    def test_auto_detect_falls_back_to_opencodego_when_only_opencodego_key(
+        self,
+    ) -> None:
+        with self.patch_settings(OPENCODEGO_API_KEY="sk-test"):
+            provider = get_provider()
+
+        self.assertIsInstance(provider, OpenCodeGoProvider)
+
     def test_missing_key_on_explicit_provider_falls_back(self) -> None:
         with self.patch_settings(MODEL_PROVIDER="inferx", AGNES_API_KEY="sk-test"):
             provider = get_provider()
@@ -96,7 +108,10 @@ class ProviderSelectionTests(unittest.TestCase):
     def test_registry_lists_providers_in_detection_order(self) -> None:
         names = [spec.name for spec in list_providers()]
 
-        self.assertEqual(names, ["opengateway", "groq", "agnes", "inferx", "nim"])
+        self.assertEqual(
+            names,
+            ["opengateway", "groq", "agnes", "inferx", "opencodego", "nim"],
+        )
 
     def test_default_provider_name_reflects_env(self) -> None:
         with self.patch_settings(MODEL_PROVIDER="inferx"):
@@ -122,6 +137,57 @@ class ProviderSelectionTests(unittest.TestCase):
         self.assertEqual(provider._model, "inclusionai/ling-3.0-flash:free")
         self.assertEqual(provider.BASE_URL, "https://opengateway.gitlawb.com/v1")
 
+    def test_opencodego_provider_default_model(self) -> None:
+        provider = OpenCodeGoProvider(api_key="sk-test")
+
+        self.assertEqual(provider._model, "deepseek-v4-flash")
+        self.assertEqual(provider.BASE_URL, "https://opencode.ai/zen/go/v1")
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OpenCodeGoToolChoiceTests(unittest.TestCase):
+    """DeepSeek V4 thinking mode rejects forced tool_choice (HTTP 400).
+
+    The opencode Zen gateway only accepts "auto"/"none"; langchain's
+    ToolStrategy forces "any" for structured output. The provider must
+    relax forced tool selection to "auto" so AnswerWriter structured
+    output can run on this gateway.
+    """
+
+    def test_bind_tools_relaxes_forced_tool_choice_to_auto(self) -> None:
+        from langchain_core.tools import tool
+
+        from z_apply_core.agents.model_provider import OpenCodeGoProvider
+
+        @tool
+        def lookup_candidate_memory(query: str) -> dict[str, object]:
+            """Search candidate facts."""
+            return {"sources": []}
+
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        selection = asyncio.run(provider.lease())
+        llm = selection.llm
+        for forced in ("any", "required", {"type": "function", "function": {"name": "x"}}):
+            bound = llm.bind_tools([lookup_candidate_memory], tool_choice=forced)
+            self.assertEqual(bound.kwargs.get("tool_choice"), "auto")
+
+    def test_bind_tools_preserves_allowed_tool_choice(self) -> None:
+        from langchain_core.tools import tool
+
+        from z_apply_core.agents.model_provider import OpenCodeGoProvider
+
+        @tool
+        def lookup_candidate_memory(query: str) -> dict[str, object]:
+            """Search candidate facts."""
+            return {"sources": []}
+
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        selection = asyncio.run(provider.lease())
+        llm = selection.llm
+        bound = llm.bind_tools([lookup_candidate_memory], tool_choice="auto")
+        self.assertEqual(bound.kwargs.get("tool_choice"), "auto")
+        bound = llm.bind_tools([lookup_candidate_memory])
+        self.assertIsNone(bound.kwargs.get("tool_choice"))
