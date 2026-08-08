@@ -14,7 +14,12 @@ from z_apply_core.model_policy import (
     PROBED_TOOL_CAPABILITY_OVERRIDES,
     VERIFIED_LARGE_TOOL_MODEL_IDS,
 )
-from z_apply_core.nodes import authenticate_default_account, orchestrator, setup_browser
+from z_apply_core.nodes import (
+    auth_blocked,
+    authenticate_default_account,
+    orchestrator,
+    setup_browser,
+)
 from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
@@ -22,15 +27,35 @@ from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_
 ROUTER_STATS_PATH = CORE_ROOT / ".z-apply" / "nim-router-stats.json"
 MAX_EXPLORATION_INTERVAL_SECONDS = 300.0
 
+# Auth verdicts that terminate the run before any application work starts.
+# ``authenticated`` and ``not_verified`` proceed (the latter is ambiguous and
+# the AuthenticationSpecialist can still resolve gates mid-application); a
+# ``failed`` (exception) or ``blocked`` (human auth action unresolved) verdict
+# hard-blocks the run.
+HARD_BLOCK_AUTH_STATUSES = frozenset({"failed", "blocked"})
+
+
+def _route_after_auth(state: RunState) -> str:
+    """Route to the orchestrator unless the auth phase hard-failed."""
+    if str(state.get("auth_status", "")) in HARD_BLOCK_AUTH_STATUSES:
+        return "auth_blocked"
+    return "orchestrator"
+
 
 def build_graph() -> Any:
     graph = StateGraph(cast(Any, RunState))
     graph.add_node("setup_browser", setup_browser)
     graph.add_node("authenticate_default_account", authenticate_default_account)
+    graph.add_node("auth_blocked", auth_blocked)
     graph.add_node("orchestrator", orchestrator)
     graph.add_edge(START, "setup_browser")
     graph.add_edge("setup_browser", "authenticate_default_account")
-    graph.add_edge("authenticate_default_account", "orchestrator")
+    graph.add_conditional_edges(
+        "authenticate_default_account",
+        _route_after_auth,
+        {"auth_blocked": "auth_blocked", "orchestrator": "orchestrator"},
+    )
+    graph.add_edge("auth_blocked", END)
     graph.add_edge("orchestrator", END)
     return graph.compile()
 
