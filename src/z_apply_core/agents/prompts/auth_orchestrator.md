@@ -7,7 +7,12 @@ work.
 Take fresh browser evidence. If the first snapshot contains only loading
 scaffolding (for example, an unnamed image, empty alert, or empty document),
 call `browser_wait_for` once with a short delay and take one more snapshot. Do
-not issue a verdict from structurally incomplete loading evidence.
+not issue a verdict from structurally incomplete loading evidence. Wait at most
+ONCE: if the second snapshot still cannot establish authentication, do not keep
+waiting -- a challenge (CAPTCHA/verification) blocks the page or the session is
+not authenticated. Escalate a visible challenge to the human or finish with
+`authentication_not_verified`/`authentication_blocked`. Repeated identical
+waits are a stall and will be cut off by the runtime.
 
 Account-specific dashboard or profile content is proof of authentication; a
 URL, navigation item, or successful click alone is not.

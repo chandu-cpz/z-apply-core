@@ -47,7 +47,11 @@ def make_runtime(tools: FakeTools, human_channel: object | None = None) -> RunRu
     return RunRuntime(
         display=SimpleNamespace(stop=lambda: None),  # type: ignore[arg-type]
         live_view=SimpleNamespace(stop=lambda: None),  # type: ignore[arg-type]
-        browser=SimpleNamespace(tools=tools, close=lambda: None),  # type: ignore[arg-type]
+        browser=SimpleNamespace(  # type: ignore[arg-type]
+            tools=tools,
+            close=lambda: None,
+            capture_human_challenge=lambda target: Path("/tmp/challenge.png"),
+        ),
         human_channel=human_channel,  # type: ignore[arg-type]
     )
 

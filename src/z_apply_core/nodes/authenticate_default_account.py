@@ -48,7 +48,14 @@ async def authenticate_default_account(
             snapshot = await runtime.browser.tools.call("browser_snapshot")
 
         human_tools = (
-            [tool for tool in make_human_tools(runtime.human_channel) if tool.name == "ask_human"]
+            [
+                tool
+                for tool in make_human_tools(
+                    runtime.human_channel,
+                    capture_human_challenge=runtime.browser.capture_human_challenge,
+                )
+                if tool.name == "ask_human"
+            ]
             if runtime.human_channel
             else []
         )
@@ -66,6 +73,7 @@ async def authenticate_default_account(
             provider=provider,
             ledger=ledger_from_config(config),
             default_credentials_available=settings.has_default_credentials,
+            browser=runtime.browser,
         )
 
         status = run.status

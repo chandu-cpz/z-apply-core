@@ -12,6 +12,7 @@ from langchain_core.tools import BaseTool, tool
 from z_apply_core.agents.deepagent_stream import consume_deepagent_stream
 from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
 from z_apply_core.agents.model_provider import ModelProvider
+from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.orchestrator import DEEPAGENT_FILESYSTEM_PERMISSIONS
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
@@ -21,6 +22,7 @@ from z_apply_core.agents.router_middleware import (
     ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     build_router_middleware,
 )
+from z_apply_core.browser_session import BrowserSession
 from z_apply_core.config import CORE_ROOT
 from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.context.token_metric import TokenMetricMiddleware
@@ -41,6 +43,7 @@ async def run_auth_orchestrator(
     provider: ModelProvider | None = None,
     ledger: RunCallLedger | None = None,
     default_credentials_available: bool = False,
+    browser: BrowserSession | None = None,
 ) -> AuthOrchestratorRun:
     configure_z_apply_harness_profile()
     if provider is None:
@@ -93,6 +96,20 @@ async def run_auth_orchestrator(
     usage_emit = lambda event: _emit_usage_sync(sink, event)  # noqa: E731
 
     auth_browser_tools = [tool for tool in browser_tools if tool.name != "browser_take_screenshot"]
+    # The auth agent previously had no stall protection: a model that decided
+    # to keep calling browser_wait_for (the prompt allows one "wait briefly"
+    # for a slow page) could loop forever on identical successful waits,
+    # burning a paid model call per iteration with no turn budget and no
+    # browser-revision progress. The no-progress guard adds the same
+    # identical-call slap / stagnant-tool circuit the orchestrator has; the
+    # exemption for browser_wait_for still allows a couple of settling waits
+    # before the circuit trips.
+    auth_no_progress_guard = NoProgressGuardMiddleware(
+        browser=browser,
+        max_stagnant_tool_calls=8,
+        max_identical_denials=2,
+        max_non_progress=6,
+    )
     agent = create_deep_agent(
         model=selection.llm,
         tools=[
@@ -106,6 +123,7 @@ async def run_auth_orchestrator(
         system_prompt=load_prompt("auth_orchestrator.md"),
         middleware=[
             TokenMetricMiddleware(agent="authenticate_default_account", emit=usage_emit),
+            auth_no_progress_guard,
             model_retry_middleware(provider),
             router_middleware,
             ProseToolCallGuardMiddleware(),
