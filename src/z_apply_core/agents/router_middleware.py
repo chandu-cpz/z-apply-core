@@ -15,21 +15,34 @@ from langchain.agents.middleware.types import (
 )
 from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AnyMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
 
 from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
+from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.context.model_metrics import (
+    CallContent,
     CallMetrics,
     MetricStream,
     begin_model_call,
+    content_from_messages,
+    extract_cache_read,
+    extract_cost,
+    extract_usage_dict,
     extract_usage_tokens,
     format_call_metrics,
     is_async_iterable,
     last_call_timing,
 )
+from z_apply_core.context.token_metric import estimate_messages_tokens
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 logger = logging.getLogger(__name__)
@@ -90,9 +103,7 @@ def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
         return response, False
 
     missing_final = any(
-        isinstance(message, AIMessage)
-        and not message.tool_calls
-        and not message.text.strip()
+        isinstance(message, AIMessage) and not message.tool_calls and not message.text.strip()
         for message in messages
     )
     if not missing_final:
@@ -134,6 +145,121 @@ def _drop_orphan_tool_messages(messages: Sequence[AnyMessage]) -> list[AnyMessag
     return normalized
 
 
+def _prompt_preview(messages: Sequence[AnyMessage], limit: int = 400) -> str:
+    """Return a short preview of the latest substantive user/system content.
+
+    Lets the terminal show what the model was asked even when the graph's
+    stream projections are silent (recovery re-entries, subagents).
+    """
+    for message in reversed(messages):
+        content = getattr(message, "content", None)
+        if isinstance(content, str) and content.strip():
+            return _squash(content, limit)
+        if isinstance(content, list):
+            parts = [
+                block.get("text")
+                for block in content
+                if isinstance(block, dict) and isinstance(block.get("text"), str)
+            ]
+            text = " ".join(part for part in parts if part).strip()
+            if text:
+                return _squash(text, limit)
+    return ""
+
+
+def _squash(value: str, limit: int) -> str:
+    preview = " ".join(value.split())
+    return preview[:limit] if len(preview) > limit else preview
+
+
+_CONTENT_TEXT_LIMIT = 8_000
+_REASONING_LIMIT = 4_000
+_TOOL_ARGS_LIMIT = 2_000
+
+
+def _clip(value: str, limit: int) -> str:
+    if len(value) <= limit:
+        return value
+    return value[:limit] + "…"
+
+
+def _report_call(
+    sink: FrameworkEventSink | None,
+    *,
+    role: str,
+    model_id: str,
+    provider: str,
+    metrics: CallMetrics,
+    content: CallContent,
+    prompt_preview: str,
+    ledger: RunCallLedger | None = None,
+    input_tokens_estimate: int | None = None,
+) -> None:
+    """Emit the terminal-visible record of one completed model call.
+
+    ``model_call_metrics`` keeps its historical shape (backend consumers),
+    while ``model_call_content`` carries the model's reasoning, text, and tool
+    calls so the Rich stream shows every LLM call in every phase.
+    """
+    common = {
+        "role": role,
+        "provider": provider,
+        "duration_ms": metrics.duration_ms,
+        "ttft_ms": metrics.ttft_ms,
+        "input_tokens": metrics.input_tokens,
+        "output_tokens": metrics.output_tokens,
+        "cache_read_tokens": metrics.cache_read_tokens,
+    }
+    tool_calls = [
+        {
+            **call,
+            "args": _clip(str(call.get("args") or ""), _TOOL_ARGS_LIMIT),
+        }
+        if isinstance(call, dict)
+        else call
+        for call in content.tool_calls
+    ]
+    _emit_router_event_sync(
+        sink,
+        role,
+        "model_call_metrics",
+        model_id,
+        common,
+    )
+    _emit_router_event_sync(
+        sink,
+        role,
+        "model_call_content",
+        model_id,
+        {
+            **common,
+            "text": _clip(content.text, _CONTENT_TEXT_LIMIT),
+            "reasoning": _clip(content.reasoning, _REASONING_LIMIT),
+            "tool_calls": tool_calls,
+            "prompt_preview": prompt_preview,
+        },
+    )
+
+    if ledger is not None:
+        input_tokens = (
+            metrics.input_tokens
+            if metrics.input_tokens is not None
+            else (input_tokens_estimate if input_tokens_estimate is not None else 0)
+        )
+        output_tokens = metrics.output_tokens if metrics.output_tokens is not None else 0
+        ledger.record(
+            agent=role,
+            model_id=model_id,
+            provider=provider,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=metrics.cache_read_tokens or 0,
+            ttft_ms=metrics.ttft_ms,
+            duration_ms=metrics.duration_ms,
+            gateway_cost_usd=metrics.cost_usd,
+        )
+
+
 class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """Keep one routed model sticky until a model call actually fails.
 
@@ -152,6 +278,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         *,
         initial_selection: ModelSelection | None = None,
         sink: FrameworkEventSink | None = None,
+        ledger: RunCallLedger | None = None,
     ) -> None:
         super().__init__()
         self._provider = provider
@@ -160,6 +287,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         self._active_selection = initial_selection
         self._last_model_id = initial_selection.info.id if initial_selection is not None else ""
         self._sink = sink
+        self._ledger = ledger
         self._selection_announced = False
 
     @property
@@ -257,8 +385,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             self._selection_announced = True
 
         logger.info(
-            "router %s selected %s (priority=%s, tools=%s, structured=%s, "
-            "vision=%s, reasoning=%s)",
+            "router %s selected %s (priority=%s, tools=%s, structured=%s, vision=%s, reasoning=%s)",
             self._role,
             selection.info.id,
             priority,
@@ -266,6 +393,22 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
             structured,
             vision,
             reasoning,
+        )
+
+        info_metadata = getattr(selection.info, "metadata", None) or {}
+        provider = str(info_metadata.get("provider") or "?")
+        prompt_preview = _prompt_preview(request.messages)
+        input_tokens_estimate = estimate_messages_tokens(request.messages)
+        await self._emit(
+            "model_call_start",
+            selection.info.id,
+            {
+                "role": self._role,
+                "provider": provider,
+                "input_tokens_estimate": input_tokens_estimate,
+                "tool_count": len(request.tools or []),
+                "prompt_preview": prompt_preview,
+            },
         )
 
         start = time.monotonic()
@@ -278,9 +421,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 override["messages"] = sanitized_messages
             timeout_seconds = _model_call_timeout_seconds(self._provider)
             async with asyncio.timeout(timeout_seconds):
-                result: ModelResponse[ResponseT] = await handler(
-                    request.override(**override)
-                )
+                result: ModelResponse[ResponseT] = await handler(request.override(**override))
         except BaseException as exc:  # noqa: BLE001 - re-raised after recording
             logger.warning(
                 "router %s model %s failed: %s",
@@ -365,12 +506,15 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                     {"role": self._role, "reason": "missing_native_action"},
                 )
                 raise failure
-            info_metadata = getattr(selection.info, "metadata", None) or {}
-            provider = str(info_metadata.get("provider") or "?")
             stream_result = getattr(result, "result", None)
 
             def _emit_call_metrics(
-                metrics: CallMetrics, *, model_id: str, role: str, provider_id: str
+                metrics: CallMetrics,
+                content: CallContent,
+                *,
+                model_id: str,
+                role: str,
+                provider_id: str,
             ) -> None:
                 timing = last_call_timing()
                 if timing is not None and timing.ttft_ms is not None:
@@ -383,41 +527,43 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                     metrics.duration_ms / 1000.0,
                     format_call_metrics(metrics),
                 )
-                _emit_router_event_sync(
+                _report_call(
                     self._sink,
-                    role,
-                    "model_call_metrics",
-                    model_id,
-                    {
-                        "role": role,
-                        "provider": provider_id,
-                        "duration_ms": metrics.duration_ms,
-                        "ttft_ms": metrics.ttft_ms,
-                        "input_tokens": metrics.input_tokens,
-                        "output_tokens": metrics.output_tokens,
-                    },
+                    role=role,
+                    model_id=model_id,
+                    provider=provider_id,
+                    metrics=metrics,
+                    content=content,
+                    prompt_preview=prompt_preview,
+                    ledger=self._ledger,
+                    input_tokens_estimate=input_tokens_estimate,
                 )
 
             if is_async_iterable(stream_result):
                 result.result = MetricStream(  # type: ignore[assignment]
                     result.result,
                     started=start,
-                    on_done=lambda metrics: _emit_call_metrics(
+                    on_done=lambda metrics, content: _emit_call_metrics(
                         metrics,
+                        content,
                         model_id=selection.info.id,
                         role=self._role,
                         provider_id=provider,
                     ),
                 )
             else:
+                usage = extract_usage_dict(result)
                 tokens = extract_usage_tokens(result)
                 metrics = CallMetrics(
                     input_tokens=tokens[0] if tokens is not None else None,
                     output_tokens=tokens[1] if tokens is not None else None,
+                    cache_read_tokens=extract_cache_read(usage),
                     duration_ms=int(latency * 1000),
+                    cost_usd=extract_cost(result),
                 )
                 _emit_call_metrics(
                     metrics,
+                    content_from_messages(stream_result),
                     model_id=selection.info.id,
                     role=self._role,
                     provider_id=provider,
@@ -510,12 +656,14 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
         *,
         selection: ModelSelection | None = None,
         sink: FrameworkEventSink | None = None,
+        ledger: RunCallLedger | None = None,
     ) -> None:
         super().__init__()
         self._provider = provider
         self._role = role
         self._selection = selection
         self._sink = sink
+        self._ledger = ledger
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": True})
         self._announced = False
         class_name = type(provider).__name__
@@ -551,8 +699,7 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
             selection = await self._provider.lease(
                 tools=bool(request.tools),
                 structured=request.response_format is not None,
-                vision=_detect_vision(request.messages)
-                or bool(self._policy.get("force_vision")),
+                vision=_detect_vision(request.messages) or bool(self._policy.get("force_vision")),
                 reasoning=bool(self._policy.get("reasoning", False)),
                 priority=cast(
                     "Literal['fast', 'quality', 'balanced']",
@@ -576,30 +723,73 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
             )
             self._announced = True
 
+        prompt_preview = _prompt_preview(request.messages)
+        call_request = request
+        if _provider_stamps_cache_markers(self._provider):
+            stamped = _stamp_prompt_cache_markers(list(request.messages or []))
+            if stamped is not None:
+                call_request = request.override(messages=stamped)
+                prompt_preview = _prompt_preview(stamped)
+        input_tokens_estimate = estimate_messages_tokens(call_request.messages)
+        await self._emit(
+            "model_call_start",
+            selection.info.id,
+            {
+                "role": self._role,
+                "provider": self._provider_name,
+                "input_tokens_estimate": input_tokens_estimate,
+                "tool_count": len(request.tools or []),
+                "prompt_preview": prompt_preview,
+            },
+        )
+
         start = time.monotonic()
         begin_model_call()
-        result: ModelResponse[ResponseT] = await handler(request)
+        try:
+            result: ModelResponse[ResponseT] = await handler(call_request)
+        except Exception as exc:  # noqa: BLE001 - report every failed attempt
+            await self._emit(
+                "model_failed",
+                selection.info.id,
+                {
+                    "role": self._role,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc) or "model call ended without details",
+                },
+            )
+            logger.warning(
+                "router %s model %s [%s] failed in %.2fs: %s: %s",
+                self._role,
+                selection.info.id,
+                self._provider_name,
+                time.monotonic() - start,
+                type(exc).__name__,
+                exc,
+            )
+            raise
         latency = time.monotonic() - start
 
         def _emit_call_metrics(
-            metrics: CallMetrics, *, model_id: str, role: str, provider_id: str
+            metrics: CallMetrics,
+            content: CallContent,
+            *,
+            model_id: str,
+            role: str,
+            provider_id: str,
         ) -> None:
             timing = last_call_timing()
             if timing is not None and timing.ttft_ms is not None:
                 metrics.ttft_ms = timing.ttft_ms
-            _emit_router_event_sync(
+            _report_call(
                 self._sink,
-                role,
-                "model_call_metrics",
-                model_id,
-                {
-                    "role": role,
-                    "provider": provider_id,
-                    "duration_ms": metrics.duration_ms,
-                    "ttft_ms": metrics.ttft_ms,
-                    "input_tokens": metrics.input_tokens,
-                    "output_tokens": metrics.output_tokens,
-                },
+                role=role,
+                model_id=model_id,
+                provider=provider_id,
+                metrics=metrics,
+                content=content,
+                prompt_preview=prompt_preview,
+                ledger=self._ledger,
+                input_tokens_estimate=input_tokens_estimate,
             )
 
         stream_result = getattr(result, "result", None)
@@ -607,22 +797,27 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
             result.result = MetricStream(  # type: ignore[assignment]
                 result.result,
                 started=start,
-                on_done=lambda metrics: _emit_call_metrics(
+                on_done=lambda metrics, content: _emit_call_metrics(
                     metrics,
+                    content,
                     model_id=selection.info.id,
                     role=self._role,
                     provider_id=self._provider_name,
                 ),
             )
         else:
+            usage = extract_usage_dict(result)
             tokens = extract_usage_tokens(result)
             metrics = CallMetrics(
                 input_tokens=tokens[0] if tokens is not None else None,
                 output_tokens=tokens[1] if tokens is not None else None,
+                cache_read_tokens=extract_cache_read(usage),
                 duration_ms=int(latency * 1000),
+                cost_usd=extract_cost(result),
             )
             _emit_call_metrics(
                 metrics,
+                content_from_messages(stream_result),
                 model_id=selection.info.id,
                 role=self._role,
                 provider_id=self._provider_name,
@@ -644,12 +839,63 @@ def is_nim_provider(provider: ModelProvider) -> bool:
     return isinstance(provider, NIMProvider)
 
 
+_PROMPT_CACHE_MARKER: dict[str, Any] = {"type": "ephemeral", "ttl": "1h"}
+
+
+def _stamp_prompt_cache_markers(
+    messages: list[AnyMessage],
+) -> list[AnyMessage] | None:
+    """Add ``cache_control`` breakpoints at the stable system message and the
+    moving tail (last human message) so the gateway persists cache units at
+    those boundaries.
+
+    Markers ride on content-block dicts; ChatDeepSeek preserves extra keys on
+    system/user block lists but flattens assistant and tool messages, so only
+    those two roles are stamped.
+    """
+    if not messages:
+        return None
+    system_idx = next(
+        (i for i, message in enumerate(messages) if isinstance(message, SystemMessage)),
+        None,
+    )
+    human_idx = next(
+        (i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage)),
+        None,
+    )
+    if system_idx is None and human_idx is None:
+        return None
+    stamped: list[AnyMessage] = []
+    for i, message in enumerate(messages):
+        if i in {system_idx, human_idx} and isinstance(message.content, str):
+            message = message.model_copy(
+                update={
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": message.content,
+                            "cache_control": dict(_PROMPT_CACHE_MARKER),
+                        }
+                    ]
+                }
+            )
+        stamped.append(message)
+    return stamped
+
+
+def _provider_stamps_cache_markers(provider: ModelProvider) -> bool:
+    from z_apply_core.agents.model_provider import OpenCodeGoProvider
+
+    return isinstance(provider, OpenCodeGoProvider)
+
+
 def build_router_middleware(
     provider: ModelProvider,
     role: str,
     *,
     selection: ModelSelection | None = None,
     sink: FrameworkEventSink | None = None,
+    ledger: RunCallLedger | None = None,
 ) -> ModelRouter:
     """Return the routing middleware for NIM, a static single-model stand-in otherwise."""
     if is_nim_provider(provider):
@@ -658,5 +904,12 @@ def build_router_middleware(
             role=role,
             initial_selection=selection,
             sink=sink,
+            ledger=ledger,
         )
-    return StaticModelRouter(provider, role=role, selection=selection, sink=sink)
+    return StaticModelRouter(
+        provider,
+        role=role,
+        selection=selection,
+        sink=sink,
+        ledger=ledger,
+    )

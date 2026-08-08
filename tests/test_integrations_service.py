@@ -31,9 +31,7 @@ def _broker_request(
     )
 
 
-async def _requested(
-    core: ZApplyCore, run: _Run, request_id: str, created_at: datetime
-) -> None:
+async def _requested(core: ZApplyCore, run: _Run, request_id: str, created_at: datetime) -> None:
     await core._human_requested(run, _broker_request(request_id, created_at))
 
 

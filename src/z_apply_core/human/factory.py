@@ -12,4 +12,6 @@ def make_configured_human_channel(settings: Settings | None = None) -> HumanChan
     return TelegramHumanChannel(
         token=resolved.telegram_bot_token,
         chat_id=resolved.telegram_group_chat_id,
+        proxy=resolved.telegram_proxy,
+        bot_api_base=resolved.telegram_bot_api_base,
     )

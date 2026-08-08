@@ -9,17 +9,13 @@ from langchain_core.messages import BaseMessage, HumanMessage
 SPECIALIST_TASK_CONTEXT_SOURCE = "specialist_task_controller"
 
 
-class SpecialistTaskContextMiddleware(
-    AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]
-):
+class SpecialistTaskContextMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
     """Keep one delegated specialist objective explicit across routed tool turns."""
 
     async def awrap_model_call(
         self,
         request: ModelRequest[ContextT],
-        handler: Callable[
-            [ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]
-        ],
+        handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT]:
         task = initial_specialist_task(request.messages)
         if not task:

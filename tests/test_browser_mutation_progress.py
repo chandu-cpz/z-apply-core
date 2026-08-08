@@ -57,6 +57,74 @@ class BrowserMutationProgressTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("changed snapshot", result)
         self.assertEqual(call_tool.await_count, 4)
 
+    async def test_browser_type_selects_existing_text_before_typing(self) -> None:
+        select_text = AsyncMock(return_value=None)
+        locator = SimpleNamespace(select_text=select_text)
+        tab = SimpleNamespace(
+            page=MagicMock(),
+            resolve_target=AsyncMock(return_value=SimpleNamespace(locator=locator)),
+        )
+
+        async def call_tool(name: str, _arguments: object = None, **kwargs: object) -> str:
+            del kwargs
+            if name == "browser_snapshot":
+                return "snapshot evidence"
+            return "typed ok"
+
+        backend = SimpleNamespace(
+            call_tool=AsyncMock(side_effect=call_tool),
+            _ensure_tab=AsyncMock(return_value=tab),
+        )
+        session = BrowserSession(
+            None,
+            run_id="type-clear",
+            backend=backend,
+            tools=[],
+            owns_backend=False,
+        )
+        session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+        receipt = await session.call_tool_with_inline_snapshot(
+            "browser_type",
+            {"target": "e90", "text": "9063812386"},
+        )
+
+        self.assertIn("typed ok", receipt)
+        select_text.assert_awaited_once()
+        tab.resolve_target.assert_awaited_once_with(target="e90")
+
+    async def test_browser_type_pre_clear_failure_does_not_block_typing(self) -> None:
+        tab = SimpleNamespace(
+            page=MagicMock(),
+            resolve_target=AsyncMock(side_effect=RuntimeError("stale ref")),
+        )
+
+        async def call_tool(name: str, _arguments: object = None, **kwargs: object) -> str:
+            del kwargs
+            if name == "browser_snapshot":
+                return "snapshot evidence"
+            return "typed ok"
+
+        backend = SimpleNamespace(
+            call_tool=AsyncMock(side_effect=call_tool),
+            _ensure_tab=AsyncMock(return_value=tab),
+        )
+        session = BrowserSession(
+            None,
+            run_id="type-clear-fail",
+            backend=backend,
+            tools=[],
+            owns_backend=False,
+        )
+        session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+        receipt = await session.call_tool_with_inline_snapshot(
+            "browser_type",
+            {"target": "e90", "text": "x"},
+        )
+
+        self.assertIn("typed ok", receipt)
+
     async def test_bounded_wait_returns_fresh_inline_observation(self) -> None:
         session = object.__new__(BrowserSession)
         session._last_observation = None

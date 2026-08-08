@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
 
-from z_apply_core.agents.model_provider import ModelProvider, get_provider
+from z_apply_core.agents.model_provider import provider_from_config
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_tools import (
@@ -14,22 +13,20 @@ from z_apply_core.browser_tools import (
     make_auth_submit_tool,
     make_verification_link_tool,
 )
-from z_apply_core.config import load_settings
+from z_apply_core.config import DEFAULT_RESUME_PATH, load_settings
 from z_apply_core.gmail_tools import make_gmail_tools
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
-from z_apply_core.stream_events import FrameworkEventSink
+from z_apply_core.stream_events import ledger_from_config, sink_from_config
 
-CORE_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RESUME_PATH = (CORE_ROOT / ".z-apply" / "input" / "Chandrakanth-V-Resume.pdf").resolve()
 _log = logging.getLogger(__name__)
 
 
 async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str]:
-    sink = _sink_from_config(config)
-    provider = _provider_from_config(config)
+    sink = sink_from_config(config)
+    provider = provider_from_config(config)
     runtime = _runtime(state)
     initial_snapshot = str(state.get("snapshot", ""))
     if runtime is not None:
@@ -46,6 +43,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         browser_tools=state.get("browser_tools", ()),
         authentication_tools=authentication_tools,
         config=config,
+        call_ledger=ledger_from_config(config),
         human_channel=_human_channel(state),
         sink=sink,
         provider=provider,
@@ -64,31 +62,6 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         "run_status": run.status,
         "snapshot": snapshot,
     }
-
-
-def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        return None
-    sink = configurable.get("sink")
-    if hasattr(sink, "accept"):
-        return sink
-    return None
-
-
-def _provider_from_config(config: RunnableConfig) -> ModelProvider:
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        raise ValueError(
-            "Run config is missing 'configurable'; cannot locate the shared model provider."
-        )
-    provider = configurable.get("model_provider")
-    if isinstance(provider, ModelProvider):
-        return provider
-    router = configurable.get("nim_router")
-    if router is not None:
-        return get_provider(router)
-    raise ValueError("configurable['model_provider'] or 'nim_router' is required.")
 
 
 async def _fresh_snapshot(state: RunState) -> str:

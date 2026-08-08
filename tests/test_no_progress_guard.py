@@ -58,13 +58,45 @@ async def test_successful_tool_churn_ends_turn_when_browser_does_not_advance() -
         )
         await middleware.awrap_tool_call(request, success)  # type: ignore[arg-type]
 
-    request = SimpleNamespace(
-        tool_call={"name": "write_todos", "args": {"step": 3}, "id": "3"}
-    )
+    request = SimpleNamespace(tool_call={"name": "write_todos", "args": {"step": 3}, "id": "3"})
     with pytest.raises(NoProgressCircuitOpen):
         await middleware.awrap_tool_call(request, success)  # type: ignore[arg-type]
 
     assert len(failures) == 1
+
+
+@pytest.mark.asyncio
+async def test_task_delegation_does_not_feed_stagnant_counter() -> None:
+    # Per-field AnswerWriter dispatch makes resolution phases legitimately
+    # task-heavy without any browser mutation; delegation must count as
+    # progress, never as stagnant churn.
+    browser = SimpleNamespace(current_observation=SimpleNamespace(signature="page-a"))
+    middleware = NoProgressGuardMiddleware(
+        browser=browser,
+        max_stagnant_tool_calls=3,
+    )
+
+    async def success(request: object) -> ToolMessage:
+        call = request.tool_call  # type: ignore[attr-defined]
+        return ToolMessage(
+            content="ok",
+            name=str(call["name"]),
+            tool_call_id=str(call["id"]),
+        )
+
+    for index in range(5):
+        request = SimpleNamespace(
+            tool_call={
+                "name": "task",
+                "args": {
+                    "subagent_type": "AnswerWriter",
+                    "description": f"Resolve field {index}",
+                },
+                "id": f"t{index}",
+            }
+        )
+        result = await middleware.awrap_tool_call(request, success)  # type: ignore[arg-type]
+        assert result.status == "success"
 
 
 @pytest.mark.asyncio
@@ -86,9 +118,7 @@ async def test_browser_revision_change_resets_stagnant_tool_counter() -> None:
     click = SimpleNamespace(
         tool_call={"name": "browser_click", "args": {"target": "e1"}, "id": "2"}
     )
-    another_read = SimpleNamespace(
-        tool_call={"name": "browser_snapshot", "args": {}, "id": "3"}
-    )
+    another_read = SimpleNamespace(tool_call={"name": "browser_snapshot", "args": {}, "id": "3"})
 
     await middleware.awrap_tool_call(read, success)  # type: ignore[arg-type]
     await middleware.awrap_tool_call(click, success)  # type: ignore[arg-type]
@@ -210,10 +240,7 @@ async def test_same_action_repeated_within_window_triggers() -> None:
         repetition_threshold=4,
         on_no_progress=failures.append,
     )
-    clicks = [
-        {"name": "browser_click", "args": {"target": "e5"}, "id": f"c{i}"}
-        for i in range(4)
-    ]
+    clicks = [{"name": "browser_click", "args": {"target": "e5"}, "id": f"c{i}"} for i in range(4)]
 
     assert await _execute(middleware, clicks) is True
     assert len(failures) == 1
@@ -427,12 +454,8 @@ async def test_identical_successful_read_is_not_executed_twice() -> None:
 @pytest.mark.asyncio
 async def test_successful_mutation_allows_same_read_again() -> None:
     middleware = NoProgressGuardMiddleware()
-    read = SimpleNamespace(
-        tool_call={"name": "browser_snapshot", "args": {}, "id": "read-1"}
-    )
-    mutation = SimpleNamespace(
-        tool_call={"name": "browser_fill_form", "args": {}, "id": "write-1"}
-    )
+    read = SimpleNamespace(tool_call={"name": "browser_snapshot", "args": {}, "id": "read-1"})
+    mutation = SimpleNamespace(tool_call={"name": "browser_fill_form", "args": {}, "id": "write-1"})
     executions = 0
 
     async def success(request: object) -> ToolMessage:
@@ -451,6 +474,104 @@ async def test_successful_mutation_allows_same_read_again() -> None:
 
     assert repeated.status == "success"
     assert executions == 3
+
+
+@pytest.mark.asyncio
+async def test_state_action_circuit_not_applied_without_bound_browser() -> None:
+    # Subagent guards have no browser bound, so the browser revision can never
+    # change; the state-action circuit must not permanently block a repeated
+    # failing call (for example a memory lookup) for the whole run. Loop
+    # protection stays with the no-progress counters instead.
+    middleware = NoProgressGuardMiddleware(
+        max_identical_denials=99,
+        max_non_progress=99,
+        max_state_action_failures=3,
+    )
+    request = SimpleNamespace(
+        tool_call={
+            "name": "lookup_candidate_memory",
+            "args": {"field_label": "First Name"},
+            "id": "call",
+        }
+    )
+    executions = 0
+
+    async def failed(_request: object) -> ToolMessage:
+        nonlocal executions
+        executions += 1
+        return ToolMessage(
+            content="no match",
+            name="lookup_candidate_memory",
+            tool_call_id="call",
+            status="error",
+        )
+
+    result: ToolMessage | None = None
+    for _ in range(4):
+        result = await middleware.awrap_tool_call(request, failed)  # type: ignore[arg-type]
+
+    assert executions == 4
+    assert result is not None
+    assert "STATE-ACTION CIRCUIT" not in str(result.content)
+
+
+@pytest.mark.asyncio
+async def test_second_identical_browser_call_is_slapped_before_execution() -> None:
+    observation = SimpleNamespace(signature="page-a")
+    browser = SimpleNamespace(current_observation=observation)
+    middleware = NoProgressGuardMiddleware(browser=browser)
+    request = SimpleNamespace(
+        tool_call={"name": "browser_click", "args": {"target": "e133"}, "id": "call"}
+    )
+    executions = 0
+
+    async def click(_request: object) -> ToolMessage:
+        nonlocal executions
+        executions += 1
+        return ToolMessage(
+            content="clicked",
+            name="browser_click",
+            tool_call_id="call",
+        )
+
+    first = await middleware.awrap_tool_call(request, click)  # type: ignore[arg-type]
+    second = await middleware.awrap_tool_call(request, click)  # type: ignore[arg-type]
+
+    assert first.status == "success"
+    assert second.status == "error"
+    assert "IDENTICAL-CALL SLAP" in str(second.content)
+    assert "SECOND time" in str(second.content)
+    assert executions == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_revision_change_allows_identical_call_again() -> None:
+    observation = SimpleNamespace(signature="page-a")
+    browser = SimpleNamespace(current_observation=observation)
+    middleware = NoProgressGuardMiddleware(browser=browser)
+    request = SimpleNamespace(
+        tool_call={"name": "browser_click", "args": {"target": "e133"}, "id": "call"}
+    )
+    executions = 0
+
+    async def click(_: dict) -> ToolMessage:
+        nonlocal executions
+        executions += 1
+        return ToolMessage(
+            content="clicked",
+            name="browser_click",
+            tool_call_id="call",
+        )
+
+    await middleware.awrap_tool_call(request, click)  # type: ignore[arg-type]
+    repeated = await middleware.awrap_tool_call(request, click)  # type: ignore[arg-type]
+    assert repeated.status == "error"
+
+    observation.signature = "page-b"
+    fresh = await middleware.awrap_tool_call(request, click)  # type: ignore[arg-type]
+
+    assert fresh.status == "success"
+    assert executions == 2
 
 
 @pytest.mark.asyncio
@@ -482,11 +603,11 @@ async def test_failed_action_is_blocked_until_browser_evidence_changes() -> None
         await middleware.awrap_tool_call(request, failed)  # type: ignore[arg-type]
     blocked = await middleware.awrap_tool_call(request, failed)  # type: ignore[arg-type]
 
-    assert executions == 3
+    assert executions == 1
     assert "STATE-ACTION CIRCUIT" in str(blocked.content)
 
     browser.current_observation = SimpleNamespace(signature="page-b")
     retried = await middleware.awrap_tool_call(request, failed)  # type: ignore[arg-type]
 
-    assert executions == 4
+    assert executions == 2
     assert "target unavailable" in str(retried.content)

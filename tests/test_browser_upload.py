@@ -11,13 +11,18 @@ from z_apply_core.browser_session import BrowserSession, BrowserToolExecutionErr
 class BrowserUploadTests(unittest.TestCase):
     def _session(self) -> tuple[BrowserSession, AsyncMock]:
         trigger = MagicMock()
+        empty_controls = SimpleNamespace(count=AsyncMock(return_value=0))
         tab = MagicMock()
         tab.resolve_target = AsyncMock(return_value=SimpleNamespace(locator=trigger))
+        tab.page.locator.return_value = empty_controls
 
         session = BrowserSession(
             None,
             run_id="upload-test",
-            backend=SimpleNamespace(_ensure_tab=AsyncMock(return_value=tab)),
+            backend=SimpleNamespace(
+                _ensure_tab=AsyncMock(return_value=tab),
+                call_tool=AsyncMock(return_value=SimpleNamespace(is_error=True)),
+            ),
             tools=[],
             owns_backend=False,
         )
@@ -67,6 +72,54 @@ class BrowserUploadTests(unittest.TestCase):
         self.assertEqual(session.pending_atomic_upload_target, "")
         self.assertIn("Files attached directly", result)
 
+    def test_upload_accepts_fresh_ref_behind_pending_chooser(self) -> None:
+        chooser = SimpleNamespace(set_files=AsyncMock())
+        session, resolver = self._session()
+        session._pending_atomic_upload_target = "e610"
+        session._pending_file_chooser = chooser
+        file_input = MagicMock()
+
+        with patch(
+            "z_apply_core.browser_session.resolve_file_input",
+            new=AsyncMock(return_value=file_input),
+        ):
+            result = asyncio.run(session.upload_files("e811", ["/resume.pdf"]))
+
+        chooser.set_files.assert_awaited_once_with(["/resume.pdf"])
+        resolver.assert_awaited_once_with(target="e811")
+        self.assertEqual(session.pending_atomic_upload_target, "")
+        self.assertIn("Files attached directly", result)
+
+    def test_upload_drains_layer_chooser_then_attaches_directly(self) -> None:
+        session, resolver = self._session()
+        layer_calls = 0
+
+        async def layer_upload(_name: str, _arguments: object, *, meta: object) -> object:
+            nonlocal layer_calls
+            del meta
+            layer_calls += 1
+            # First call consumes one recorded chooser; the next finds none.
+            return SimpleNamespace(is_error=layer_calls > 1)
+
+        session._backend.call_tool = AsyncMock(side_effect=layer_upload)
+        file_input = MagicMock()
+        file_input.set_input_files = AsyncMock()
+
+        with patch(
+            "z_apply_core.browser_session.resolve_file_input",
+            new=AsyncMock(return_value=file_input),
+        ):
+            result = asyncio.run(session.upload_files("e366", ["/resume.pdf"]))
+
+        self.assertEqual(layer_calls, 2)
+        session._backend.call_tool.assert_awaited_with(
+            "browser_file_upload",
+            {"paths": []},
+            meta=ANY,
+        )
+        file_input.set_input_files.assert_awaited_once_with(["/resume.pdf"])
+        self.assertIn("Files attached directly", result)
+
 
 class FileChooserGuardTests(unittest.IsolatedAsyncioTestCase):
     async def test_indirect_upload_click_is_intercepted_without_native_picker(self) -> None:
@@ -104,12 +157,53 @@ class FileChooserGuardTests(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaisesRegex(
             BrowserToolExecutionError,
-            "file chooser activation intercepted",
+            "file chooser intercepted",
         ):
             await session.call_tool("browser_click", {"target": "e610"})
 
         page.on.assert_called_once_with("filechooser", ANY)
         page.remove_listener.assert_called_once_with("filechooser", ANY)
+        self.assertEqual(session.pending_atomic_upload_target, "e610")
+
+    async def test_non_click_action_opening_chooser_is_intercepted_with_guidance(self) -> None:
+        listeners: dict[str, list[object]] = {}
+        page = MagicMock()
+
+        def on(event: str, callback: object) -> None:
+            listeners.setdefault(event, []).append(callback)
+
+        def remove_listener(event: str, callback: object) -> None:
+            listeners[event].remove(callback)
+
+        page.on.side_effect = on
+        page.remove_listener.side_effect = remove_listener
+        tab = SimpleNamespace(page=page)
+
+        async def call_tool(_name: str, _arguments: object, *, meta: object) -> str:
+            del meta
+            for callback in tuple(listeners.get("filechooser", [])):
+                callback(SimpleNamespace())  # type: ignore[operator]
+            return "typed"
+
+        backend = SimpleNamespace(
+            _ensure_tab=AsyncMock(return_value=tab),
+            call_tool=AsyncMock(side_effect=call_tool),
+        )
+        session = BrowserSession(
+            None,
+            run_id="file-chooser-guard",
+            backend=backend,
+            tools=[],
+            owns_backend=False,
+        )
+        session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(
+            BrowserToolExecutionError,
+            "browser_click_upload",
+        ):
+            await session.call_tool("browser_type", {"target": "e610", "text": "x", "submit": True})
+
         self.assertEqual(session.pending_atomic_upload_target, "e610")
 
     async def test_ordinary_click_executes_with_temporary_filechooser_listener(self) -> None:

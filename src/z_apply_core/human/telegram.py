@@ -6,17 +6,77 @@ import html
 import logging
 import re
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import IO, Any, Literal, cast
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, Update
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+from z_apply_core.config import CORE_ROOT
 from z_apply_core.human.sanitize import sanitize_human_text
 
 logger = logging.getLogger(__name__)
-CORE_ROOT = Path(__file__).resolve().parents[3]
+
+# PTB's HTTPXRequest defaults to 5s for read/write/connect and 1s for pool
+# timeouts; on a flaky network a single slow Telegram call raises
+# ``TimedOut: Timed out`` after ~5s and, unhandled, kills the asking agent.
+# These values give the bot API generous headroom so brief network stalls do
+# not fail a human question. ``get_updates_*`` apply to the polling loop.
+_TELEGRAM_NETWORK_TIMEOUTS: dict[str, float] = {
+    "connect_timeout": 30.0,
+    "read_timeout": 60.0,
+    "write_timeout": 60.0,
+    "pool_timeout": 10.0,
+    "get_updates_connect_timeout": 30.0,
+    "get_updates_read_timeout": 30.0,
+    "get_updates_write_timeout": 30.0,
+    "get_updates_pool_timeout": 10.0,
+}
+
+_NETWORK_RETRY_ATTEMPTS = 3
+_NETWORK_RETRY_BACKOFF_SECONDS = 1.5
+
+
+async def _retry_network_call(
+    factory: Callable[[], Awaitable[Any]],
+    *,
+    attempts: int = _NETWORK_RETRY_ATTEMPTS,
+    backoff: float = _NETWORK_RETRY_BACKOFF_SECONDS,
+    description: str = "Telegram request",
+) -> Any:
+    """Run one Telegram API call, retrying transient network failures.
+
+    ``TimedOut`` and plain ``NetworkError`` are transport-level flakes (PTB
+    cannot tell whether the request landed), so they are retried with short
+    backoff like the official ``network_retry_loop`` does for polling. In PTB
+    22.x ``BadRequest`` subclasses ``NetworkError`` even though it is a
+    definitive API rejection, so it is never retried. Everything else
+    propagates immediately.
+    """
+    last_error: BaseException | None = None
+    for attempt in range(attempts):
+        try:
+            return await factory()
+        except BadRequest:
+            raise
+        except NetworkError as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                delay = backoff * (attempt + 1)
+                logger.warning(
+                    "%s failed with %s (attempt %s/%s); retrying in %.1fs",
+                    description,
+                    exc,
+                    attempt + 1,
+                    attempts,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+    assert last_error is not None
+    raise last_error
 
 
 def _norm(value: str) -> str:
@@ -50,13 +110,26 @@ class PendingHumanRequest:
     prompt_message_id: int
     future: asyncio.Future[str]
     options: list[str]
+    field_label: str = ""
 
 
 class TelegramHumanChannel:
-    def __init__(self, *, token: str, chat_id: int | str) -> None:
+    def __init__(
+        self,
+        *,
+        token: str,
+        chat_id: int | str,
+        proxy: str = "",
+        bot_api_base: str = "",
+    ) -> None:
         self.token = token
         self.chat_id = chat_id
-        self.bot = Bot(token=token)
+        self._proxy = proxy
+        self._bot_api_base = bot_api_base
+        self.bot = Bot(
+            token=token,
+            base_url=bot_api_base or "https://api.telegram.org/bot",
+        )
         self._pending: dict[str, PendingHumanRequest] = {}
         self._pending_by_topic: dict[int | None, set[str]] = {}
         self._pending_by_message: dict[int, str] = {}
@@ -66,6 +139,7 @@ class TelegramHumanChannel:
         self._run_topic_name: str | None = None
         self._app: Application[Any, Any, Any, Any, Any, Any] | None = None
         self._start_lock = asyncio.Lock()
+        self._healthy: bool | None = None
 
     def bind_run(
         self,
@@ -172,22 +246,59 @@ class TelegramHumanChannel:
 
         try:
             with artifact.open("rb") as content:
-                if artifact.suffix.casefold() == ".pdf":
-                    await self.bot.send_document(
-                        chat_id=self.chat_id,
-                        message_thread_id=topic_id,
-                        document=content,
-                        caption=sanitized_caption,
-                    )
-                else:
-                    await self.bot.send_photo(
-                        chat_id=self.chat_id,
-                        message_thread_id=topic_id,
-                        photo=content,
-                        caption=sanitized_caption,
-                    )
+                kind: Literal["photo", "document"] = (
+                    "document" if artifact.suffix.casefold() == ".pdf" else "photo"
+                )
+                await self._send_with_retry(
+                    artifact=artifact,
+                    topic_id=topic_id,
+                    kind=kind,
+                    content=content,
+                    caption=sanitized_caption,
+                )
         except Exception:
             logger.exception("Failed to send Telegram artifact: %s", artifact)
+
+    async def _send_with_retry(
+        self,
+        *,
+        artifact: Path,
+        topic_id: int | None,
+        kind: Literal["photo", "document"],
+        content: IO[bytes],
+        caption: str,
+    ) -> None:
+        """Send a photo or document artifact with generous timeouts and one retry."""
+
+        async def send_once() -> None:
+            if kind == "photo":
+                await self.bot.send_photo(
+                    chat_id=self.chat_id,
+                    message_thread_id=topic_id,
+                    photo=content,
+                    caption=caption,
+                    read_timeout=120,
+                    write_timeout=120,
+                )
+            else:
+                await self.bot.send_document(
+                    chat_id=self.chat_id,
+                    message_thread_id=topic_id,
+                    document=content,
+                    caption=caption,
+                    read_timeout=120,
+                    write_timeout=120,
+                )
+
+        try:
+            await send_once()
+        except Exception:
+            logger.warning(
+                "Telegram %s send failed for %s; retrying once.",
+                kind,
+                artifact,
+            )
+            await send_once()
 
     async def _ask_once(
         self,
@@ -206,8 +317,23 @@ class TelegramHumanChannel:
     ) -> str:
         if self._app is None:
             await self.start()
+        if not await self._ensure_healthy():
+            raise RuntimeError(
+                "Telegram Bot API is unreachable from this machine; the human "
+                "question could not be delivered. Check network access to "
+                "api.telegram.org and retry once the channel is reachable."
+            )
         topic_id = await self._get_or_create_topic(url=url, company=company, role=role)
         option_list = [option.strip() for option in (options or []) if option and option.strip()]
+
+        if field_label:
+            for pending_req in self._pending.values():
+                if pending_req.field_label == field_label:
+                    logger.info(
+                        "Reusing the pending Telegram question for field %r",
+                        field_label,
+                    )
+                    return await pending_req.future
 
         text = self._message_text(
             request_id=request_id,
@@ -218,14 +344,18 @@ class TelegramHumanChannel:
             has_options=bool(option_list),
             has_other_pending=bool(self._pending_by_topic.get(topic_id)),
         )
-        sent = await self.bot.send_message(
-            chat_id=self.chat_id,
-            message_thread_id=topic_id,
-            text=text,
-            parse_mode="HTML",
-            disable_web_page_preview=True,
-            reply_markup=self._build_option_markup(request_id, option_list),
+        sent = await _retry_network_call(
+            lambda: self.bot.send_message(
+                chat_id=self.chat_id,
+                message_thread_id=topic_id,
+                text=text,
+                parse_mode="HTML",
+                disable_web_page_preview=True,
+                reply_markup=self._build_option_markup(request_id, option_list),
+            ),
+            description="Telegram question send",
         )
+        sent = cast(Message, sent)
 
         future: asyncio.Future[str] = asyncio.get_running_loop().create_future()
         pending = PendingHumanRequest(
@@ -234,6 +364,7 @@ class TelegramHumanChannel:
             prompt_message_id=sent.message_id,
             future=future,
             options=option_list,
+            field_label=field_label,
         )
         self._pending[request_id] = pending
         self._pending_by_message[sent.message_id] = request_id
@@ -279,7 +410,14 @@ class TelegramHumanChannel:
             if self._app is not None:
                 return
 
-            app = Application.builder().token(self.token).build()
+            builder = Application.builder().token(self.token)
+            if self._bot_api_base:
+                builder = builder.base_url(self._bot_api_base)
+            if self._proxy:
+                builder = builder.proxy(self._proxy)
+            for timeout_name, timeout_value in _TELEGRAM_NETWORK_TIMEOUTS.items():
+                builder = getattr(builder, timeout_name)(timeout_value)
+            app = builder.build()
             app.add_handler(CallbackQueryHandler(self._handle_callback, pattern=r"^hitl:"))
             app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_reply))
 
@@ -293,6 +431,36 @@ class TelegramHumanChannel:
                 raise
             self._app = app
             logger.info("Telegram human channel listener started")
+            self._healthy = await self._probe_health()
+            if not self._healthy:
+                logger.error(
+                    "Telegram Bot API is UNREACHABLE (%s). Human questions will "
+                    "fail fast with a visible error until Telegram is reachable "
+                    "again; the run continues without them.",
+                    self.chat_id,
+                )
+
+    async def _probe_health(self) -> bool:
+        """Probe the Bot API with a short timeout; no retries."""
+        if self._app is None:
+            return False
+        try:
+            await self.bot.get_me(read_timeout=8, connect_timeout=8, write_timeout=8)
+            return True
+        except Exception as exc:  # noqa: BLE001 - any transport failure means unhealthy
+            logger.warning("Telegram health probe failed: %s", exc)
+            return False
+
+    async def _ensure_healthy(self) -> bool:
+        """Return True when the channel can deliver; re-probe after failures.
+
+        A downed Telegram API must fail the ask fast and visibly instead of
+        hanging the run inside silent send retries.
+        """
+        if self._healthy is not False:
+            return True
+        self._healthy = await self._probe_health()
+        return bool(self._healthy)
 
     async def stop(self) -> None:
         async with self._start_lock:
@@ -301,6 +469,7 @@ class TelegramHumanChannel:
             if app is None:
                 return
             self._app = None
+            self._healthy = None
             await _shutdown_application(app)
             logger.info("Telegram human channel listener stopped")
 

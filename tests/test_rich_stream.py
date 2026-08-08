@@ -58,9 +58,7 @@ class RichStreamRendererTests(unittest.IsolatedAsyncioTestCase):
         with self.assertLogs("z_apply_core.rich_stream", level="INFO") as captured:
             renderer.print_result(V3RunResult(event_count=1, duration_ms=5), {})
 
-        self.assertTrue(
-            any("last agent turn ttft: 900ms" in line for line in captured.output)
-        )
+        self.assertTrue(any("last agent turn ttft: 900ms" in line for line in captured.output))
 
     async def test_agent_lifecycle_uses_logger_instead_of_direct_console_output(self) -> None:
         output = StringIO()
@@ -82,7 +80,9 @@ class RichStreamRendererTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("started", captured.output[0])
         self.assertEqual(output.getvalue(), "")
 
-    async def test_buffered_deltas_flush_as_static_panels_before_tools(self) -> None:
+    async def test_projection_message_content_is_suppressed_in_favor_of_middleware_events(
+        self,
+    ) -> None:
         output = StringIO()
         renderer = RichStreamRenderer(
             Console(file=output, color_system=None, force_terminal=False, width=100)
@@ -91,43 +91,121 @@ class RichStreamRendererTests(unittest.IsolatedAsyncioTestCase):
         await renderer.accept(
             event(
                 "agent_message_delta",
-                name="BrowserSpecialist",
+                name="orchestrator",
                 kind="reasoning",
                 delta="internal chain of thought",
             )
         )
         await renderer.accept(
             event(
-                "agent_message_delta",
-                name="BrowserSpecialist",
-                kind="text",
-                delta="Observed the application form.",
+                "agent_message",
+                name="orchestrator",
+                reasoning="trace",
+                text="Observed the application form.",
             )
         )
-        # Deltas stay buffered until a stream boundary.
+
+        # Model content renders only from the middleware model_call_content
+        # event; the projection messages must stay silent to avoid duplicates.
         self.assertEqual(output.getvalue(), "")
 
         await renderer.accept(
             event(
-                "agent_tool_start",
-                name="BrowserSpecialist",
-                tool_name="browser_snapshot",
-                input={},
+                "model_call_content",
+                name="orchestrator",
+                role="orchestrator",
+                model_id="m",
+                provider="p",
+                reasoning="internal chain of thought",
+                text="Observed the application form.",
+            )
+        )
+        rendered = output.getvalue()
+        self.assertIn("internal chain of thought", rendered)
+        self.assertIn("Observed the application form.", rendered)
+        self.assertEqual(rendered.count("internal chain of thought"), 1)
+
+    async def test_model_call_start_renders_role_model_and_prompt_preview(self) -> None:
+        output = StringIO()
+        renderer = RichStreamRenderer(
+            Console(file=output, color_system=None, force_terminal=False, width=120)
+        )
+
+        await renderer.accept(
+            event(
+                "model_call_start",
+                name="AnswerWriter",
+                role="AnswerWriter",
+                model_id="agnes-2.0-flash",
+                provider="agnes",
+                input_tokens_estimate=321,
+                tool_count=12,
+                prompt_preview="Fill the Skills field on the current form.",
             )
         )
 
         rendered = output.getvalue()
-        self.assertIn("internal chain of thought", rendered)
-        self.assertIn("Observed the application form.", rendered)
-        self.assertIn("tool start: browser_snapshot", rendered)
-        self.assertLess(
-            rendered.index("internal chain of thought"),
-            rendered.index("Observed the application form."),
+        self.assertIn("AnswerWriter", rendered)
+        self.assertIn("agnes-2.0-flash", rendered)
+        self.assertIn("in≈321 tok", rendered)
+        self.assertIn("12 tools", rendered)
+        self.assertIn("Fill the Skills field", rendered)
+
+    async def test_model_call_content_renders_reasoning_text_and_tools(self) -> None:
+        output = StringIO()
+        renderer = RichStreamRenderer(
+            Console(file=output, color_system=None, force_terminal=False, width=120)
         )
-        self.assertLess(
-            rendered.index("Observed the application form."),
-            rendered.index("tool start: browser_snapshot"),
+
+        with self.assertLogs("z_apply_core.rich_stream", level="INFO") as captured:
+            await renderer.accept(
+                event(
+                    "model_call_content",
+                    name="orchestrator",
+                    role="orchestrator",
+                    model_id="agnes-2.0-flash",
+                    provider="agnes",
+                    ttft_ms=1042,
+                    duration_ms=9190,
+                    input_tokens=9110,
+                    output_tokens=700,
+                    reasoning="check the phone field first",
+                    text="The phone field is present.",
+                    tool_calls=[
+                        {"name": "browser_click", "args": '{"target": "e208"}', "index": 0}
+                    ],
+                )
+            )
+
+        rendered = output.getvalue()
+        self.assertIn("orchestrator thinking", rendered)
+        self.assertIn("check the phone field first", rendered)
+        self.assertIn("orchestrator response", rendered)
+        self.assertIn("The phone field is present.", rendered)
+        self.assertIn("browser_click", rendered)
+        self.assertIn("orchestrator call complete", captured.output[0])
+        self.assertIn("in=9110 out=700", captured.output[0])
+
+    async def test_model_call_metrics_is_suppressed_in_favor_of_content(self) -> None:
+        output = StringIO()
+        renderer = RichStreamRenderer(
+            Console(file=output, color_system=None, force_terminal=False, width=120)
         )
+
+        await renderer.accept(
+            event(
+                "model_call_metrics",
+                name="orchestrator",
+                role="orchestrator",
+                model_id="agnes-2.0-flash",
+                provider="agnes",
+                ttft_ms=100,
+                input_tokens=10,
+                output_tokens=20,
+            )
+        )
+
+        self.assertEqual(output.getvalue(), "")
 
     def test_final_result_does_not_dump_browser_snapshot(self) -> None:
         output = StringIO()

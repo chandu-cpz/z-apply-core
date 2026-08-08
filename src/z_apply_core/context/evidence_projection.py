@@ -50,7 +50,6 @@ _COLLAPSED_RUN_MIN = 6
 _COLLAPSED_RUN_KEEP = 3
 
 
-
 class EvidenceProjection:
     """Deterministic, budget-bounded projection of one browser observation."""
 
@@ -67,9 +66,7 @@ class EvidenceProjection:
             return text
 
         lines = _collapse_repetitive_runs(text.splitlines())
-        classified = [
-            (index, line, _classify_line(line)) for index, line in enumerate(lines)
-        ]
+        classified = [(index, line, _classify_line(line)) for index, line in enumerate(lines)]
         selected: set[int] = set()
         used = 0
         for tier in ("interactive", "informative", "chrome"):
@@ -127,9 +124,7 @@ def _collapse_repetitive_runs(lines: list[str]) -> list[str]:
             if len(run) > _COLLAPSED_RUN_MIN:
                 collapsed.extend(run[:_COLLAPSED_RUN_KEEP])
                 ref = _ref_of(run[0])
-                collapsed.append(
-                    f"[ref={ref}] {role} x{len(run)} similar items (collapsed)"
-                )
+                collapsed.append(f"[ref={ref}] {role} x{len(run)} similar items (collapsed)")
             else:
                 collapsed.extend(run)
             index = end

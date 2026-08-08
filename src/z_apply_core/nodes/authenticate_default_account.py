@@ -1,20 +1,29 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 
 from langchain_core.runnables.config import RunnableConfig
 
 from z_apply_core.agents.auth_orchestrator import run_auth_orchestrator
-from z_apply_core.agents.model_provider import ModelProvider, get_provider
+from z_apply_core.agents.model_provider import provider_from_config
 from z_apply_core.browser_tools import AUTH_AGENT_BROWSER_TOOLS
 from z_apply_core.config import load_settings
 from z_apply_core.gmail_tools import make_gmail_tools
 from z_apply_core.human.tools import make_human_tools
 from z_apply_core.runtime import RunRuntime
 from z_apply_core.state import RunState
-from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent, SequencedEventSink
+from z_apply_core.stream_events import (
+    FrameworkEventSink,
+    FrameworkTraceEvent,
+    SequencedEventSink,
+    ledger_from_config,
+    sink_from_config,
+)
 
 SIMPLIFY_DASHBOARD_URL = "https://simplify.jobs/dashboard"
+
+logger = logging.getLogger(__name__)
 
 
 async def authenticate_default_account(
@@ -27,7 +36,7 @@ async def authenticate_default_account(
 
     settings = load_settings()
     original_url = str(state["job_url"])
-    sink = SequencedEventSink(_sink_from_config(config), run_id=runtime.run_id)
+    sink = SequencedEventSink(sink_from_config(config), run_id=runtime.run_id)
     await _emit(sink, "started", "Opening Simplify auth check.")
 
     try:
@@ -39,15 +48,11 @@ async def authenticate_default_account(
             snapshot = await runtime.browser.tools.call("browser_snapshot")
 
         human_tools = (
-            [
-                tool
-                for tool in make_human_tools(runtime.human_channel)
-                if tool.name == "ask_human"
-            ]
+            [tool for tool in make_human_tools(runtime.human_channel) if tool.name == "ask_human"]
             if runtime.human_channel
             else []
         )
-        provider = _provider_from_config(config)
+        provider = provider_from_config(config)
         run = await run_auth_orchestrator(
             snapshot=snapshot,
             browser_tools=runtime.browser.tools.langchain_tools(AUTH_AGENT_BROWSER_TOOLS),
@@ -59,11 +64,24 @@ async def authenticate_default_account(
             config=config,
             sink=sink,
             provider=provider,
+            ledger=ledger_from_config(config),
             default_credentials_available=settings.has_default_credentials,
         )
 
-        restored_snapshot = await _restore_job_page(runtime, original_url)
         status = run.status
+        restored_snapshot = str(state.get("snapshot", ""))
+        try:
+            restored_snapshot = await _restore_job_page(runtime, original_url)
+        except Exception as exc:
+            # Restoring the job page is housekeeping, not the auth verdict. A
+            # navigation abort (e.g. Firefox NS_ERROR_ABORT on a redirecting
+            # ATS) must not turn a completed auth check into a failure; the
+            # orchestrator re-observes the live page anyway.
+            logger.warning(
+                "Auth check %s but job page restore navigation failed: %s",
+                status,
+                exc,
+            )
         await _emit(sink, status, run.summary)
         return {
             "auth_status": status,
@@ -91,31 +109,6 @@ async def _restore_job_page(runtime: RunRuntime, original_url: str) -> str:
     if restored_snapshot.startswith("### Error"):
         return restored_snapshot
     return await runtime.browser.tools.call("browser_snapshot")
-
-
-def _sink_from_config(config: RunnableConfig) -> FrameworkEventSink | None:
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        return None
-    sink = configurable.get("sink")
-    if hasattr(sink, "accept"):
-        return sink
-    return None
-
-
-def _provider_from_config(config: RunnableConfig) -> ModelProvider:
-    configurable = config.get("configurable")
-    if not isinstance(configurable, dict):
-        raise ValueError(
-            "Run config is missing 'configurable'; cannot locate the shared model provider."
-        )
-    provider = configurable.get("model_provider")
-    if isinstance(provider, ModelProvider):
-        return provider
-    router = configurable.get("nim_router")
-    if router is not None:
-        return get_provider(router)
-    raise ValueError("configurable['model_provider'] or 'nim_router' is required.")
 
 
 async def _emit(

@@ -4,14 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
-
-
-def utc_now() -> datetime:
-    return datetime.now(UTC)
 
 
 class RunStatus(StrEnum):
@@ -28,10 +24,7 @@ class RunPhase(StrEnum):
     SETUP = "setup"
     AUTHENTICATION = "authentication"
     APPLICATION = "application"
-    REVIEW = "review"
     APPROVAL = "approval"
-    SUBMISSION = "submission"
-    VERIFICATION = "verification"
     TERMINAL = "terminal"
 
 

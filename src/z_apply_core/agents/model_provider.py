@@ -20,6 +20,7 @@ def _build_llm(
     api_key: str,
     temperature: float | None = None,
     extra_body: dict[str, Any] | None = None,
+    request_timeout: float | None = 180.0,
     **chat_kwargs: Any,
 ) -> Any:
     """Construct one OpenAI-compatible chat model with uniform core args.
@@ -28,6 +29,12 @@ def _build_llm(
     accept ``model``/``api_key``/``base_url`` under their public pydantic
     aliases, and vendor-specific options ride through ``extra_body`` or the
     class's own typed parameters.
+
+    ``request_timeout`` bounds one model call. Without it every OpenAI-style
+    SDK defaults to 600s, so a stalled gateway connection (seen with flaky
+    ISPs and gateway backends) wedges the run silently for ten minutes before
+    the retry middleware can recover. The outer retry policy turns a bounded
+    timeout into retries with backoff instead of a silent hang.
     """
     from pydantic import SecretStr
 
@@ -40,6 +47,8 @@ def _build_llm(
         kwargs["temperature"] = temperature
     if extra_body:
         kwargs["extra_body"] = extra_body
+    if request_timeout is not None:
+        kwargs["request_timeout"] = request_timeout
     kwargs.update(chat_kwargs)
     llm = chat_cls(**kwargs)
     from z_apply_core.context.model_metrics import attach_first_token_callback
@@ -394,16 +403,31 @@ class OpenCodeGoProvider:
 
     Serves a single model, DeepSeek V4 Flash, via the gateway's
     ``/zen/go/v1`` chat-completions endpoint. Thinking maps to the gateway's
-    DeepSeek-style ``thinking``/``reasoning_effort`` body fields.
+    DeepSeek-style ``thinking``/``reasoning_effort`` body fields, but it is
+    DISABLED by default: on orchestrator-sized prompts the V4 thinking blocks
+    consume the entire output budget (measured: 21.5s stream with zero
+    content tokens at max_tokens=2048, versus 3.3s and a full answer with
+    thinking off — a ~6.5x speedup). Set ``OPENCODEGO_THINKING=1`` to
+    re-enable ``thinking``/``reasoning_effort``.
+
+    Prompt caching is enabled provider-wide: a stable ``prompt_cache_key``
+    plus ``prompt_cache_retention: "24h"`` (both empirically accepted by the
+    gateway for deepseek-v4-flash) keep the DeepSeek prefix cache alive
+    across human-wait gaps and longer runs. The ``x-opencode-session`` header
+    gives the gateway per-session affinity, mirroring the opencode CLI.
     """
 
     BASE_URL = "https://opencode.ai/zen/go/v1"
     DEFAULT_MODEL = "deepseek-v4-flash"
+    DEFAULT_CACHE_KEY = "z-apply"
+    DEFAULT_SESSION_ID = "z-apply"
 
     def __init__(
         self,
         api_key: str = "",
         model: str = "",
+        cache_key: str = "",
+        session_id: str = "",
     ) -> None:
         self._api_key = api_key or os.environ.get("OPENCODEGO_API_KEY", "")
         if not self._api_key:
@@ -412,6 +436,12 @@ class OpenCodeGoProvider:
                 "Create a key at https://opencode.ai/"
             )
         self._model = model or os.environ.get("OPENCODEGO_MODEL", "") or self.DEFAULT_MODEL
+        self._cache_key = (
+            cache_key or os.environ.get("OPENCODEGO_CACHE_KEY", "") or self.DEFAULT_CACHE_KEY
+        )
+        self._session_id = (
+            session_id or os.environ.get("OPENCODEGO_SESSION", "") or self.DEFAULT_SESSION_ID
+        )
 
     async def lease(
         self,
@@ -464,10 +494,86 @@ class OpenCodeGoProvider:
                     **kwargs,
                 )
 
+            def _create_chat_result(
+                self,
+                response: Any,
+                generation_info: dict[str, Any] | None = None,
+            ) -> Any:
+                result = super()._create_chat_result(response, generation_info)
+                raw = getattr(response, "cost", None)
+                if raw is None:
+                    model_extra = getattr(response, "model_extra", None) or {}
+                    raw = model_extra.get("cost") if isinstance(model_extra, dict) else None
+                if raw is not None and result.generations:
+                    result.generations[0].message.additional_kwargs["cost"] = raw
+                return result
+
+            def _get_request_payload(
+                self,
+                input_: LanguageModelInput,
+                *,
+                stop: list[str] | None = None,
+                **kwargs: Any,
+            ) -> dict[str, Any]:
+                from langchain_core.messages import AIMessage
+
+                payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+                messages = payload.get("messages")
+                if not isinstance(messages, list):
+                    return payload
+                source_messages = self._convert_input(input_).to_messages()
+                pending_calls: list[dict[str, Any]] | None = None
+                for message, source in zip(messages, source_messages, strict=True):
+                    if isinstance(source, AIMessage) and message.get("role") == "assistant":
+                        if message.get("tool_calls"):
+                            reasoning = source.additional_kwargs.get("reasoning_content")
+                            message["reasoning_content"] = (
+                                reasoning if isinstance(reasoning, str) else ""
+                            )
+                            pending_calls = list(message["tool_calls"])
+                            for call, source_call in zip(
+                                pending_calls, source.tool_calls, strict=False
+                            ):
+                                if not call.get("id") and source_call.get("id"):
+                                    call["id"] = source_call["id"]
+                        else:
+                            pending_calls = None
+                    elif (
+                        message.get("role") == "tool"
+                        and pending_calls
+                        and isinstance(message.get("tool_call_id"), str)
+                    ):
+                        call = pending_calls.pop(0)
+                        call_id = call.get("id") or ""
+                        tool_id = message["tool_call_id"]
+                        if tool_id and not call_id:
+                            call["id"] = tool_id
+                        elif call_id and not tool_id:
+                            message["tool_call_id"] = call_id
+                dump_dir = os.environ.get("Z_APPLY_PAYLOAD_DUMP")
+                if dump_dir:
+                    import json
+                    import time as _time
+                    from pathlib import Path
+
+                    Path(dump_dir).mkdir(parents=True, exist_ok=True)
+                    Path(dump_dir, f"{_time.time()}.json").write_text(
+                        json.dumps(payload, default=str)
+                    )
+                return payload
+
         extra_body: dict[str, Any] = {
-            "thinking": {"type": "enabled"},
-            "reasoning_effort": "high",
+            "thinking": {"type": "disabled"},
+            "prompt_cache_key": self._cache_key,
+            "prompt_cache_retention": "24h",
         }
+        if os.environ.get("OPENCODEGO_THINKING", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            extra_body.update({"thinking": {"type": "enabled"}, "reasoning_effort": "high"})
 
         llm = _build_llm(
             ZenGatewayDeepSeek,
@@ -476,14 +582,17 @@ class OpenCodeGoProvider:
             api_key=self._api_key,
             temperature=0.3,
             extra_body=extra_body,
+            default_headers={"x-opencode-session": self._session_id},
         )
 
         logger.info(
-            "OpenCodeGoProvider: selected %s (tools=%s, vision=%s, reasoning=%s)",
+            "OpenCodeGoProvider: selected %s (tools=%s, vision=%s, reasoning=%s, "
+            "prompt_cache_key=%s, prompt_cache_retention=24h)",
             self._model,
             tools,
             vision,
             reasoning,
+            self._cache_key,
         )
         return _selection(
             model_id=self._model,
@@ -710,6 +819,22 @@ register_provider(
         factory=_make_nim,
     )
 )
+
+
+def provider_from_config(config: Any) -> ModelProvider:
+    """Resolve the shared model provider from a runnable config."""
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        raise ValueError(
+            "Run config is missing 'configurable'; cannot locate the shared model provider."
+        )
+    provider = configurable.get("model_provider")
+    if isinstance(provider, ModelProvider):
+        return provider
+    router = configurable.get("nim_router")
+    if router is not None:
+        return get_provider(router)
+    raise ValueError("configurable['model_provider'] or 'nim_router' is required.")
 
 
 def get_provider(

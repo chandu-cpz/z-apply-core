@@ -46,6 +46,16 @@ class SimpleSpec:
         self.parameters = parameters
 
 
+def _tool_call(args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "tool_call",
+        "name": "browser_click_upload",
+        "id": "call_1",
+        "tool_call_id": "call_1",
+        "args": args,
+    }
+
+
 def _make_registry(
     caller: Any = None,
 ) -> BrowserToolRegistry:
@@ -136,7 +146,7 @@ class StripEmptyArgsTests(unittest.TestCase):
             "f1e2v5",
             "[f1e2v5]",
             "ref=f1e2v5",
-            '[ref=f1e2v5]',
+            "[ref=f1e2v5]",
             'textbox "Current Salary *" [ref=e125v3]:',
         ):
             self._run(tools[0].coroutine(target=supplied))
@@ -178,6 +188,44 @@ class StripEmptyArgsTests(unittest.TestCase):
             ["e125", "e138"],
         )
 
+    def test_click_with_snapshot_ref_is_folded_into_target(self) -> None:
+        spec = SimpleSpec(
+            name="browser_click",
+            title="Click",
+            description="Click an element",
+            parameters=[
+                SimpleParam("target", str, None, "Target ref", False),
+                SimpleParam("element", str, None, "Element descriptor", False),
+            ],
+        )
+        registry = BrowserToolRegistry(specs=[spec], caller=self.registry._caller)
+
+        self._run(registry.langchain_tools()[0].ainvoke({"ref": "e234", "element": "img"}))
+
+        self.assertEqual(self.captured["target"], "e234")
+        self.assertNotIn("ref", self.captured)
+
+    def test_click_with_target_and_stray_ref_keeps_target(self) -> None:
+        spec = SimpleSpec(
+            name="browser_click",
+            title="Click",
+            description="Click an element",
+            parameters=[
+                SimpleParam("target", str, None, "Target ref", False),
+                SimpleParam("element", str, None, "Element descriptor", False),
+            ],
+        )
+        registry = BrowserToolRegistry(specs=[spec], caller=self.registry._caller)
+
+        self._run(
+            registry.langchain_tools()[0].ainvoke(
+                {"target": "e234", "ref": "e999", "element": "img"}
+            )
+        )
+
+        self.assertEqual(self.captured["target"], "e234")
+        self.assertNotIn("ref", self.captured)
+
     def test_tool_model_coerces_provider_stringified_scalars(self) -> None:
         tool = self.registry.langchain_tools(["browser_snapshot"])[0]
 
@@ -202,26 +250,28 @@ class StripEmptyArgsTests(unittest.TestCase):
 
         result = self._run(
             tool.ainvoke(
-                {
-                    "target": "e40",
-                    "paths": '["/resume.pdf"]',
-                    "element": "primary resume",
-                }
+                _tool_call(
+                    {
+                        "target": "e40",
+                        "paths": '["/resume.pdf"]',
+                        "element": "primary resume",
+                    }
+                )
             )
         )
 
         uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
-        self.assertIn("resume attached", result)
-        self.assertIn("current form snapshot", result)
+        self.assertIn("resume attached", result.content)
+        self.assertIn("current form snapshot", result.content)
 
     def test_atomic_click_upload_uses_configured_resume_when_model_sends_empty_paths(self) -> None:
         uploader = AsyncMock(return_value="resume attached")
         tool = make_click_upload_tool(uploader, default_paths=("/resume.pdf",))
 
-        result = self._run(tool.ainvoke({"target": "e40", "paths": []}))
+        result = self._run(tool.ainvoke(_tool_call({"target": "e40", "paths": []})))
 
         uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
-        self.assertEqual(result, "resume attached")
+        self.assertEqual(result.content, "resume attached")
 
     def test_atomic_click_upload_resolves_configured_resume_basename(self) -> None:
         uploader = AsyncMock(return_value="resume attached")
@@ -231,16 +281,14 @@ class StripEmptyArgsTests(unittest.TestCase):
         )
 
         result = self._run(
-            tool.ainvoke(
-                {"target": "e40", "paths": ["Chandrakanth-V-Resume.pdf"]}
-            )
+            tool.ainvoke(_tool_call({"target": "e40", "paths": ["Chandrakanth-V-Resume.pdf"]}))
         )
 
         uploader.assert_awaited_once_with(
             "e40",
             ["/profiles/candidate/Chandrakanth-V-Resume.pdf"],
         )
-        self.assertEqual(result, "resume attached")
+        self.assertEqual(result.content, "resume attached")
 
     def test_atomic_click_upload_falls_back_for_nonexistent_requested_path(self) -> None:
         uploader = AsyncMock(return_value="resume attached")
@@ -250,15 +298,15 @@ class StripEmptyArgsTests(unittest.TestCase):
         )
 
         result = self._run(
-            tool.ainvoke({"target": "e40", "paths": ["/home/chandu/resume.pdf"]})
+            tool.ainvoke(_tool_call({"target": "e40", "paths": ["/home/chandu/resume.pdf"]}))
         )
 
         uploader.assert_awaited_once_with(
             "e40",
             ["/profiles/candidate/Chandrakanth-V-Resume.pdf"],
         )
-        self.assertIn("Requested path does not exist", result)
-        self.assertIn("Chandrakanth-V-Resume.pdf", result)
+        self.assertIn("Requested path does not exist", result.content)
+        self.assertIn("Chandrakanth-V-Resume.pdf", result.content)
 
     def test_atomic_click_upload_honors_existing_requested_path(self) -> None:
         uploader = AsyncMock(return_value="resume attached")
@@ -269,11 +317,11 @@ class StripEmptyArgsTests(unittest.TestCase):
 
         with patch("pathlib.Path.is_file", return_value=True):
             result = self._run(
-                tool.ainvoke({"target": "e40", "paths": ["/tmp/cover-letter.pdf"]})
+                tool.ainvoke(_tool_call({"target": "e40", "paths": ["/tmp/cover-letter.pdf"]}))
             )
 
         uploader.assert_awaited_once_with("e40", ["/tmp/cover-letter.pdf"])
-        self.assertEqual(result, "resume attached")
+        self.assertEqual(result.content, "resume attached")
 
     def test_auth_submit_adapter_returns_stale_ref_failure_to_agent(self) -> None:
         submitter = AsyncMock(side_effect=ValueError("stale ref"))

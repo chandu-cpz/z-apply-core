@@ -8,8 +8,11 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.markup import escape
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 
+from z_apply_core.context.call_ledger import RunCallLedger
+from z_apply_core.context.cost_estimate import format_cost
 from z_apply_core.context.token_metric import TokenUsage
 from z_apply_core.log_labels import agent_info, node_info, run_info
 from z_apply_core.state import RunState
@@ -21,6 +24,16 @@ from z_apply_core.stream_events import (
 
 logger = logging.getLogger(__name__)
 
+
+def _humanize_cache(tokens: int) -> str:
+    """Render cache-read tokens compactly (e.g. ``12.0k``), ``-`` when none."""
+    if tokens <= 0:
+        return "-"
+    if tokens >= 1000:
+        return f"{tokens / 1000.0:.1f}k"
+    return str(tokens)
+
+
 # TokenUsageEvent is rendered at most once per interval, and immediately when
 # the measured values change, so a model loop cannot spam the terminal.
 _TOKEN_USAGE_THROTTLE_SECONDS = 10.0
@@ -29,20 +42,25 @@ _TOKEN_USAGE_THROTTLE_SECONDS = 10.0
 class RichStreamRenderer:
     """Render framework stream events as chronological terminal output.
 
-    Token deltas are buffered until a stream boundary (tool event, lifecycle
-    event, completed message, or run close), then printed as static panels so
-    the terminal stays in chronological order without a Live overlay.
+    Model content (reasoning, responses, tool calls) arrives from the
+    middleware ``model_call_start`` / ``model_call_content`` events, which fire
+    for every LLM call in every phase; the graph's experimental v3 stream
+    projections are only used for tool and lifecycle panels.
     """
 
-    def __init__(self, console: Console | None = None) -> None:
+    _LEDGER_MAX_ROWS = 25
+    _LEDGER_CHECKPOINT_INTERVAL = 10
+
+    def __init__(
+        self,
+        console: Console | None = None,
+        ledger: RunCallLedger | None = None,
+    ) -> None:
         self._console = console or Console()
+        self._ledger = ledger
         self._logged_run_start = False
         self._logged_snapshot = False
         self._logged_agent_context = False
-        self._stream_active = False
-        self._reasoning_text = ""
-        self._content_text = ""
-        self._stream_source = "model"
         self._last_token_usage: TokenUsage | None = None
         self._last_token_usage_time = 0.0
         self._last_ttft_ms: int | None = None
@@ -50,9 +68,6 @@ class RichStreamRenderer:
     @property
     def console(self) -> Console:
         return self._console
-
-    def close(self) -> None:
-        self._end_stream_if_active()
 
     async def accept(self, event: FrameworkTraceEvent | TokenUsageEvent) -> None:
         if isinstance(event, TokenUsageEvent):
@@ -75,6 +90,14 @@ class RichStreamRenderer:
         if event.event in {
             "agent_message",
             "agent_message_delta",
+        }:
+            # Model content is sourced from the middleware ``model_call_*``
+            # events, which fire for every LLM call in every phase. The
+            # projection-sourced messages are unreliable and would duplicate
+            # the same thinking/response panels.
+            return
+
+        if event.event in {
             "agent_turn",
             "agent_tool_start",
             "agent_tool_delta",
@@ -85,32 +108,42 @@ class RichStreamRenderer:
             return
 
         if event.event in ("on_tool_start", "on_tool_end"):
-            self._end_stream_if_active()
             self._render_tool_event(event)
             return
 
         if event.event == "lifecycle":
-            self._end_stream_if_active()
             self._render_deepagents_lifecycle(event)
             return
 
         if event.event == "model_call_rejected":
-            self._end_stream_if_active()
             self._render_rejection(event)
             return
 
-        if event.event == "candidate_field_receipt":
-            self._end_stream_if_active()
-            self._render_candidate_receipt(event)
+        if event.event == "model_failed":
+            self._render_model_failed(event)
+            return
+
+        if event.event == "model_call_start":
+            self._render_model_call_start(event)
+            return
+
+        if event.event == "model_call_content":
+            self._render_model_call_content(event)
             return
 
         if event.event == "model_call_metrics":
-            self._render_model_metrics(event)
+            # The content event carries the same metrics plus the model's
+            # reasoning/text/tool calls, so this bare line stays silent; the
+            # event is the per-successful-call trigger for the run ledger.
+            self._render_call_ledger()
             return
 
         if event.event in {"recovery_started", "recovery_completed", "recovery_exhausted"}:
-            self._end_stream_if_active()
             self._render_recovery(event)
+            return
+
+        if event.event == "active_objective_rejected":
+            self._render_objective_rejected(event)
             return
 
         if event.event.startswith("on_"):
@@ -118,10 +151,7 @@ class RichStreamRenderer:
             # stream projections.
             return
 
-        self._end_stream_if_active()
-
     def print_result(self, result: V3RunResult, state: RunState) -> None:
-        self._end_stream_if_active()
         model_id = str(state.get("model_id", ""))
         status = str(state.get("run_status", "")) or "unknown"
         title = f"Run result: {status}"
@@ -198,57 +228,18 @@ class RichStreamRenderer:
         keys = set(data)
         if {"messages", "files"}.issubset(keys):
             if not self._logged_agent_context:
-                self._end_stream_if_active()
                 node_info(logger, "orchestrator", "updated DeepAgents working context")
                 self._logged_agent_context = True
             return
         if "messages" in keys:
-            self._end_stream_if_active()
             return
         logger.debug("graph state updated: %s", ", ".join(sorted(keys)))
 
     def _render_agent_event(self, event: FrameworkTraceEvent) -> None:
-        if event.event == "agent_message_delta":
-            if self._stream_active and event.name != self._stream_source:
-                self._end_stream_if_active()
-            if not self._stream_active:
-                self._start_stream(event.name)
-            kind = str(event.data.get("kind", "text"))
-            delta = _dedupe_delta(
-                self._reasoning_text if kind == "reasoning" else self._content_text,
-                str(event.data.get("delta", "")),
-            )
-            if kind == "reasoning":
-                self._reasoning_text += delta
-            else:
-                self._content_text += delta
-            return
-
-        if event.event == "agent_message":
-            self._end_stream_if_active(persist_content=False)
-            source = event.name
-            reasoning = str(event.data.get("reasoning") or "")
-            text = str(event.data.get("text") or "")
-            if reasoning:
-                self._console.print(
-                    Panel(
-                        Text(reasoning, style="dim gray50", overflow="fold"),
-                        title=Text(f"{source} thinking"),
-                        border_style="dim gray50",
-                    )
-                )
-            if text:
-                self._console.print(
-                    Panel(
-                        Markdown(text),
-                        title=Text(f"{source} response"),
-                        border_style="cyan",
-                    )
-                )
-            return
-
+        # ``agent_message`` / ``agent_message_delta`` are intentionally not
+        # rendered here: model content arrives via the middleware
+        # ``model_call_content`` event, which is reliable in every phase.
         if event.event == "agent_turn":
-            self._end_stream_if_active()
             agent = event.name
             data = event.data
             parts: list[str] = []
@@ -272,7 +263,6 @@ class RichStreamRenderer:
             return
 
         if event.event == "agent_tool_start":
-            self._end_stream_if_active()
             tool_name = str(event.data.get("tool_name", "tool"))
             self._console.print(
                 Panel(
@@ -289,7 +279,6 @@ class RichStreamRenderer:
             return
 
         if event.event == "agent_tool_end":
-            self._end_stream_if_active()
             tool_name = str(event.data.get("tool_name", "tool"))
             error = str(event.data.get("error", ""))
             output = error or _preview(event.data.get("output", ""), limit=500)
@@ -303,7 +292,6 @@ class RichStreamRenderer:
             return
 
         if event.event == "agent_lifecycle":
-            self._end_stream_if_active()
             status = str(event.data.get("status", ""))
             detail = str(event.data.get("error") or event.data.get("path") or "")
             suffix = f": {detail}" if detail else ""
@@ -333,28 +321,81 @@ class RichStreamRenderer:
             )
         )
 
-    def _render_candidate_receipt(self, event: FrameworkTraceEvent) -> None:
+    def _render_model_failed(self, event: FrameworkTraceEvent) -> None:
         data = event.data
-        verdict = str(data.get("verdict", "CANDIDATE_FIELD_UNKNOWN"))
-        field_label = str(data.get("field_label", ""))
-        error = str(data.get("error", ""))
-        detail = error if error else f"field: {field_label}"
-        border_style = "red" if verdict == "CANDIDATE_FIELD_EXECUTION_ERROR" else "green"
+        role = str(data.get("role") or event.name or "agent")
+        model_id = str(data.get("model_id", ""))
+        error_type = str(data.get("error_type", "error"))
+        error = str(data.get("error", "") or error_type)
+        title = f"{role} model call failed"
+        if model_id:
+            title = f"{title} [{model_id}]"
         self._console.print(
             Panel(
-                Text(detail, overflow="fold"),
-                title=Text(verdict),
-                border_style=border_style,
+                Text(f"{error_type}: {error}", overflow="fold"),
+                title=Text(title),
+                border_style="red",
             )
         )
 
-    def _render_model_metrics(self, event: FrameworkTraceEvent) -> None:
+    def _render_model_call_start(self, event: FrameworkTraceEvent) -> None:
         data = event.data
+        role = str(data.get("role") or event.name or "agent")
+        model_id = str(data.get("model_id", ""))
+        provider = str(data.get("provider", "?"))
+        parts: list[str] = []
+        estimate = data.get("input_tokens_estimate")
+        if isinstance(estimate, int):
+            parts.append(f"in≈{estimate} tok")
+        tool_count = data.get("tool_count")
+        if isinstance(tool_count, int):
+            parts.append(f"{tool_count} tools")
+        suffix = f" · {' · '.join(parts)}" if parts else ""
+        preview = str(data.get("prompt_preview") or "")
+        self._console.print(
+            Panel(
+                Text(preview or "(no prompt preview)", style="dim", overflow="fold"),
+                title=Text(f"{role} · {model_id} [{provider}] call{suffix}"),
+                border_style="cyan",
+            )
+        )
+
+    def _render_model_call_content(self, event: FrameworkTraceEvent) -> None:
+        data = event.data
+        role = str(data.get("role") or event.name or "agent")
         model_id = str(data.get("model_id", ""))
         provider = str(data.get("provider", "?"))
         ttft_ms = data.get("ttft_ms")
         if isinstance(ttft_ms, int) and ttft_ms > 0:
             self._last_ttft_ms = ttft_ms
+        reasoning = str(data.get("reasoning") or "")
+        text = str(data.get("text") or "")
+        if reasoning:
+            self._console.print(
+                Panel(
+                    Text(reasoning, style="dim gray50", overflow="fold"),
+                    title=Text(f"{role} thinking"),
+                    border_style="dim gray50",
+                )
+            )
+        if text:
+            self._console.print(
+                Panel(
+                    Markdown(text),
+                    title=Text(f"{role} response"),
+                    border_style="cyan",
+                )
+            )
+        tool_calls = data.get("tool_calls") or []
+        call_lines = [_render_tool_call_line(call) for call in tool_calls if isinstance(call, dict)]
+        if call_lines:
+            self._console.print(
+                Panel(
+                    Text("\n".join(call_lines), overflow="fold"),
+                    title=Text(f"{role} tool calls"),
+                    border_style="magenta",
+                )
+            )
         parts: list[str] = []
         if isinstance(ttft_ms, int):
             parts.append(f"ttft {ttft_ms}ms")
@@ -363,10 +404,118 @@ class RichStreamRenderer:
             parts.append(f"{duration_ms / 1000:.2f}s")
         input_tokens = data.get("input_tokens")
         output_tokens = data.get("output_tokens")
+        cache_read = data.get("cache_read_tokens")
         if isinstance(input_tokens, int) and isinstance(output_tokens, int):
             parts.append(f"in={input_tokens} out={output_tokens}")
+        if isinstance(cache_read, int):
+            if isinstance(input_tokens, int) and input_tokens > 0:
+                parts.append(f"hit={cache_read} ({cache_read * 100 // input_tokens}%)")
+            else:
+                parts.append(f"cache={cache_read}")
         suffix = f" · {' · '.join(parts)}" if parts else ""
-        logger.info("model %s [%s] call complete%s", model_id, provider, suffix)
+        logger.info("model %s [%s] %s call complete%s", model_id, provider, role, suffix)
+
+    def _render_call_ledger(self) -> None:
+        """Show the newest call as one line; print the full table at checkpoints.
+
+        A full-table print per call would flood the terminal on long runs, so
+        each successful call renders a compact increment line with the running
+        total, and the cumulative table prints every
+        ``_LEDGER_CHECKPOINT_INTERVAL`` calls plus once at run end.
+        """
+        if self._ledger is None or not self._ledger.entries:
+            return
+        if self._ledger.call_count % self._LEDGER_CHECKPOINT_INTERVAL == 0:
+            self._console.print(self._ledger_table())
+            return
+        self._console.print(self._ledger_increment_line())
+
+    def _ledger_increment_line(self) -> Text:
+        assert self._ledger is not None
+        entry = self._ledger.entries[-1]
+        return Text(
+            f"LLM {entry.sequence}/{self._ledger.call_count} \u00b7 {entry.agent} \u00b7 "
+            f"{entry.model_id} [{entry.provider}] \u00b7 in={entry.input_tokens:,} "
+            f"out={entry.output_tokens:,} \u00b7 {format_cost(entry.cost)} \u00b7 "
+            f"run {self._ledger_total_label()}",
+            style="dim",
+        )
+
+    def _ledger_table(self) -> Table:
+        ledger = self._ledger
+        assert ledger is not None
+        entries = ledger.entries
+        shown = entries[-self._LEDGER_MAX_ROWS :]
+        hidden = len(entries) - len(shown)
+        table = Table(
+            title=(
+                f"LLM calls this run: {len(entries)} calls \u00b7 "
+                f"in={ledger.total_input_tokens:,} out={ledger.total_output_tokens:,} \u00b7 "
+                f"{self._ledger_total_label()}"
+            ),
+            title_justify="left",
+            border_style="cyan",
+            pad_edge=False,
+        )
+        table.add_column("#", justify="right", no_wrap=True)
+        table.add_column("agent", no_wrap=True)
+        table.add_column("model", no_wrap=True)
+        table.add_column("provider", no_wrap=True)
+        table.add_column("in", justify="right", no_wrap=True)
+        table.add_column("out", justify="right", no_wrap=True)
+        table.add_column("cache", justify="right", no_wrap=True)
+        table.add_column("$", justify="right", no_wrap=True)
+        if hidden:
+            table.add_row("\u2026", f"{hidden} earlier calls", "", "", "", "", "", "")
+        for entry in shown:
+            table.add_row(
+                str(entry.sequence),
+                entry.agent,
+                entry.model_id,
+                entry.provider,
+                f"{entry.input_tokens:,}",
+                f"{entry.output_tokens:,}",
+                _humanize_cache(entry.cache_read_tokens),
+                format_cost(entry.cost),
+            )
+        table.add_row(
+            "total",
+            f"{ledger.call_count} calls",
+            "",
+            "",
+            f"{ledger.total_input_tokens:,}",
+            f"{ledger.total_output_tokens:,}",
+            "",
+            self._ledger_total_label(),
+            style="bold",
+        )
+        return table
+
+    def _ledger_total_label(self) -> str:
+        assert self._ledger is not None
+        return f"${self._ledger.total_cost_usd:.4f}"
+
+    def print_call_ledger(self) -> None:
+        """Print the final run ledger (no-op when no ledger is attached)."""
+        if self._ledger is not None and self._ledger.entries:
+            self._console.print(self._ledger_table())
+
+    def _render_objective_rejected(self, event: FrameworkTraceEvent) -> None:
+        data = event.data
+        recovery = data.get("recovery")
+        maximum = data.get("max")
+        suffix = f" ({recovery}/{maximum})" if recovery is not None else ""
+        self._console.print(
+            Panel(
+                Text(
+                    "The model ended the active objective with text only and no native "
+                    f"tool action. The runtime re-enters the model{suffix}.",
+                    overflow="fold",
+                ),
+                title=Text(f"{event.name} prose stop rejected"),
+                border_style="dim yellow",
+            )
+        )
 
     def _render_recovery(self, event: FrameworkTraceEvent) -> None:
         data = event.data
@@ -404,13 +553,6 @@ class RichStreamRenderer:
             )
         self._console.print(Panel(body, title=title, border_style=border_style))
 
-    def _start_stream(self, model_name: str) -> None:
-        self._end_stream_if_active()
-        self._reasoning_text = ""
-        self._content_text = ""
-        self._stream_source = model_name or "model"
-        self._stream_active = True
-
     def _render_deepagents_lifecycle(self, event: FrameworkTraceEvent) -> None:
         if event.event == "lifecycle":
             data = event.data.get("data")
@@ -439,33 +581,13 @@ class RichStreamRenderer:
             body = _preview(result, limit=400)
             self._console.print(Panel(escape(body), title=title, border_style="green"))
 
-    def _end_stream_if_active(self, *, persist_content: bool = True) -> None:
-        if not self._stream_active:
-            return
 
-        source = self._stream_source
-        reasoning = self._reasoning_text.strip()
-        content = self._content_text.strip()
-        self._stream_active = False
-        self._reasoning_text = ""
-        self._content_text = ""
-
-        if reasoning:
-            self._console.print(
-                Panel(
-                    Text(reasoning, style="dim gray50", overflow="fold"),
-                    title=Text(f"{source} thinking"),
-                    border_style="dim gray50",
-                )
-            )
-        if persist_content and content:
-            self._console.print(
-                Panel(
-                    Markdown(content),
-                    title=Text(f"{source} response"),
-                    border_style="cyan",
-                )
-            )
+def _render_tool_call_line(call: dict[str, Any]) -> str:
+    name = str(call.get("name") or "tool")
+    args = str(call.get("args") or "")
+    if len(args) > 160:
+        args = args[:157] + "..."
+    return f"{name}({args})" if args else name
 
 
 def _preview(value: Any, limit: int = 240) -> str:
@@ -473,11 +595,3 @@ def _preview(value: Any, limit: int = 240) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
-
-
-def _dedupe_delta(existing: str, delta: str) -> str:
-    if not delta:
-        return ""
-    if existing.endswith(delta) and (len(delta) > 1 or not delta.isalnum()):
-        return ""
-    return delta

@@ -8,9 +8,7 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
 from langchain_core.messages import AIMessage, HumanMessage
 
-RuntimeEvidenceMarker = re.compile(
-    r"(?m)^\s*(BROWSER ACTION RECEIPT|BROWSER OBSERVATION)\b"
-)
+RuntimeEvidenceMarker = re.compile(r"(?m)^\s*(BROWSER ACTION RECEIPT|BROWSER OBSERVATION)\b")
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,9 +94,7 @@ def _check_fabricated_runtime_evidence(
             ToolProtocolViolationDetail(
                 kind="fabricated_runtime_evidence",
                 detected_name=match.group(1),
-                content_excerpt=text[
-                    max(0, match.start() - 40) : min(len(text), match.end() + 80)
-                ],
+                content_excerpt=text[max(0, match.start() - 40) : min(len(text), match.end() + 80)],
             )
         )
     return violations

@@ -24,12 +24,11 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
     """Prevent premature or unjustified ask_human calls.
 
     Enforces typed reasons and preconditions before allowing ask_human.
-    request_submit_approval is not affected.
+    Submission approval flows (SubmissionReviewer) are not affected.
     """
 
     def __init__(
         self,
-        _legacy_progress: object | None = None,
         *,
         allowed_reasons: frozenset[str] | None = None,
     ) -> None:

@@ -4,24 +4,115 @@ import asyncio
 import atexit
 import functools
 import logging
+import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any, Protocol, cast
 
 from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from qdrant_client import QdrantClient, models
 
+from z_apply_core.config import CORE_ROOT
 from z_apply_core.text_utils import alnum_key
 
 logger = logging.getLogger(__name__)
 
-CORE_ROOT = Path(__file__).resolve().parents[3]
 MEMORY_PATH = CORE_ROOT / ".z-apply" / "qdrant"
 MEMORY_COLLECTION = "z_apply_core_applicant_memory_v1"
 MEMORY_NAMESPACE = uuid.UUID("f0e95a1d-6811-4fe6-a938-fb1153f3b8a9")
 _MEMORY_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candidate-memory")
 atexit.register(_MEMORY_EXECUTOR.shutdown, wait=True, cancel_futures=True)
+
+# Labels that identify credential/secret facts. Such facts are never embedded
+# in an agent prompt and never surfaced by the lookup tool: a password or token
+# that leaked into memory during an earlier run must not reach any model.
+SECRET_LABEL_KEYWORDS: frozenset[str] = frozenset(
+    {
+        "password",
+        "passcode",
+        "pass phrase",
+        "passphrase",
+        "secret",
+        "credential",
+        "credentials",
+        "token",
+        "api key",
+        "apikey",
+        "api_key",
+        "access key",
+        "private key",
+        "authorization",
+        "pin",
+    }
+)
+
+_MASKED_MARKERS = ("***", "redacted", "masked")
+_JUNK_ANSWER_VALUES = frozenset(
+    {
+        "select",
+        "select...",
+        "select…",
+        "choose",
+        "choose...",
+        "choose…",
+        "choose one",
+        "choose one option",
+        "please select",
+        "please choose",
+        "-",
+        "--",
+        "---",
+    }
+)
+_SOURCE_PRIORITY = {"human_answer": 0, "resume": 1}
+
+
+def is_sensitive_fact_label(label: str) -> bool:
+    """True when a stored fact label identifies a credential/secret value."""
+    folded = " ".join(label.casefold().split())
+    return any(
+        re.search(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])", folded)
+        for keyword in SECRET_LABEL_KEYWORDS
+    )
+
+
+def sanitize_candidate_facts(
+    facts: list[dict[str, object]],
+    *,
+    limit: int = 60,
+) -> list[dict[str, object]]:
+    """Filter stored facts down to prompt-safe, useful candidate evidence.
+
+    Drops empty, credential-labeled, masked, placeholder, and self-referential
+    facts, deduplicates by (label, answer), orders explicit human answers
+    before resume copies, and caps the list so the embedded prompt section
+    stays bounded. The remaining facts are still evidence only; the consumer
+    must never treat them as instructions.
+    """
+    clean: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    for fact in facts:
+        label = str(fact.get("field_label", "")).strip()
+        answer = str(fact.get("answer", "")).strip()
+        if not label or not answer:
+            continue
+        if is_sensitive_fact_label(label):
+            continue
+        if any(marker in answer.casefold() for marker in _MASKED_MARKERS):
+            continue
+        if re.fullmatch(r"[*•xX]{3,}", answer):
+            continue
+        if answer.casefold() in _JUNK_ANSWER_VALUES:
+            continue
+        if answer.casefold() == label.casefold():
+            continue
+        dedupe_key = (label.casefold(), answer.casefold())
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+        clean.append(fact)
+    clean.sort(key=lambda fact: _SOURCE_PRIORITY.get(str(fact.get("source", "")), 2))
+    return clean[:limit]
 
 
 class EmbeddingClient(Protocol):
@@ -70,6 +161,34 @@ class CandidateMemory:
             return False
         return True
 
+    async def remember_resume_fact(
+        self,
+        *,
+        field_label: str,
+        answer: str,
+        question: str = "",
+    ) -> bool:
+        """Store a resume-derived candidate fact, keeping explicit answers.
+
+        An explicit human answer for the same field label always wins and is
+        never overwritten. A previous resume copy is refreshed when the resume
+        value changed, so a stale seeded fact does not persist after the resume
+        file is updated. Returns True when a fact was stored or refreshed,
+        False when the stored value was kept unchanged.
+        """
+        try:
+            async with self._lock:
+                stored = await self._run(
+                    self._remember_resume_fact,
+                    field_label=field_label,
+                    answer=answer,
+                    question=question,
+                )
+        except Exception as exc:  # noqa: BLE001 - memory must not block a run
+            logger.warning("Candidate-memory resume ingestion failed: %s", exc)
+            return False
+        return bool(stored)
+
     async def lookup(
         self,
         *,
@@ -96,6 +215,23 @@ class CandidateMemory:
                 "question": question,
                 "matches": [],
             }
+
+    async def all_facts(self, *, limit: int = 200) -> list[dict[str, object]]:
+        """Return every stored fact as (field_label, question, answer, source).
+
+        Used to embed candidate memory into an agent prompt so facts are always
+        visible to the model regardless of tool-calling reliability. Best-effort:
+        any failure returns an empty list and never blocks a run.
+        """
+        try:
+            async with self._lock:
+                return cast(
+                    list[dict[str, object]],
+                    await self._run(self._all_facts, limit=limit),
+                )
+        except Exception as exc:  # noqa: BLE001 - an unavailable memory is not a candidate fact
+            logger.warning("Candidate-memory listing failed: %s", exc)
+            return []
 
     async def search(
         self,
@@ -161,6 +297,46 @@ class CandidateMemory:
             wait=True,
         )
 
+    def _remember_resume_fact(
+        self,
+        *,
+        field_label: str,
+        answer: str,
+        question: str = "",
+    ) -> bool:
+        resolved_question = question or f"From the candidate resume: {field_label}"
+        existing = self._lookup(field_label=field_label, question=resolved_question, limit=1)
+        if existing.get("memory_status") == "exact":
+            matches = existing.get("matches")
+            if not isinstance(matches, list) or not matches or not isinstance(matches[0], dict):
+                return False
+            existing_match = matches[0]
+            if existing_match.get("source") == "human_answer":
+                return False
+            if existing_match.get("answer") == answer:
+                return False
+        document = f"Field: {field_label}\nQuestion: {resolved_question}\nAnswer: {answer}"
+        vector = self._embeddings.embed_documents([document])[0]
+        self._ensure_collection(vector_size=len(vector))
+        self._client.upsert(
+            collection_name=self._collection_name,
+            points=[
+                models.PointStruct(
+                    id=str(uuid.uuid5(MEMORY_NAMESPACE, alnum_key(field_label))),
+                    vector=vector,
+                    payload={
+                        "field_label": field_label,
+                        "field_key": alnum_key(field_label),
+                        "question": resolved_question,
+                        "answer": answer,
+                        "source": "resume",
+                    },
+                )
+            ],
+            wait=True,
+        )
+        return True
+
     def _lookup(self, *, field_label: str, question: str, limit: int) -> dict[str, object]:
         if not self._client.collection_exists(self._collection_name):
             return {
@@ -199,6 +375,36 @@ class CandidateMemory:
             "question": question,
             "matches": [],
         }
+
+    def _all_facts(self, *, limit: int) -> list[dict[str, object]]:
+        if not self._client.collection_exists(self._collection_name):
+            return []
+        facts: list[dict[str, object]] = []
+        offset: Any = None
+        # Page the scroll so a collection larger than one batch is never
+        # silently truncated in arbitrary point order.
+        while len(facts) < limit:
+            points, next_offset = self._client.scroll(
+                collection_name=self._collection_name,
+                limit=min(500, limit - len(facts)),
+                offset=offset,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for point in points:
+                payload = cast(dict[str, Any], point.payload or {})
+                facts.append(
+                    {
+                        "field_label": str(payload.get("field_label", "")),
+                        "question": str(payload.get("question", "")),
+                        "answer": str(payload.get("answer", "")),
+                        "source": str(payload.get("source", "human_answer")),
+                    }
+                )
+            if next_offset is None:
+                break
+            offset = next_offset
+        return facts
 
     def _search(self, *, query: str, limit: int) -> dict[str, object]:
         if not self._client.collection_exists(self._collection_name):

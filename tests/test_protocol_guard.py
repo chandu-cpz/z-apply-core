@@ -163,14 +163,9 @@ class ProseToolCallGuardTests(unittest.TestCase):
             [
                 AIMessage(
                     content=(
-                        "BROWSER ACTION RECEIPT\n"
-                        "action: browser_click\n"
-                        "target: e420\n"
-                        "changed: true"
+                        "BROWSER ACTION RECEIPT\naction: browser_click\ntarget: e420\nchanged: true"
                     ),
-                    tool_calls=[
-                        {"name": "browser_observe", "args": {}, "id": "observe-1"}
-                    ],
+                    tool_calls=[{"name": "browser_observe", "args": {}, "id": "observe-1"}],
                 )
             ]
         )

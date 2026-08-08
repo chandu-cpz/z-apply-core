@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, cast
 
 from langchain_core.runnables.config import RunnableConfig
@@ -13,6 +12,7 @@ from z_apply_core.browser_tools import (
     make_click_upload_tool,
     make_observe_tool,
 )
+from z_apply_core.config import DEFAULT_RESUME_PATH
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.live_view import LiveView
 from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -21,8 +21,6 @@ from z_apply_core.state import RunState
 from z_apply_core.virtual_display import VirtualDisplaySession
 
 logger = logging.getLogger(__name__)
-CORE_ROOT = Path(__file__).resolve().parents[3]
-DEFAULT_RESUME_PATH = (CORE_ROOT / ".z-apply" / "input" / "Chandrakanth-V-Resume.pdf").resolve()
 
 
 async def setup_browser(
@@ -106,5 +104,6 @@ def _agent_browser_tools(browser: BrowserSession) -> list[object]:
         make_click_upload_tool(
             browser.upload_files,
             default_paths=(str(DEFAULT_RESUME_PATH),),
+            revision_provider=lambda: browser.last_observation_revision,
         ),
     ]

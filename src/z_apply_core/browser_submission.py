@@ -1,16 +1,19 @@
 from __future__ import annotations
 
-from z_apply_core.browser_observation import BrowserObservation
-
 
 class SubmissionGuard:
-    """One-use final-submission approval state."""
+    """One-use final-submission approval gate.
+
+    Human approval arms the gate; the first click that classifies as a real
+    form submit consumes it. No submit control can be clicked before the
+    human approves and no submit control can be clicked twice after it. The
+    gate does not bind a DOM ref: the runtime re-resolves the submit control
+    from live DOM at click time, so an SPA re-render can never stale the
+    approval.
+    """
 
     def __init__(self) -> None:
         self.active = False
-        self._target = ""
-        self._revision = 0
-        self._signature = ""
         self._approved = False
         self._consumed = False
 
@@ -19,46 +22,20 @@ class SubmissionGuard:
         self._clear()
 
     def approve(self, approved: bool) -> None:
-        if not approved:
-            self._clear()
-        elif not self._target:
-            raise ValueError("Submission approval has no pending reviewed browser target.")
-        else:
-            self._approved = True
+        self._approved = bool(approved)
 
-    def prepare(
-        self,
-        *,
-        target: str,
-        observation: BrowserObservation,
-    ) -> None:
-        self._target = target
-        self._revision = observation.revision
-        self._signature = observation.signature
-        self._approved = False
-        self._consumed = False
-
-    def require_target(self, target: object) -> None:
-        if not self._target or not self._approved or self._consumed or target != self._target:
+    def require_armed(self) -> None:
+        if not self._approved or self._consumed:
             raise ValueError(
-                "Final-form submission is locked. Approval must match the exact current "
-                "submit control reviewed through request_submit_approval."
-            )
-
-    def require_observation(self, observation: BrowserObservation) -> None:
-        if observation.revision != self._revision or observation.signature != self._signature:
-            self._clear()
-            raise ValueError(
-                "Submission approval was revoked because the reviewed browser state changed. "
-                "Inspect, review, and request approval again."
+                "Final-form submission is locked: the human has not approved this "
+                "application yet, or the approved submit click already happened. "
+                "Request submission approval and wait for it before clicking the "
+                "submit control."
             )
 
     def consume(self) -> None:
         self._consumed = True
 
     def _clear(self) -> None:
-        self._target = ""
-        self._revision = 0
-        self._signature = ""
         self._approved = False
         self._consumed = False

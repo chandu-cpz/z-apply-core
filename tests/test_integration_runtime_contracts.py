@@ -202,9 +202,7 @@ async def test_browser_workspace_retains_blank_anchor_and_discards_restored_page
     ):
         await workspace.start()
 
-    anchor_page.goto.assert_awaited_once_with(
-        "about:blank", wait_until="commit", timeout=5_000
-    )
+    anchor_page.goto.assert_awaited_once_with("about:blank", wait_until="commit", timeout=5_000)
     anchor_page.close.assert_not_awaited()
     restored_page.close.assert_awaited_once()
 

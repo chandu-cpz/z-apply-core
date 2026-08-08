@@ -47,7 +47,9 @@ class ScreenshotFilenameInjectionTests(unittest.IsolatedAsyncioTestCase):
             "screenshot_001.png",
         )
 
-    async def test_explicit_screenshot_filename_is_preserved_and_does_not_consume_counter(self) -> None:
+    async def test_explicit_screenshot_filename_is_preserved_and_does_not_consume_counter(
+        self,
+    ) -> None:
         session, call_tool = _session_with_backend(_image_result())
 
         await session.call_tool_content(

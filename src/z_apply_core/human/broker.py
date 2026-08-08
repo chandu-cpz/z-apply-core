@@ -3,16 +3,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.sanitize import sanitize_human_text
-
-
-def _now() -> datetime:
-    return datetime.now(UTC)
+from z_apply_core.text_utils import utc_now
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +68,10 @@ class HumanRequestBroker:
         self._pending: dict[str, _Pending] = {}
         self._lock = asyncio.Lock()
 
+    @property
+    def telegram(self) -> Any | None:
+        return self._telegram
+
     async def request(
         self,
         *,
@@ -102,7 +103,7 @@ class HumanRequestBroker:
             risk=risk,
             allow_free_text=not option_values,
             image_path=image_path,
-            created_at=_now(),
+            created_at=utc_now(),
             field_label=field_label,
             reason=reason,
         )
@@ -159,7 +160,7 @@ class HumanRequestBroker:
             await self._telegram.cancel_request(request_id)
         if not pending.future.done():
             pending.future.cancel()
-        await self._on_resolved(replace(pending.request, status="cancelled", resolved_at=_now()))
+        await self._on_resolved(replace(pending.request, status="cancelled", resolved_at=utc_now()))
 
     async def close(self) -> None:
         for request_id in tuple(self._pending):
@@ -188,7 +189,7 @@ class HumanRequestBroker:
                 answer=answer,
                 approved=approved,
                 responder=responder,
-                resolved_at=_now(),
+                resolved_at=utc_now(),
             )
         if responder != "telegram" and self._telegram is not None:
             await self._telegram.cancel_request(request_id)
@@ -243,7 +244,7 @@ class BrokeredHumanChannel(HumanChannel):
         self._url = url
 
     async def send_artifact(self, *, path: str, caption: str) -> None:
-        telegram = self._broker._telegram
+        telegram = self._broker.telegram
         if telegram is not None:
             await telegram.send_artifact_for(
                 path=path,

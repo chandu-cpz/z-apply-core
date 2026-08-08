@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -15,6 +16,7 @@ from playwright_python_mcp.mcp import create_connection
 
 from z_apply_core.browser_config import build_browser_config
 from z_apply_core.browser_form_inspection import (
+    SUBMIT_SELECTOR,
     FormControlBlocker,
     inspect_control,
     inspect_control_options,
@@ -42,9 +44,12 @@ from z_apply_core.browser_tools import (
     normalize_browser_arguments,
     validate_bounded_wait_arguments,
 )
+from z_apply_core.config import CORE_ROOT
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.text_utils import collapsed_label
+
+logger = logging.getLogger(__name__)
 
 INLINE_CAPTURE_TOOLS = frozenset({"browser_snapshot", "browser_take_screenshot"})
 VISUAL_EVIDENCE_UNAVAILABLE_NOTE = (
@@ -52,7 +57,6 @@ VISUAL_EVIDENCE_UNAVAILABLE_NOTE = (
     "for this run, so no visual evidence exists. Rely on DOM/ARIA evidence or "
     "report that visual evidence is unavailable."
 )
-CORE_ROOT = Path(__file__).resolve().parents[2]
 ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
 
 _CONTROL_LABEL_LINE_PATTERN = re.compile(
@@ -137,6 +141,12 @@ class BrowserSession:
                 "browser_take_screenshot": self.call_tool_content,
                 "browser_wait_for": self.call_bounded_wait,
             },
+            revision_provider=lambda: self.last_observation_revision,
+            receipt_revision_provider=lambda: (
+                self._last_action_receipt.after.revision
+                if self._last_action_receipt is not None
+                else None
+            ),
         )
 
     @classmethod
@@ -179,6 +189,22 @@ class BrowserSession:
             normalized["target"] = "html"
         if name == "browser_take_screenshot":
             normalized = self._ensure_screenshot_filename(normalized)
+        try:
+            return await self._call_tool_guarded(name, normalized)
+        except ToolException:
+            raise
+        except Exception as exc:
+            # The base tool error handler only converts ToolException. A raw
+            # browser-layer exception (for example a label mistarget rejected as
+            # invalid CSS) must never abort the whole parallel tool-response
+            # batch, so it is contained here as a typed tool error instead.
+            raise BrowserToolExecutionError(
+                f"{name} failed against the current page: {exc}. "
+                "Capture fresh browser evidence and retry on a control the "
+                "evidence actually shows."
+            ) from exc
+
+    async def _call_tool_guarded(self, name: str, normalized: dict[str, Any]) -> str:
         page_url = ""
         page_title = ""
         async with self._operation_scope():
@@ -215,14 +241,15 @@ class BrowserSession:
         return text
 
     async def _call_backend_tool(self, name: str, arguments: dict[str, Any]) -> Any:
-        """Execute one backend tool while suppressing native file chooser UI."""
-        if name != "browser_click":
-            return await self._backend.call_tool(
-                name,
-                arguments,
-                meta=self._call_meta(name),
-            )
+        """Execute one backend tool while suppressing native file chooser UI.
 
+        The chooser listener wraps every backend call, not just clicks: an
+        upload dropzone can also fire a native chooser through an Enter key,
+        a drag, or a programmatic trigger, and any such opening leaves the
+        page blocked. Whichever action opens the chooser is intercepted, the
+        trigger is recorded as the pending atomic upload target, and the model
+        is told to resolve it with ``browser_click_upload``.
+        """
         tab = await self._backend._ensure_tab()
         page = tab.page
         pending_chooser: Any | None = None
@@ -245,10 +272,17 @@ class BrowserSession:
         if pending_chooser is not None:
             self._pending_atomic_upload_target = str(arguments.get("target", ""))
             self._pending_file_chooser = pending_chooser
+            target_hint = (
+                f"target={self._pending_atomic_upload_target!r}"
+                if self._pending_atomic_upload_target
+                else "target=<the upload control from fresh evidence>"
+            )
             raise BrowserToolExecutionError(
-                "Native file chooser activation intercepted. Attach the configured "
-                "file atomically with browser_click_upload(target, paths); never use "
-                "browser_click for an upload trigger."
+                "Native file chooser intercepted. The action opened an upload "
+                f"trigger ({target_hint}); the chooser is pending and blocks other "
+                "form tools. Attach the file immediately with "
+                "browser_click_upload(target, paths) on that exact control; never "
+                "open an upload dropzone with a plain tool call."
             )
         return result
 
@@ -340,6 +374,8 @@ class BrowserSession:
                 "Duplicate mutation prevented: the identical previous action left the "
                 "browser snapshot unchanged. Choose a different action."
             )
+        if name == "browser_type":
+            await self._pre_select_type_target(normalized)
         before_observation = self._current_observation()
         mutation = await self.call_tool(name, arguments)
         try:
@@ -347,6 +383,7 @@ class BrowserSession:
         except BrowserToolExecutionError as exc:
             self._last_mutation_signature = signature
             self._last_mutation_made_progress = True
+            self._last_action_receipt = None
             return f"{mutation}\nPost-action inline snapshot unavailable: {exc}"
         after = self._last_observation or self._record_observation(evidence)
         changed = before_observation.signature != after.signature
@@ -370,18 +407,26 @@ class BrowserSession:
         before = self._current_observation()
         pending_chooser = getattr(self, "_pending_file_chooser", None)
         async with self._operation_scope():
-            if pending_chooser is not None and target == self._pending_atomic_upload_target:
+            if pending_chooser is not None and await self._chooser_accepts_target(
+                pending_chooser, target
+            ):
                 await pending_chooser.set_files(paths)
+                # The layer recorded the same chooser and blocks every other
+                # tool until its modal state is drained (the state survives
+                # core's direct set_files).
+                await self._drain_layer_choosers()
             else:
+                # Clear any layer-recorded chooser first, then attach directly.
+                await self._drain_layer_choosers()
                 tab = await self._backend._ensure_tab()
-                resolved = await tab.resolve_target(target=target)
-                file_input = await resolve_file_input(tab.page, resolved.locator)
+                file_input = await self._resolve_upload_file_input(tab, target)
                 if file_input is None:
                     raise BrowserToolExecutionError(
-                        f"Upload target {target!r} could not be associated with exactly "
-                        "one file input. Capture fresh evidence and call "
-                        "browser_click_upload on the upload control; never click it to "
-                        "open a native chooser."
+                        f"Upload target {target!r} could not be associated with "
+                        "exactly one file input and the page has no unambiguous "
+                        "empty file control. Capture fresh evidence and call "
+                        "browser_click_upload on the upload control; never click it "
+                        "to open a native chooser."
                     )
                 await file_input.set_input_files(paths)
         evidence = await self.call_tool("browser_snapshot")
@@ -401,6 +446,108 @@ class BrowserSession:
         if self.run_context is not None:
             self.run_context.action_log.record(receipt)
         return receipt.render()
+
+    async def _drain_layer_choosers(self) -> None:
+        """Clear every file-chooser modal state recorded by the browser layer.
+
+        The layer tracks each open native chooser independently of core's own
+        interception and blocks every other tool (including browser_snapshot)
+        until its ``browser_file_upload`` tool consumes one; each successful
+        call clears exactly one recorded state. Empty ``paths`` skip the
+        layer's client-workspace path confinement, so this drains the states
+        without re-attaching (core attaches files directly through Playwright
+        in ``upload_files``).
+        """
+        for _ in range(8):
+            result = await self._backend.call_tool(
+                "browser_file_upload",
+                {"paths": []},
+                meta=self._call_meta("browser_file_upload"),
+            )
+            if _is_tool_error(result):
+                return
+
+    async def _chooser_accepts_target(self, pending_chooser: Any, target: str) -> bool:
+        """True when a pending chooser belongs to the requested upload target.
+
+        The intercepted action records the exact trigger ref, but the model may
+        legitimately pass a fresh ref from newer evidence (or a label that maps
+        to the same control). Accept the exact recorded ref or any target that
+        deterministically resolves to a file input behind the open chooser.
+        """
+        if target == self._pending_atomic_upload_target:
+            return True
+        if not target.strip():
+            return False
+        tab = await self._backend._ensure_tab()
+        try:
+            resolved = await tab.resolve_target(target=target)
+        except Exception:
+            return False
+        return await resolve_file_input(tab.page, resolved.locator) is not None
+
+    async def _resolve_upload_file_input(self, tab: Any, target: str) -> Any | None:
+        """Resolve an upload target to its file input without failing on a label.
+
+        The ARIA snapshot often exposes no ref for a hidden or unstyled file
+        control, so a model legitimately passes a label or a nearby section ref.
+        First resolve the requested target; if that finds a file control, use it.
+        Otherwise fall back to the page's single empty file input (the same
+        deterministic DOM fact the capability inspector reports). Ambiguity stays
+        an error: the model must name an unresolvable or non-unique upload
+        explicitly instead of the runtime guessing which of several files to fill.
+        """
+        resolved = None
+        if target.strip():
+            try:
+                resolved = await tab.resolve_target(target=target)
+            except Exception:
+                resolved = None
+        if resolved is not None:
+            file_input = await resolve_file_input(tab.page, resolved.locator)
+            if file_input is not None:
+                return file_input
+        empty_inputs = await self._empty_file_inputs(tab.page)
+        if len(empty_inputs) == 1:
+            return empty_inputs[0]
+        return None
+
+    @staticmethod
+    async def _empty_file_inputs(page: Any) -> list[Any]:
+        """Return enabled file inputs that currently hold no file.
+
+        Mirrors the empty-file-upload fact the capability inspector reports so
+        deterministic resolution and browser evidence never disagree. Visibility
+        is deliberately not required: boards hide the native control behind a
+        styled label, and set_input_files works on a hidden input.
+        """
+        controls = page.locator('input[type="file"]')
+        empty_inputs: list[Any] = []
+        for index in range(await controls.count()):
+            control = controls.nth(index)
+            if await control.is_enabled() and not await control.input_value():
+                empty_inputs.append(control)
+        return empty_inputs
+
+    async def _pre_select_type_target(self, arguments: dict[str, Any]) -> None:
+        """Select a browser_type target's existing text so typing replaces it.
+
+        ``browser_type`` emits keystrokes; without clearing first, a retyped
+        value appends to whatever the control already holds (observed as
+        concatenated values on React and formatting inputs). Selecting the
+        current text makes the incoming keystrokes replace it. Failures are
+        non-fatal: the type call itself reports its own errors.
+        """
+        target = arguments.get("target")
+        if not isinstance(target, str) or not target:
+            return
+        try:
+            async with self._operation_scope():
+                tab = await self._backend._ensure_tab()
+                resolved = await tab.resolve_target(target=target)
+                await resolved.locator.select_text()
+        except Exception as exc:  # noqa: BLE001 - best-effort pre-clear
+            logger.debug("browser_type pre-clear skipped for %r: %s", target, exc)
 
     @property
     def pending_atomic_upload_target(self) -> str:
@@ -579,50 +726,91 @@ class BrowserSession:
         except ValueError as exc:
             raise BrowserToolExecutionError(str(exc)) from exc
 
-    async def prepare_submission_review(self, target: str) -> None:
-        """Bind a pending approval to the exact current submit control and page."""
-        normalized = normalize_browser_arguments({"target": target})
-        normalized_target = normalized.get("target")
-        if not isinstance(normalized_target, str) or not normalized_target:
+    async def resolve_submit_control_target(self) -> str:
+        """Resolve the current enabled form submit control to a snapshot ref.
+
+        The runtime owns this resolution: the model must never have to guess
+        the final-submit ref. Candidates come from the typed DOM submit
+        selector, are filtered through submit classification (so a form's
+        Cancel/Save-draft buttons never qualify), and the first enabled
+        form-submit control is captured to a targeted ARIA snapshot whose
+        element ref is returned.
+        """
+        tab = await self._backend._ensure_tab()
+        page = tab.page
+        locator = page.locator(SUBMIT_SELECTOR)
+        count = await locator.count()
+        chosen: int | None = None
+        for index in range(count):
+            item = locator.nth(index)
+            if not await item.is_visible():
+                continue
+            try:
+                kind, _control = await classify_submit_control(page, item)
+            except Exception:  # noqa: BLE001 - a misbehaving control is skipped
+                continue
+            if kind != "form_submit":
+                continue
+            if await item.is_enabled():
+                chosen = index
+                break
+        if chosen is None:
             raise BrowserToolExecutionError(
-                "Submission review requires the current final submit control ref."
+                "No enabled form submit control is visible. Complete form "
+                "validation first, then request the submission review again."
             )
-        if (
-            await self._classify_submit_control({"target": normalized_target})
-            is not SubmitControlKind.FORM_SUBMIT
-        ):
+        selector = f"{SUBMIT_SELECTOR} >> nth={chosen}"
+        result = await self.call_tool("browser_snapshot", {"target": selector})
+        _raise_for_tool_error("browser_snapshot", result)
+        match = REF_TAG_RE.search(_text_content(result))
+        if match is None:
             raise BrowserToolExecutionError(
-                "Submission review target is not a current form submit control."
+                "Resolved submit control has no snapshot ref; capture a fresh snapshot and retry."
             )
-        observation = self._current_observation()
-        self._submission.prepare(
-            target=normalized_target,
-            observation=observation,
-        )
+        return match.group(1)
+
+    async def submit_approved_application(self) -> str:
+        """Resolve and click the current form-submit control under the armed guard.
+
+        The runtime owns final-submit resolution: the control is re-resolved
+        from live DOM at call time (never a stale pre-approval ref), classified
+        as a real form submit, and clicked through the guarded executor only
+        while the human's approval is armed. The click is one-use; the caller
+        (Submission Reviewer) reads the returned fresh evidence to judge the
+        outcome.
+        """
+        target = await self.resolve_submit_control_target()
+        result = await self.call_tool("browser_click", {"target": target})
+        evidence = await self.observe()
+        return f"{result}\n{evidence}"
 
     async def _require_submission_capability_locked(
         self,
         arguments: dict[str, Any],
     ) -> None:
-        target = arguments.get("target")
+        # The gate is the safety: the human approved final submission for this
+        # application and the click is one-use. The clicked control was already
+        # classified as a real form submit by the caller; the click's own
+        # actionability wait and the reviewer's post-click observe are the
+        # outcome checks.
         try:
-            self._submission.require_target(target)
+            self._submission.require_armed()
         except ValueError as exc:
             raise BrowserToolExecutionError(str(exc)) from exc
-        result = await self._backend.call_tool(
-            "browser_snapshot",
-            {"target": "html"},
-            meta=self._call_meta("browser_snapshot"),
-        )
-        _raise_for_tool_error("browser_snapshot", result)
-        evidence = _text_content(result)
-        page_url, page_title = await self._page_identity()
-        self._last_snapshot = evidence
-        current = self._record_observation(evidence, url=page_url, title=page_title)
+        if not await self._page_is_alive():
+            raise BrowserToolExecutionError(
+                "The browser page is frozen (renderer did not answer the "
+                "liveness probe). Navigate to the job URL to reload the page, "
+                "re-verify the form, and request submission approval again."
+            )
+
+    async def _page_is_alive(self) -> bool:
+        """Probe renderer liveness through the browser layer (no core JS)."""
+        tab = await self._backend._ensure_tab()
         try:
-            self._submission.require_observation(current)
-        except ValueError as exc:
-            raise BrowserToolExecutionError(str(exc)) from exc
+            return bool(await tab.liveness(timeout_seconds=2.0))
+        except Exception:
+            return False
 
     async def _classify_submit_control(
         self,

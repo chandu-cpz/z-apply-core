@@ -4,8 +4,37 @@ from typing import TYPE_CHECKING
 
 from langchain_core.tools import BaseTool, tool
 
+from z_apply_core.memory.applicant_memory import is_sensitive_fact_label
+
 if TYPE_CHECKING:
     from z_apply_core.memory.applicant_memory import CandidateMemory
+
+
+def _drop_sensitive_matches(result: dict[str, object] | None) -> dict[str, object] | None:
+    """Return the lookup/search result with credential-labeled matches removed.
+
+    A password or token that leaked into memory during an earlier run must
+    never reach a model through any part of the tool result, including the raw
+    ``matches`` lists, not just the merged ``sources``.
+    """
+    if result is None:
+        return None
+    matches = result.get("matches", [])
+    if not isinstance(matches, list):
+        return result
+    kept = [
+        match
+        for match in matches
+        if not (
+            isinstance(match, dict) and is_sensitive_fact_label(str(match.get("field_label", "")))
+        )
+    ]
+    if len(kept) == len(matches):
+        return result
+    # Every usable match was a credential: report an internally consistent
+    # empty result instead of a misleading "exact"/"semantic" status with no
+    # matches, which could otherwise push a weak model into a re-lookup loop.
+    return {**result, "memory_status": "empty", "matches": []}
 
 
 def make_candidate_memory_tools(candidate_memory: CandidateMemory) -> list[BaseTool]:
@@ -36,9 +65,12 @@ def make_candidate_memory_tools(candidate_memory: CandidateMemory) -> list[BaseT
             limit=limit,
         )
 
+        clean_lookup = _drop_sensitive_matches(lookup_result)
+        clean_search = _drop_sensitive_matches(search_result)
+
         sources: list[dict[str, object]] = []
         seen: set[tuple[str, str]] = set()
-        for result in (lookup_result, search_result):
+        for result in (clean_lookup, clean_search):
             if result is None:
                 continue
             matches = result.get("matches", [])
@@ -62,8 +94,8 @@ def make_candidate_memory_tools(candidate_memory: CandidateMemory) -> list[BaseT
                 )
 
         return {
-            "lookup": lookup_result,
-            "search": search_result,
+            "lookup": clean_lookup,
+            "search": clean_search,
             "sources": sources,
         }
 

@@ -22,7 +22,7 @@ EVIDENCE_LINES = [
     '[ref=o6] option "Option 6"',
     '[ref=o7] option "Option 7"',
     '[ref=o8] option "Option 8"',
-    '[ref=sep] separator',
+    "[ref=sep] separator",
     '[ref=li1] listitem "Alpha"',
     '[ref=li2] listitem "Beta"',
     "Company description with no ref token",

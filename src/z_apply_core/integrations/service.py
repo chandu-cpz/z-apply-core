@@ -11,7 +11,7 @@ import contextlib
 import hashlib
 import mimetypes
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -54,11 +54,11 @@ from z_apply_core.integrations.models import (
     RunPhase,
     RunStatus,
     StartRunRequest,
-    utc_now,
 )
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
+from z_apply_core.text_utils import utc_now
 
 DEFAULT_TASK = (
     "Complete the job application carefully, ask only for unavailable candidate facts, "
@@ -505,7 +505,9 @@ class ZApplyCore:
                 run_id=run.run_id,
                 context_inbox=run.context_inbox,
                 shared_resources=True,
-                artifact_callback=lambda kind, path: self._record_artifact(run, kind, path),
+                artifact_callback=lambda kind, path: _discard(
+                    self._artifact_created(run, kind, path)
+                ),
             )
             run.resources.runtime = runtime
             run.view = replace(
@@ -530,7 +532,6 @@ class ZApplyCore:
                 "completed": RunOutcome.SUBMITTED_VERIFIED,
                 "incomplete": RunOutcome.BLOCKED,
                 "blocked": RunOutcome.BLOCKED,
-                "rejected": RunOutcome.REJECTED,
                 "failed": RunOutcome.FAILED,
             }.get(status, RunOutcome.FAILED)
             summary = str(state.get("orchestrator_summary") or state.get("auth_summary") or status)
@@ -811,9 +812,6 @@ class ZApplyCore:
         )
         return artifact
 
-    async def _record_artifact(self, run: _Run, kind: str, path: Any) -> None:
-        await self._artifact_created(run, kind, path)
-
     def _require_run(self, run_id: str) -> _Run:
         run = self._runs.get(run_id)
         if run is None:
@@ -904,6 +902,8 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "agent_message_delta": "agent.message.delta",
         "agent_model_tool_call": "model.tool_call.delta",
         "model_selected": "model.selected",
+        "model_call_start": "model.call_started",
+        "model_call_content": "model.call_completed",
         "model_failed": "model.failed",
         "model_rotated": "model.rotated",
         "model_rate_limited": "model.rate_limited",
@@ -955,8 +955,7 @@ def _safe_value(value: Any, *, depth: int = 0) -> Any:
         return {
             field.name: sanitized
             for field in fields(value)
-            if (sanitized := _safe_value(getattr(value, field.name), depth=depth + 1))
-            is not None
+            if (sanitized := _safe_value(getattr(value, field.name), depth=depth + 1)) is not None
         }
     return None
 
@@ -1000,3 +999,8 @@ def _framework_payload(event: FrameworkTraceEvent) -> dict[str, Any]:
         values = [item for item in data.values() if isinstance(item, dict)]
         data = {key: value for item in values for key, value in item.items()}
     return _safe_payload({key: data[key] for key in _PUBLIC_STATE_FIELDS if key in data})
+
+
+async def _discard(coro: Awaitable[Any]) -> None:
+    """Await a coroutine and drop its result for a None-typed callback."""
+    await coro

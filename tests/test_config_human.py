@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 from z_apply_core.config import Settings, load_settings
 from z_apply_core.human.factory import make_configured_human_channel
@@ -146,7 +146,7 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"manual_auth": "done"})
 
     async def test_human_tools_delegate_to_channel(self) -> None:
-        ask_human, request_submit_approval = make_human_tools(FakeHumanChannel())
+        (ask_human,) = make_human_tools(FakeHumanChannel())
 
         answer = await ask_human.ainvoke(
             {
@@ -159,25 +159,63 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
                 "options": ["Yes", "No"],
             }
         )
-        approval = await request_submit_approval.ainvoke(
-            {
-                "final_review": "Ready",
-                "submission_target": "e10",
-                "url": "https://example.test",
-                "company_name": "Acme",
-                "role_name": "Engineer",
-            }
-        )
 
         self.assertEqual(
             answer,
             {"human_answer": "Yes", "candidate_memory_stored": "false"},
         )
-        self.assertEqual(approval, {"submit_approval": "approved"})
+
+    async def test_ask_human_tolerates_json_string_options(self) -> None:
+        channel = SimpleNamespace(ask=AsyncMock(return_value="answered"))
+        (ask_human,) = make_human_tools(channel)
+
+        answer = await ask_human.ainvoke(
+            {
+                "question": "Pick one",
+                "reason": "missing_candidate_fact",
+                "field_label": "Choice",
+                "options": "[]",
+            }
+        )
+
+        self.assertEqual(answer["human_answer"], "answered")
+        self.assertEqual(channel.ask.await_args.kwargs["options"], [])
+
+    async def test_ask_human_parses_json_string_options_list(self) -> None:
+        channel = SimpleNamespace(ask=AsyncMock(return_value="Yes"))
+        (ask_human,) = make_human_tools(channel)
+
+        answer = await ask_human.ainvoke(
+            {
+                "question": "Pick one",
+                "reason": "missing_candidate_fact",
+                "field_label": "Choice",
+                "options": '["Yes", "No"]',
+            }
+        )
+
+        self.assertEqual(answer["human_answer"], "Yes")
+        self.assertEqual(channel.ask.await_args.kwargs["options"], ["Yes", "No"])
+
+    async def test_ask_human_invalid_options_string_degrades_to_no_options(self) -> None:
+        channel = SimpleNamespace(ask=AsyncMock(return_value="fallback"))
+        (ask_human,) = make_human_tools(channel)
+
+        answer = await ask_human.ainvoke(
+            {
+                "question": "Pick one",
+                "reason": "ambiguous_field",
+                "field_label": "Choice",
+                "options": "not-json",
+            }
+        )
+
+        self.assertEqual(answer["human_answer"], "fallback")
+        self.assertEqual(channel.ask.await_args.kwargs["options"], [])
 
     async def test_duplicate_field_question_reuses_completed_human_answer(self) -> None:
         channel = SimpleNamespace(ask=AsyncMock(return_value="No"))
-        ask_human, _ = make_human_tools(channel)
+        (ask_human,) = make_human_tools(channel)
         request = {
             "question": "Have you worked here before?",
             "reason": "missing_candidate_fact",
@@ -196,7 +234,7 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_human_challenge_uses_runtime_owned_image_path(self) -> None:
         capture = AsyncMock(return_value=Path("/runtime/captcha.png"))
-        ask_human, _ = make_human_tools(
+        (ask_human,) = make_human_tools(
             FakeHumanChannel(),
             capture_human_challenge=capture,
         )
@@ -212,83 +250,46 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
         capture.assert_awaited_once_with("e42")
         self.assertTrue(answer["human_answer"].endswith(":/runtime/captcha.png"))
 
-    async def test_review_artifact_is_published_before_submit_approval(self) -> None:
-        before_approval = AsyncMock(return_value={"ready": True})
-        _, request_submit_approval = make_human_tools(
+    async def test_human_challenge_stripped_never_touches_capture(self) -> None:
+        capture = AsyncMock(return_value=Path("/runtime/captcha.png"))
+        (ask_human,) = make_human_tools(
             FakeHumanChannel(),
-            before_submit_approval=before_approval,
+            capture_human_challenge=capture,
+            allow_human_challenge=False,
         )
 
-        result = await request_submit_approval.ainvoke(
+        answer = await ask_human.ainvoke(
             {
-                "final_review": "Ready",
-                "submission_target": "e10",
-                "url": "https://example.test",
+                "question": "Enter CAPTCHA",
+                "reason": "human_challenge",
+                "challenge_target": "Choose File",
             }
         )
 
-        before_approval.assert_awaited_once_with("Ready", "e10")
-        self.assertEqual(result, {"submit_approval": "approved"})
+        capture.assert_not_awaited()
+        self.assertEqual(answer["human_answer"], "")
+        self.assertIn("unavailable", answer["error"].casefold())
 
-    async def test_not_ready_review_returns_goal_feedback_without_human_prompt(
-        self,
-    ) -> None:
-        channel = SimpleNamespace(confirm=AsyncMock(return_value=True))
-        before_approval = AsyncMock(
-            return_value={
-                "ready": False,
-                "visible_errors": ["Required field is empty"],
-            }
-        )
-        _, request_submit_approval = make_human_tools(
-            channel,
-            before_submit_approval=before_approval,
+    async def test_human_challenge_capture_failure_returns_typed_error(self) -> None:
+        async def failing_capture(_target: str) -> Path:
+            raise RuntimeError('"Choose File" does not match any elements.')
+
+        (ask_human,) = make_human_tools(
+            FakeHumanChannel(),
+            capture_human_challenge=failing_capture,
         )
 
-        result = await request_submit_approval.ainvoke(
-            {"final_review": "Ready", "submission_target": "e10"}
-        )
-
-        self.assertEqual(result["submit_approval"], "not_ready")
-        self.assertEqual(
-            result["readiness"],
-            {"ready": False, "visible_errors": ["Required field is empty"]},
-        )
-        channel.confirm.assert_not_awaited()
-
-    async def test_rejected_submission_waits_for_correction_instead_of_terminating(
-        self,
-    ) -> None:
-        channel = SimpleNamespace(
-            confirm=AsyncMock(return_value=False),
-            ask=AsyncMock(return_value="Class XII branch must be Math"),
-        )
-        on_approval = Mock()
-        _, request_submit_approval = make_human_tools(
-            channel,
-            on_approval=on_approval,
-        )
-
-        result = await request_submit_approval.ainvoke(
+        answer = await ask_human.ainvoke(
             {
-                "final_review": "Ready",
-                "submission_target": "e10",
-                "url": "https://example.test",
-                "company_name": "Acme",
-                "role_name": "Engineer",
+                "question": "Enter CAPTCHA",
+                "reason": "human_challenge",
+                "challenge_target": "Choose File",
             }
         )
 
-        self.assertEqual(
-            result,
-            {
-                "submit_approval": "rejected",
-                "correction": "Class XII branch must be Math",
-            },
-        )
-        on_approval.assert_called_once_with(False)
-        channel.ask.assert_awaited_once()
-        self.assertIn("correct", channel.ask.await_args.kwargs["question"].casefold())
+        self.assertEqual(answer["human_answer"], "")
+        self.assertIn("Choose File", answer["error"])
+        self.assertIn("ref", answer["error"].casefold())
 
 
 class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):

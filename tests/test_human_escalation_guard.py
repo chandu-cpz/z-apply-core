@@ -63,9 +63,7 @@ class HumanEscalationGuardTests(unittest.IsolatedAsyncioTestCase):
         guard = HumanEscalationGuardMiddleware(
             allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"})
         )
-        request = _request(
-            {"reason": "missing_candidate_fact", "field_label": "Expected salary"}
-        )
+        request = _request({"reason": "missing_candidate_fact", "field_label": "Expected salary"})
 
         result = await guard.awrap_tool_call(request, handler)
 

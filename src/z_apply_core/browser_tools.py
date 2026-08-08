@@ -15,7 +15,14 @@ from langchain_core.tools import (
     ToolException,
     tool,
 )
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, create_model
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    create_model,
+    model_validator,
+)
 
 _ELEMENT_REF_CORE = r"(?:f\d+)?e\d+(?:v\d+)?"
 ELEMENT_REF_PATTERN = rf"^{_ELEMENT_REF_CORE}$"
@@ -32,6 +39,44 @@ _AGENT_TOOL_DESCRIPTIONS["browser_wait_for"] = (
     "Wait briefly for page state to settle or visible text to appear/disappear. "
     "The time argument is seconds, must be at most 30, and is not milliseconds. "
     "Prefer a visible text condition when one is known."
+)
+
+_AGENT_TOOL_DESCRIPTIONS["browser_evaluate"] = (
+    "Run a small JavaScript function against the current page. Use it only for a "
+    "stubborn form control whose standard writes never land. When you provide a "
+    "`target` ref, the resolved element is passed to your function as its FIRST "
+    "argument - write `(el) => {...}` and use that argument. Element refs (e.g. "
+    "e90) are browser-layer snapshot tokens, NOT DOM attributes; never query "
+    "`document.querySelector('[ref=...]')`. On a React or other controlled "
+    "input a plain `el.value = value` assignment is ignored by the framework and "
+    "leaves the page unchanged. Use the native setter and matching events "
+    "instead, e.g.:\n"
+    "`const s = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "
+    "'value').set; s.call(el, ''); s.call(el, value); "
+    "el.dispatchEvent(new Event('input', {bubbles: true})); "
+    "el.dispatchEvent(new Event('change', {bubbles: true}));`\n"
+    "Clear the field first through the same native setter, never by assigning "
+    "`.value` directly. State the exact target/ref and value you intend, run it, "
+    "then verify with fresh browser evidence that the control holds the value. "
+    "For an intl-tel-input phone field with a wrong country, set the country "
+    "through its API first: `const iti = el.iti || "
+    "window.intlTelInputGlobals?.getInstance(el); if (iti) iti.setCountry('in');` "
+    "then re-enter the full international number (e.g. +919063812386) through "
+    "the native setter and input/change events. "
+    "A checkbox/radio/switch is a TOGGLE: prefer a plain `browser_click`, and "
+    "never click it twice in a row (a second identical click un-checks it). If "
+    "you must use evaluation for a toggle, call a real `el.click()` on the "
+    "actual input element - never assign `.checked = true`, which framework "
+    "handlers ignore. To READ a control's state that the snapshot cannot show "
+    "(custom consent checkbox), use a read-only probe that returns a definitive "
+    "value: `(el) => { const i = el.tagName === 'INPUT' ? el : "
+    "el.querySelector('input[type=checkbox]'); return i ? i.checked : null; }`. "
+    "A result of `null`/`undefined` means there is no native input at all - rely "
+    "on the typed context and do not re-click to check. Reading never mutates "
+    "and never counts as a write. "
+    "If the evaluate receipt reports `changed: false`, the framework ignored the "
+    "write - do not repeat it. Never use evaluation to bypass validation, "
+    "fabricate a candidate value, or solve a CAPTCHA."
 )
 
 INITIAL_AGENT_BROWSER_TOOLS = (
@@ -73,11 +118,6 @@ AUTHENTICATION_SPECIALIST_BROWSER_TOOLS = (
     "browser_tabs",
 )
 
-VERIFIER_BROWSER_TOOLS = (
-    "browser_snapshot",
-    "browser_find",
-)
-
 BROWSER_CHANGING_TOOL_NAMES = frozenset(
     {
         "browser_navigate",
@@ -92,33 +132,52 @@ BROWSER_CHANGING_TOOL_NAMES = frozenset(
     }
 )
 
+# Model-facing tool results that always embed current browser evidence when
+# they succeed. ``browser_snapshot`` returns the raw page capture and records
+# the observation; ``browser_wait_for`` appends bounded post-wait evidence.
+EVIDENCE_RESULT_TOOL_NAMES = frozenset({"browser_snapshot", "browser_wait_for"})
+
+# Mutation tools whose successful results are evidence-backed receipts. The
+# result is only evidence-carrying when a receipt was produced for the call
+# itself (the session clears the receipt when the post-action snapshot fails).
+RECEIPT_RESULT_TOOL_NAMES = frozenset(
+    name for name in BROWSER_CHANGING_TOOL_NAMES if name != "browser_click_upload"
+)
+
 
 def normalize_browser_arguments(
     arguments: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
-    """Translate agent-facing ARIA reference notation at the browser boundary."""
+    """Translate agent-facing ARIA reference notation at the browser boundary.
+
+    A stray ``ref`` key (models copy ``[ref=e12]`` tokens from the snapshot) is
+    folded into ``target`` when ``target`` is absent and otherwise dropped, so
+    an ARIA-style call like ``browser_click({"ref": "e12"})`` still works.
+    """
     normalized = dict(arguments or {})
     normalized["target"] = _normalize_target(
-        normalized.get("target"),
+        normalized.get("target") or normalized.get("ref"),
         element=normalized.get("element"),
     )
     if normalized.get("target") is None:
         normalized.pop("target", None)
+    normalized.pop("ref", None)
 
     fields = normalized.get("fields")
     if isinstance(fields, list):
-        normalized["fields"] = [
-            {
-                **field,
-                "target": _normalize_target(
-                    field.get("target"),
-                    element=field.get("name"),
-                ),
-            }
-            if isinstance(field, Mapping)
-            else field
-            for field in fields
-        ]
+        normalized_fields: list[Any] = []
+        for field in fields:
+            if not isinstance(field, Mapping):
+                normalized_fields.append(field)
+                continue
+            entry = dict(field)
+            entry["target"] = _normalize_target(
+                entry.get("target") or entry.get("ref"),
+                element=entry.get("name"),
+            )
+            entry.pop("ref", None)
+            normalized_fields.append(entry)
+        normalized["fields"] = normalized_fields
     return normalized
 
 
@@ -200,6 +259,7 @@ def make_click_upload_tool(
     uploader: FileUploader,
     *,
     default_paths: Sequence[str] = (),
+    revision_provider: Callable[[], int | None] | None = None,
 ) -> BaseTool:
     """Build a core-only direct file-input upload operation."""
     configured_paths = list(default_paths)
@@ -209,9 +269,10 @@ def make_click_upload_tool(
     @tool
     async def browser_click_upload(
         target: str,
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
         paths: Annotated[list[str] | None, BeforeValidator(_decode_json_container)] = None,
         element: str = "file upload control",
-    ) -> str:
+    ) -> str | ToolMessage:
         """Attach the configured resume directly to a file control without a native chooser."""
         resolved_paths = paths or configured_paths
         fallback_note = ""
@@ -233,8 +294,31 @@ def make_click_upload_tool(
         )
         if not isinstance(normalized_target, str) or not normalized_target:
             raise ValueError("browser_click_upload requires a resolvable target.")
-        result = await uploader(normalized_target, resolved_paths)
-        return f"{fallback_note}\n{result}" if fallback_note else result
+        try:
+            result = await uploader(normalized_target, resolved_paths)
+        except ToolException:
+            raise
+        except Exception as exc:
+            # Raw browser-layer failures (for example a label mistarget that the
+            # page rejects as invalid CSS) must stay a contained ToolException.
+            # The base tool error handler only converts ToolException; letting a
+            # raw exception escape would abort the whole parallel tool-response
+            # batch (including unrelated sibling calls).
+            raise ToolException(
+                "File upload failed against the current page. Inspect fresh "
+                "browser evidence and call browser_click_upload on the upload "
+                "control; the configured resume path is attached automatically."
+            ) from exc
+        result_text = f"{fallback_note}\n{result}" if fallback_note else result
+        revision = revision_provider() if revision_provider is not None else None
+        if revision is None:
+            return result_text
+        return ToolMessage(
+            content=result_text,
+            tool_call_id=tool_call_id,
+            name="browser_click_upload",
+            additional_kwargs={"browser_revision": revision},
+        )
 
     browser_click_upload.handle_tool_error = True
     return browser_click_upload
@@ -362,10 +446,14 @@ class BrowserToolRegistry:
         caller: TextToolCaller,
         *,
         langchain_callers: Mapping[str, LangChainToolCaller] | None = None,
+        revision_provider: Callable[[], int | None] | None = None,
+        receipt_revision_provider: Callable[[], int | None] | None = None,
     ) -> None:
         self._specs = {spec.name: spec for spec in specs}
         self._caller = caller
         self._langchain_callers = dict(langchain_callers or {})
+        self._revision_provider = revision_provider
+        self._receipt_revision_provider = receipt_revision_provider
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -384,10 +472,34 @@ class BrowserToolRegistry:
         ]
 
     def _to_langchain_tool(self, spec: BrowserToolSpec) -> BaseTool:
-        async def call_tool(**kwargs: Any) -> Any:
+        async def call_tool(
+            tool_call_id: Annotated[str, InjectedToolCallId] = "",
+            **kwargs: Any,
+        ) -> Any:
             caller = self._langchain_callers.get(spec.name, self._caller)
             arguments = {k: v for k, v in kwargs.items() if v is not None and v != ""}
-            return await caller(spec.name, normalize_browser_arguments(arguments))
+            result = await caller(spec.name, normalize_browser_arguments(arguments))
+            if not isinstance(result, str):
+                return result
+            revision = self._revision_provider() if self._revision_provider is not None else None
+            if revision is None:
+                return result
+            if spec.name in RECEIPT_RESULT_TOOL_NAMES:
+                receipt_revision = (
+                    self._receipt_revision_provider()
+                    if self._receipt_revision_provider is not None
+                    else None
+                )
+                if receipt_revision != revision:
+                    return result
+            if spec.name not in EVIDENCE_RESULT_TOOL_NAMES | RECEIPT_RESULT_TOOL_NAMES:
+                return result
+            return ToolMessage(
+                content=result,
+                tool_call_id=tool_call_id,
+                name=spec.name,
+                additional_kwargs={"browser_revision": revision},
+            )
 
         return StructuredTool.from_function(
             coroutine=call_tool,
@@ -420,7 +532,47 @@ def _tool_model(spec: BrowserToolSpec) -> type[BaseModel]:
         type[BaseModel],
         model_factory(
             model_name,
+            __base__=_RefTolerantArguments,
             __config__=ConfigDict(extra="forbid"),
             **fields,
         ),
     )
+
+
+class _RefTolerantArguments(BaseModel):
+    """Tolerate stray ``ref`` keys produced from snapshot evidence tokens.
+
+    Models copy ``[ref=e12]`` tokens from the snapshot into tool arguments as a
+    ``ref`` key, even though the browser-layer tools declare ``target``. Before
+    the ``extra="forbid"`` validation runs, any ``ref`` is folded into
+    ``target`` when ``target`` is absent and otherwise dropped, so a call like
+    ``browser_click({"ref": "e12"})`` resolves instead of being rejected as an
+    unknown argument.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_stray_ref_into_target(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        folded = dict(data)
+        if "ref" in folded:
+            target = folded.get("target")
+            if not target:
+                folded["target"] = folded["ref"]
+            folded.pop("ref", None)
+        fields = folded.get("fields")
+        if isinstance(fields, list):
+            folded_fields: list[Any] = []
+            for field in fields:
+                if not isinstance(field, dict):
+                    folded_fields.append(field)
+                    continue
+                entry = dict(field)
+                if "ref" in entry:
+                    if not entry.get("target"):
+                        entry["target"] = entry["ref"]
+                    entry.pop("ref", None)
+                folded_fields.append(entry)
+            folded["fields"] = folded_fields
+        return folded

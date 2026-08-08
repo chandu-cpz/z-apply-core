@@ -25,12 +25,10 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
         self,
         subagent_types: Iterable[str],
         *,
-        resume_path: str = "",
         browser: BrowserSession | None = None,
     ) -> None:
         super().__init__()
         self._subagent_types = frozenset(subagent_types)
-        self._resume_path = resume_path
         self._browser = browser
 
     async def awrap_tool_call(
@@ -80,6 +78,26 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
                     if isinstance(description, str):
                         description = self._normalize_description(nested, description)
                         return {**call, "args": {**args, "description": description}}
+                # Weak free-tier models sometimes omit the required
+                # subagent_type (or hallucinate junk keys like server_info),
+                # which makes the runtime reject the task before any subagent
+                # runs. AnswerWriter is the overwhelming majority of Z-Apply
+                # delegation, so a missing type defaults to it; the normalized
+                # args carry only the two schema fields.
+                if not isinstance(nested, str):
+                    description = args.get("description", "")
+                    normalized = (
+                        self._normalize_description("AnswerWriter", description)
+                        if isinstance(description, str)
+                        else description
+                    )
+                    return {
+                        **call,
+                        "args": {
+                            "subagent_type": "AnswerWriter",
+                            "description": normalized,
+                        },
+                    }
             return dict(call)
 
         description = args.get("description") if isinstance(args, dict) else None
@@ -98,11 +116,7 @@ class SubagentDispatchMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
         }
 
     def _normalize_description(self, subagent_type: str, description: str) -> str:
-        normalized = (
-            description.replace("RESUME_PATH", self._resume_path)
-            if self._resume_path
-            else description
-        )
+        normalized = description
         if subagent_type != "AuthenticationSpecialist":
             return normalized
         return (

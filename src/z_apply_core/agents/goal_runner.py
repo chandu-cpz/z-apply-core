@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
@@ -26,7 +27,7 @@ from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 logger = logging.getLogger(__name__)
 
 ACTIVE_OBJECTIVE_SOURCE = "active_objective_controller"
-MAX_NO_PROGRESS_RECOVERIES = 20
+MAX_NO_PROGRESS_RECOVERIES = 8
 MAX_GOAL_RUN_RECOVERIES = 100
 
 _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {"task", "ask_human"}
@@ -55,11 +56,13 @@ class ActiveGoalMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Resp
         is_terminal: Callable[[], bool],
         on_no_progress: Callable[[ToolProtocolViolation], None],
         max_recoveries: int = MAX_NO_PROGRESS_RECOVERIES,
+        sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
         self._is_terminal = is_terminal
         self._on_no_progress = on_no_progress
         self._max_recoveries = max_recoveries
+        self._sink = sink
         self._recoveries = 0
 
     @hook_config(can_jump_to=["model"])
@@ -82,9 +85,7 @@ class ActiveGoalMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Resp
     async def awrap_tool_call(
         self,
         request: ToolCallRequest,
-        handler: Callable[
-            [ToolCallRequest], Awaitable[ToolMessage | Command[Any]]
-        ],
+        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
     ) -> ToolMessage | Command[Any]:
         """Credit progress only after a progress-capable tool succeeds.
 
@@ -119,6 +120,7 @@ class ActiveGoalMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Resp
             self._recoveries,
             self._max_recoveries,
         )
+        _emit_objective_rejected_sync(self._sink, self._recoveries, self._max_recoveries)
         return {
             "messages": [
                 HumanMessage(
@@ -167,8 +169,15 @@ async def run_persistent_goal(
     source: str = "orchestrator",
     max_recoveries: int = MAX_GOAL_RUN_RECOVERIES,
     recovery_delay_seconds: float = 1.0,
+    on_recovery: Callable[[Exception, int], bool] | None = None,
 ) -> None:
-    """Re-enter one checkpointed goal thread after exhausted model attempts."""
+    """Re-enter one checkpointed goal thread after exhausted model attempts.
+
+    ``on_recovery`` is invoked before each recovery re-entry with the failure and
+    the upcoming attempt number. Returning ``True`` stops the loop cleanly (the
+    caller owns any terminal state), converting an unrecoverable churn loop into
+    a controlled exit instead of exhausting ``max_recoveries``.
+    """
     message = initial_message
     recovered = 0
     while True:
@@ -183,6 +192,22 @@ async def run_persistent_goal(
         except Exception as exc:  # noqa: BLE001 - recovery owns model/provider failures
             if is_terminal():
                 return
+            if on_recovery is not None:
+                terminate = False
+                try:
+                    terminate = bool(on_recovery(exc, recovered + 1))
+                except Exception:  # noqa: BLE001 - never break recovery
+                    logger.exception("Recovery decision callback failed")
+                    terminate = False
+                if terminate:
+                    await _emit_recovery(
+                        sink,
+                        "recovery_stalled",
+                        source,
+                        recovered + 1,
+                        exc,
+                    )
+                    return
             if recovered >= max_recoveries:
                 await _emit_recovery(
                     sink,
@@ -211,6 +236,34 @@ async def run_persistent_goal(
         if recovered:
             await _emit_recovery(sink, "recovery_completed", source, recovered, None)
         return
+
+
+def _emit_objective_rejected_sync(
+    sink: FrameworkEventSink | None,
+    recovery: int,
+    maximum: int,
+) -> None:
+    """Emit a visible trace event for one rejected prose-only stop.
+
+    The terminal renders these as explicit boxes so a model loop that only
+    produces text (no native tool call) is observable instead of appearing as
+    silent ``model call complete`` lines.
+    """
+    if sink is None:
+        return
+    result = sink.accept(
+        FrameworkTraceEvent(
+            event="active_objective_rejected",
+            name="orchestrator",
+            data={"recovery": recovery, "max": maximum},
+            raw={},
+        )
+    )
+    if inspect.isawaitable(result):
+        try:
+            asyncio.get_running_loop().create_task(result)
+        except RuntimeError:
+            return
 
 
 async def _emit_recovery(

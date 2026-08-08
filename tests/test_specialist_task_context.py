@@ -13,6 +13,4 @@ def test_initial_specialist_task_survives_tool_turns_and_controller_feedback() -
         HumanMessage(content="Retry natively.", name="runtime_controller"),
     ]
 
-    assert initial_specialist_task(messages) == (
-        "Resolve Given Name(s) from candidate evidence."
-    )
+    assert initial_specialist_task(messages) == ("Resolve Given Name(s) from candidate evidence.")

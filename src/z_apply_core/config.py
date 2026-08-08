@@ -7,6 +7,7 @@ from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 CORE_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_RESUME_PATH = (CORE_ROOT / ".z-apply" / "input" / "Chandrakanth-V-Resume.pdf").resolve()
 DEFAULT_SIMPLIFY_ADDON_PATH = Path.home() / "Downloads" / "simplify_jobs-2.3.0"
 DEFAULT_CAMOUFOX_BROWSER = ""
 
@@ -16,6 +17,8 @@ class Settings(BaseSettings):
     default_password: str = Field(default="", alias="DEFAULT_PASSWORD")
     telegram_bot_token: str = Field(default="", alias="TELEGRAM_BOT_TOKEN")
     telegram_group_chat_id: str = Field(default="", alias="TELEGRAM_GROUP_CHAT_ID")
+    telegram_proxy: str = Field(default="", alias="TELEGRAM_PROXY")
+    telegram_bot_api_base: str = Field(default="", alias="TELEGRAM_BOT_API_BASE")
     gmail_credentials_path: Path = Field(
         default=CORE_ROOT / "credentials.json",
         alias="GMAIL_CREDENTIALS_PATH",
@@ -64,10 +67,6 @@ class Settings(BaseSettings):
     @property
     def has_telegram(self) -> bool:
         return bool(self.telegram_bot_token and self.telegram_group_chat_id)
-
-    @property
-    def has_gmail(self) -> bool:
-        return self.gmail_credentials_path.is_file() and self.gmail_token_path.is_file()
 
 
 @lru_cache

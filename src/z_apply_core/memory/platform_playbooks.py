@@ -10,8 +10,8 @@ from langchain_core.tools import BaseTool, ToolException, tool
 
 from z_apply_core.browser_observation import ActionReceipt
 from z_apply_core.browser_session import BrowserSession
+from z_apply_core.config import CORE_ROOT
 
-CORE_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PLAYBOOK_ROOT = CORE_ROOT / ".z-apply" / "platform-memory"
 _MAX_ACTIVE_PLAYBOOK_CHARS = 6_000
 _MAX_EPISODE_PART_CHARS = 400
@@ -56,9 +56,7 @@ class PlatformPlaybooks:
             )
         for label, value in episode.items():
             if not value or len(value) > _MAX_EPISODE_PART_CHARS:
-                raise ToolException(
-                    f"{label} must be 1-{_MAX_EPISODE_PART_CHARS} characters."
-                )
+                raise ToolException(f"{label} must be 1-{_MAX_EPISODE_PART_CHARS} characters.")
             if _contains_private_or_ephemeral_data(value):
                 raise ToolException(
                     "Platform episodes cannot contain secrets, candidate facts, file "
@@ -77,9 +75,7 @@ class PlatformPlaybooks:
             f"{receipt.tool} changed browser revision "
             f"{receipt.before_revision} → {receipt.after.revision}"
         )
-        procedure_key = hashlib.sha256(
-            "\n".join(episode.values()).encode()
-        ).hexdigest()[:12]
+        procedure_key = hashlib.sha256("\n".join(episode.values()).encode()).hexdigest()[:12]
         evidence_key = hashlib.sha256(
             (
                 f"{job_url}\n{receipt.tool}\n{receipt.before_revision}\n"
@@ -125,7 +121,9 @@ class PlatformPlaybooks:
         family = site_family(url)
         if not family:
             family = "unknown-site"
-        safe_name = "".join(character if character.isalnum() or character in ".-" else "_" for character in family)
+        safe_name = "".join(
+            character if character.isalnum() or character in ".-" else "_" for character in family
+        )
         return self._root / f"{safe_name}.md"
 
 

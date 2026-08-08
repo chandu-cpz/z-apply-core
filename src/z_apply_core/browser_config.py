@@ -3,9 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from z_apply_core.config import load_settings
-
-CORE_ROOT = Path(__file__).resolve().parents[2]
+from z_apply_core.config import CORE_ROOT, load_settings
 
 
 def build_browser_config(run_id: str = "manual") -> dict[str, Any]:

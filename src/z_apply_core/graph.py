@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -9,6 +8,7 @@ from nim_router.config import RouterConfig
 
 from z_apply_core.agents.context_inbox import ContextInbox
 from z_apply_core.agents.model_provider import ModelProvider, get_provider
+from z_apply_core.config import CORE_ROOT
 from z_apply_core.model_policy import (
     BLOCKED_MODEL_IDS_BELOW_120B,
     PROBED_TOOL_CAPABILITY_OVERRIDES,
@@ -19,7 +19,6 @@ from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
 
-CORE_ROOT = Path(__file__).resolve().parents[2]
 ROUTER_STATS_PATH = CORE_ROOT / ".z-apply" / "nim-router-stats.json"
 MAX_EXPLORATION_INTERVAL_SECONDS = 300.0
 
@@ -49,6 +48,7 @@ async def run_job(
     cleanup_resources: bool = True,
     context_inbox: ContextInbox | None = None,
     prepared_runtime: RunRuntime | None = None,
+    call_ledger: Any | None = None,
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
     run_resources = resources or RunResources()
@@ -65,6 +65,7 @@ async def run_job(
                     "run_resources": run_resources,
                     "context_inbox": context_inbox,
                     "prepared_runtime": prepared_runtime,
+                    "call_ledger": call_ledger,
                 }
             },
             version="v3",

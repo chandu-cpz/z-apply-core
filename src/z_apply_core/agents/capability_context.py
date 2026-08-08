@@ -6,7 +6,7 @@ from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from z_apply_core.browser_observation import BrowserCapabilities
@@ -23,7 +23,6 @@ CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
 _ALWAYS_AVAILABLE = frozenset(
     {
         "task",
-        "resolve_candidate_field",
         "ask_human",
         "application_blocked",
         "browser_wait_for",
@@ -31,9 +30,9 @@ _ALWAYS_AVAILABLE = frozenset(
 )
 _ORCHESTRATOR_CONTROL_TOOLS = _ALWAYS_AVAILABLE | frozenset(
     {
-        "request_submit_approval",
         "application_submitted",
         "remember_platform_lesson",
+        "lookup_candidate_memory",
     }
 )
 
@@ -56,6 +55,8 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         self._job_url = job_url
         self._run_context = run_context
         self._evidence_store = evidence_store
+        self._last_injected_revision: int | None = None
+        self._last_playbook_text: str | None = None
 
     async def awrap_model_call(
         self,
@@ -78,16 +79,33 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
             atomic_upload_pending=bool(pending_upload_target),
         )
         observation = browser.current_observation
-        revision = observation.revision if observation is not None else 0
+        revision = observation.revision if observation is not None else None
         available = ", ".join(_tool_name(tool) for tool in tools)
-        if observation is not None and self._evidence_store is not None:
-            current_evidence = render_bounded(observation, self._evidence_store)
-        else:
+        last_carries_evidence = _last_tool_message_carries_revision(request.messages, revision)
+        skip_evidence = (
+            revision is not None
+            and self._last_injected_revision == revision
+            and last_carries_evidence
+        )
+        if skip_evidence:
+            if self._evidence_store is not None and observation is not None:
+                self._evidence_store.save(observation)
             current_evidence = (
-                "\nCURRENT BROWSER EVIDENCE\n" + observation.compact_render()
-                if observation is not None
-                else ""
+                "\nCURRENT BROWSER EVIDENCE\n"
+                f"No new browser evidence has been recorded since revision {revision}. "
+                "The latest tool result already carries the current post-action "
+                "evidence. Call browser_observe only when you need a different view.\n"
             )
+        else:
+            self._last_injected_revision = revision
+            if observation is not None and self._evidence_store is not None:
+                current_evidence = render_bounded(observation, self._evidence_store)
+            else:
+                current_evidence = (
+                    "\nCURRENT BROWSER EVIDENCE\n" + observation.compact_render()
+                    if observation is not None
+                    else ""
+                )
         upload_context = (
             "pending_atomic_upload_target="
             f"{pending_upload_target}\n"
@@ -97,13 +115,34 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
             if pending_upload_target
             else ""
         )
+        if capabilities is not None and capabilities.required_file_upload_pending:
+            upload_context += (
+                "required_file_upload_pending=true\n"
+                "A REQUIRED file upload is still empty and the configured "
+                "resume must be attached to it. Call browser_click_upload now "
+                "with any ref from the resume/upload section of the current "
+                "browser evidence, or with the upload control's label; the "
+                "runtime resolves the file control deterministically and "
+                "attaches the configured resume path.\n"
+            )
+        elif capabilities is not None and capabilities.empty_file_upload_present:
+            upload_context += (
+                "optional_empty_upload_present=true\n"
+                "An OPTIONAL file-upload control is empty. It is not work: "
+                "the required resume upload is either already attached or not "
+                "required on this form. Ignore this control unless "
+                "required_file_upload_pending becomes true.\n"
+            )
         platform_context = ""
         if self._platform_playbooks is not None and self._job_url:
-            platform_context = (
-                "\nCURRENT APPLICABLE PLATFORM PLAYBOOK\n"
-                f"{self._platform_playbooks.read_for_url(self._job_url)}\n"
-                "END CURRENT APPLICABLE PLATFORM PLAYBOOK\n"
-            )
+            playbook_text = self._platform_playbooks.read_for_url(self._job_url)
+            if playbook_text != self._last_playbook_text:
+                self._last_playbook_text = playbook_text
+                platform_context = (
+                    "\nCURRENT APPLICABLE PLATFORM PLAYBOOK\n"
+                    f"{playbook_text}\n"
+                    "END CURRENT APPLICABLE PLATFORM PLAYBOOK\n"
+                )
         context = HumanMessage(
             name=CAPABILITY_CONTEXT_SOURCE,
             additional_kwargs={"lc_source": CAPABILITY_CONTEXT_SOURCE},
@@ -151,3 +190,26 @@ def _tool_name(tool: BaseTool | dict[str, Any]) -> str:
     if isinstance(function, dict):
         return str(function.get("name", ""))
     return str(tool.get("name", ""))
+
+
+def _last_tool_message_carries_revision(
+    messages: list[Any],
+    revision: int | None,
+) -> bool:
+    """Whether the most recent tool result embeds the current browser evidence.
+
+    Evidence-carrying tool results carry the typed ``browser_revision`` they
+    observed in their ``additional_kwargs`` (receipts, bounded waits, snapshots,
+    and ``browser_observe``). Error results never carry evidence. A non-evidence
+    result (task, ask_human, denial) forces a fresh injection.
+    """
+    if revision is None:
+        return False
+    for message in reversed(messages):
+        if isinstance(message, ToolMessage):
+            if message.status == "error":
+                return False
+            return message.additional_kwargs.get("browser_revision") == revision
+        if isinstance(message, AIMessage):
+            return False
+    return False

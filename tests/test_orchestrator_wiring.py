@@ -45,7 +45,6 @@ def _build(
         router_middleware=MagicMock(),
         orchestrator_human_guard=MagicMock(),
         active_goal_middleware=MagicMock(),
-        terminal=None,
         mutation_lock=mutation_lock,
     )
 
@@ -83,9 +82,7 @@ def test_capability_context_carries_wiring(tmp_path: Path) -> None:
     evidence_store = EvidenceStore(tmp_path)
     chain = _build(tmp_path, run_context=run_context, evidence_store=evidence_store)
     capability = next(
-        middleware
-        for middleware in chain
-        if isinstance(middleware, CapabilityContextMiddleware)
+        middleware for middleware in chain if isinstance(middleware, CapabilityContextMiddleware)
     )
     assert capability._evidence_store is evidence_store
     assert capability._run_context is run_context

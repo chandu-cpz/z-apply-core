@@ -13,7 +13,7 @@ async def test_application_artifacts_capture_before_publishing(tmp_path: Path) -
     browser = Mock()
     browser.artifact_path.side_effect = lambda filename: tmp_path / filename
     browser.call_tool = AsyncMock(
-        side_effect=lambda _name, arguments: (tmp_path / str(arguments["filename"])).touch()
+        side_effect=lambda _name, arguments: (tmp_path / str(arguments["filename"])).write_bytes(b"png")
     )
     channel = Mock()
     channel.send_artifact = AsyncMock()

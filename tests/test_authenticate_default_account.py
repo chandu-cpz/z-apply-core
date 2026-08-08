@@ -121,6 +121,67 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
             ["ask_human"],
         )
 
+    async def test_auth_verdict_survives_job_page_restore_failure(self) -> None:
+        class RestoreFailingTools(FakeTools):
+            def __init__(self) -> None:
+                super().__init__(
+                    {
+                        "browser_navigate": [
+                            "- Page URL: https://simplify.jobs/dashboard\n- text: Login",
+                        ],
+                        "browser_snapshot": [
+                            "- Page URL: https://simplify.jobs/dashboard\n- text: Login",
+                        ],
+                    }
+                )
+                self.navigate_calls = 0
+
+            async def call(self, name: str, arguments: dict[str, object] | None = None) -> str:
+                if name == "browser_navigate":
+                    self.navigate_calls += 1
+                    if self.navigate_calls > 1:
+                        raise RuntimeError("Page.goto: NS_ERROR_ABORT")
+                return await super().call(name, arguments)
+
+        tools = RestoreFailingTools()
+        runtime = make_runtime(tools)
+        settings = SimpleNamespace(
+            has_default_credentials=True,
+            default_username="user@example.test",
+            default_password="secret",
+            gmail_credentials_path=Path("/missing/credentials.json"),
+            gmail_token_path=Path("/missing/token.json"),
+        )
+
+        async def fake_run_auth_orchestrator(**kwargs: Any) -> AuthOrchestratorRun:
+            return AuthOrchestratorRun(
+                summary="Simplify verified by Verifier.",
+                model_id="test/model",
+                status="authenticated",
+            )
+
+        with (
+            patch(
+                "z_apply_core.nodes.authenticate_default_account.load_settings",
+                return_value=settings,
+            ),
+            patch(
+                "z_apply_core.nodes.authenticate_default_account.run_auth_orchestrator",
+                side_effect=fake_run_auth_orchestrator,
+            ),
+        ):
+            result = await authenticate_default_account(
+                {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
+                {"configurable": {"nim_router": NimRouter()}},
+            )
+
+        # The auth verdict must not be turned into a failure just because the
+        # post-check restore navigation aborted; the orchestrator re-observes
+        # the live page anyway.
+        self.assertEqual(result["auth_status"], "authenticated")
+        self.assertEqual(result["auth_summary"], "Simplify verified by Verifier.")
+        self.assertEqual(tools.navigate_calls, 2)
+
     async def test_auth_node_still_checks_persistent_session_without_credentials(self) -> None:
         tools = FakeTools(
             {

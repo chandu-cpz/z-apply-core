@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 from collections.abc import Callable, Sequence
-from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import cast
 
@@ -30,7 +28,6 @@ from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen, NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
-from z_apply_core.agents.readiness_verifier import require_submission_readiness
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import (
@@ -42,6 +39,8 @@ from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_session import BrowserSession
+from z_apply_core.config import CORE_ROOT
+from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.context.token_metric import TokenMetricMiddleware
@@ -56,8 +55,8 @@ from z_apply_core.memory.platform_playbooks import (
 from z_apply_core.memory.tools import make_candidate_memory_tools
 from z_apply_core.stream_events import (
     FrameworkEventSink,
-    FrameworkTraceEvent,
     SequencedEventSink,
+    _emit_usage_sync,
 )
 
 logger = logging.getLogger(__name__)
@@ -94,7 +93,6 @@ def decide_goal_stall(
     return stall_count, stall_count >= limit
 
 
-CORE_ROOT = Path(__file__).resolve().parents[3]
 ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/runs"
 CANDIDATE_CONTEXT_VIRTUAL_PATH = "/chandrakanth_v_resume.md"
 
@@ -142,10 +140,9 @@ async def run_orchestrator(
     on_submit_approval: Callable[[bool], None] | None = None,
     context_inbox: ContextInbox | None = None,
     browser: BrowserSession | None = None,
+    call_ledger: RunCallLedger | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
-    from nim_router import NimRouter as NimRouterClass
-
     configure_z_apply_harness_profile()
 
     if provider is None:
@@ -156,7 +153,7 @@ async def run_orchestrator(
                 "failed",
             )
         provider = get_provider(router)
-    elif router is None and isinstance(provider, NimRouterClass):
+    elif router is None and isinstance(provider, NimRouter):
         router = provider
 
     try:
@@ -197,106 +194,98 @@ async def run_orchestrator(
     # never be able to drive the browser through ask_human internals, even
     # if a model misclassifies an upload control or CAPTCHA as a challenge.
     subagent_human_tools: list[BaseTool] = []
-    submission_gate: list[BaseTool] = []
+    submission_reviewer_tools: list[BaseTool] = []
     if human_channel is not None:
         if active_browser is None:
             return OrchestratorRun(
                 "A human channel is configured but no live browser is available "
-                "for submission readiness review.",
+                "for submission review.",
                 "",
                 "failed",
             )
 
-        async def prepare_submission_review(
-            final_review: str,
-            submission_target: str,
-            url: str = "",
-            company_name: str = "System",
-            role_name: str = "Application",
+        async def request_pending_approval(
+            review_context: str,
         ) -> dict[str, object]:
-            if artifact_publisher is not None:
-                try:
-                    await artifact_publisher.publish_review_artifact()
-                except Exception as exc:  # noqa: BLE001 - artifacts must never block approval
-                    logger.warning(
-                        "Submission review artifact publish failed; continuing without it: %s",
-                        exc,
-                    )
-
-            async def request_pending_approval(
-                review_context: str,
-            ) -> dict[str, object]:
-                approved = await human_channel.confirm(
-                    question="Submit this application?",
-                    context=review_context,
-                    url=url,
-                    company=company_name,
-                    role=role_name,
-                )
-                record_approval(approved)
-                if approved:
-                    return {"approved": True}
-                correction = await human_channel.ask(
-                    question="What should I correct before requesting submission approval again?",
-                    context=(
-                        "Submission was not approved. Give one precise correction or say "
-                        "that the application should be stopped."
-                    ),
-                    url=url,
-                    company=company_name,
-                    role=role_name,
-                )
-                return {"approved": False, "correction": correction}
-
-            verdict = await require_submission_readiness(
-                browser=active_browser,
-                provider=provider,
-                final_review=final_review,
-                config=config,
-                sink=event_sink,
-                run_id=run_id,
-                request_pending_approval=request_pending_approval,
+            if approval is True:
+                # Approval sticks for this application: the human already
+                # approved once, so a transient submit failure must never
+                # prompt them again.
+                return {"approved": True}
+            approved = await human_channel.confirm(
+                question="Submit this application?",
+                context=review_context,
+                url=job_url,
+                company="System",
+                role="Application",
             )
-            if verdict.ready:
-                await active_browser.prepare_submission_review(
-                    submission_target,
-                )
-            else:
-                active_browser.set_submit_approval(False)
-            return {
-                "ready": verdict.ready,
-                "submit_approval": verdict.submit_approval
-                or ("approved" if verdict.ready else "not_ready"),
-                "correction": verdict.correction,
-                "evidence": verdict.evidence,
-                "unresolved_required_fields": list(verdict.unresolved_required_fields),
-                "visible_errors": list(verdict.visible_errors),
-                "questionable_values": list(verdict.questionable_values),
-            }
+            record_approval(approved)
+            if approved:
+                return {"approved": True}
+            correction = await human_channel.ask(
+                question="What should I correct before requesting submission approval again?",
+                context=(
+                    "Submission was not approved. Give one precise correction or say "
+                    "that the application should be stopped."
+                ),
+                url=job_url,
+                company="System",
+                role="Application",
+            )
+            return {"approved": False, "correction": correction}
 
-        @tool(return_direct=True)
-        async def submit_application_review(
-            final_review: str,
-            submission_target: str,
-            url: str = "",
-            company_name: str = "System",
-            role_name: str = "Application",
-        ) -> dict[str, object]:
-            """Pass the finished form through the independent readiness verifier.
+        @tool
+        async def publish_review_artifact() -> str:
+            """Deliver the full-page application review image to the human channel.
 
-            This handoff is the only path to pending submission approval: the
-            verifier must record a ready verdict first, and it never asks the
-            human while readiness findings are unresolved.
+            Call it immediately before requesting submission approval so the
+            human reviews the exact current form.
             """
-            return await prepare_submission_review(
-                final_review,
-                submission_target,
-                url,
-                company_name,
-                role_name,
-            )
+            if artifact_publisher is None:
+                return (
+                    "No review image publisher is available; the human reviews the "
+                    "form in the browser directly."
+                )
+            try:
+                await artifact_publisher.publish_review_artifact()
+                return "Full-page review image published to the human channel."
+            except Exception as exc:  # noqa: BLE001 - artifacts must never block approval
+                logger.warning(
+                    "Submission review artifact publish failed; continuing without it: %s",
+                    exc,
+                )
+                return "Review image publish failed; continuing without it."
 
-        submission_gate = [submit_application_review]
+        @tool
+        async def request_submission_approval(context: str) -> str:
+            """Ask the human to approve final submission for this application.
+
+            The full-page review image is already delivered to the human.
+            Returns ``APPROVED``, or ``REJECTED: <correction>`` with the
+            human's precise correction when they declined. The human is never
+            asked twice for one application.
+            """
+            outcome = await request_pending_approval(context)
+            if bool(outcome.get("approved", False)):
+                return "APPROVED"
+            correction = str(outcome.get("correction", "")).strip()
+            return f"REJECTED: {correction}" if correction else "REJECTED"
+
+        @tool
+        async def submit_approved_application() -> str:
+            """Click the final submit control under the approved guard.
+
+            The runtime resolves the control from live DOM, verifies it is a
+            real form submit, and performs the one-use guarded click. Returns
+            fresh post-click evidence; read it to judge the outcome.
+            """
+            return await active_browser.submit_approved_application()
+
+        submission_reviewer_tools = [
+            publish_review_artifact,
+            request_submission_approval,
+            submit_approved_application,
+        ]
 
         human_tools = [
             tool
@@ -304,9 +293,7 @@ async def run_orchestrator(
                 human_channel,
                 candidate_memory=candidate_memory,
                 capture_human_challenge=(
-                    active_browser.capture_human_challenge
-                    if active_browser is not None
-                    else None
+                    active_browser.capture_human_challenge if active_browser is not None else None
                 ),
             )
             if tool.name == "ask_human"
@@ -338,7 +325,8 @@ async def run_orchestrator(
         nonlocal terminal
         if approval is not True:
             raise ToolException(
-                "Submission cannot finish until submit_application_review returns approved."
+                "Submission cannot finish until the Submission Reviewer reports "
+                "SUBMITTED after the human approved."
             )
         if artifact_publisher is not None:
             await artifact_publisher.publish_submission_screenshot()
@@ -360,9 +348,7 @@ async def run_orchestrator(
         return "Application blocked; the run stopped cleanly."
 
     run_context = RunContext(run_id=run_id)
-    evidence_store = EvidenceStore(
-        base_dir=CORE_ROOT / ".z-apply" / "runs" / run_id / "context"
-    )
+    evidence_store = EvidenceStore(base_dir=CORE_ROOT / ".z-apply" / "runs" / run_id / "context")
     if active_browser is not None:
         active_browser.bind_run_context(run_context)
         active_browser.bind_evidence_store(evidence_store)
@@ -371,6 +357,7 @@ async def run_orchestrator(
         role="orchestrator",
         selection=selection,
         sink=event_sink,
+        ledger=call_ledger,
     )
     active_goal_middleware = ActiveGoalMiddleware(
         is_terminal=lambda: terminal is not None,
@@ -384,9 +371,7 @@ async def run_orchestrator(
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
     orchestrator_memory_tools = (
-        make_candidate_memory_tools(candidate_memory)
-        if candidate_memory is not None
-        else ()
+        make_candidate_memory_tools(candidate_memory) if candidate_memory is not None else ()
     )
     platform_playbooks = PlatformPlaybooks()
     platform_memory_tools = (
@@ -412,12 +397,12 @@ async def run_orchestrator(
             *platform_memory_tools,
             *orchestrator_memory_tools,
             *human_tools,
-            *submission_gate,
             application_blocked,
             application_submitted,
         ],
         system_prompt=load_prompt("orchestrator.md"),
         middleware=build_orchestrator_middleware(
+            provider=provider,
             run_context=run_context,
             evidence_store=evidence_store,
             event_sink=event_sink,
@@ -428,7 +413,6 @@ async def run_orchestrator(
             router_middleware=router_middleware,
             orchestrator_human_guard=orchestrator_human_guard,
             active_goal_middleware=active_goal_middleware,
-            terminal=terminal,
             mutation_lock=mutation_lock,
         ),
         subagents=await build_specialists(
@@ -452,8 +436,10 @@ async def run_orchestrator(
                 *authentication_tools,
                 *manual_auth_tools,
             ],
+            submission_reviewer_tools=submission_reviewer_tools,
             sink=event_sink,
             mutation_lock=mutation_lock,
+            ledger=call_ledger,
         ),
         backend=deepagent_backend,
         permissions=deepagent_filesystem_permissions(run_id),
@@ -485,9 +471,7 @@ async def run_orchestrator(
         and resets the stall counter.
         """
         nonlocal stall_count, stall_signature, terminal
-        observation = (
-            active_browser.current_observation if active_browser is not None else None
-        )
+        observation = active_browser.current_observation if active_browser is not None else None
         signature = observation.signature if observation is not None else None
         stall_count, terminate = decide_goal_stall(
             exc,
@@ -564,7 +548,7 @@ BEGIN UNTRUSTED CURRENT BROWSER EVIDENCE
 END UNTRUSTED CURRENT BROWSER EVIDENCE
 
 Use browser tools directly. Finish only through application_submitted after
-explicit submit_application_review. If ordinary work fails, recover through fresh
+the Submission Reviewer reports SUBMITTED. If ordinary work fails, recover through fresh
 evidence and another legal action; do not invent a terminal blocker.
 """
 
@@ -614,9 +598,7 @@ def _resume_profile_facts(resume_text: str) -> dict[str, str]:
             continue
         if not in_section:
             continue
-        key, separator, value = (stripped[2:] if stripped.startswith("- ") else "").partition(
-            ": "
-        )
+        key, separator, value = (stripped[2:] if stripped.startswith("- ") else "").partition(": ")
         if not separator:
             continue
         key = key.strip()
@@ -628,6 +610,7 @@ def _resume_profile_facts(resume_text: str) -> dict[str, str]:
 
 def build_orchestrator_middleware(
     *,
+    provider: ModelProvider | None = None,
     run_context: RunContext,
     evidence_store: EvidenceStore,
     event_sink: SequencedEventSink,
@@ -638,7 +621,6 @@ def build_orchestrator_middleware(
     router_middleware: ModelRouter,
     orchestrator_human_guard: HumanEscalationGuardMiddleware,
     active_goal_middleware: ActiveGoalMiddleware,
-    terminal: tuple[RunStatus, str] | None = None,
     mutation_lock: asyncio.Lock | None = None,
 ) -> list[AgentMiddleware]:
     """Build the orchestrator middleware chain in execution order.
@@ -647,7 +629,6 @@ def build_orchestrator_middleware(
     wraps every other middleware, and its emit adapter forwards typed events
     into the run-sequenced sink.
     """
-    del terminal
 
     def usage_emit(event: object) -> None:
         _emit_usage_sync(event_sink, event)
@@ -671,43 +652,12 @@ def build_orchestrator_middleware(
         ),
         SerializeBrowserMutationsMiddleware(sink=event_sink, lock=mutation_lock),
         SubagentDispatchMiddleware(
-            ["AnswerWriter", "AuthenticationSpecialist", "VisionSpecialist"],
+            ["AnswerWriter", "AuthenticationSpecialist", "SubmissionReviewer", "VisionSpecialist"],
             browser=active_browser,
         ),
-        model_retry_middleware(),
+        model_retry_middleware(provider),
         router_middleware,
         ProseToolCallGuardMiddleware(),
         orchestrator_human_guard,
         active_goal_middleware,
     ]
-
-
-def _emit_usage_sync(sink: SequencedEventSink, event: object) -> None:
-    """Emit a token usage event into a run-sequenced sink, fire-and-forget.
-
-    ``TokenMetricMiddleware`` requires a synchronous ``emit``, but
-    ``SequencedEventSink.accept`` is async. The event is wrapped into a
-    ``FrameworkTraceEvent`` and the resulting coroutine is scheduled on the
-    running event loop instead of being awaited.
-    """
-    result = sink.accept(_as_trace_event("token_usage", event))
-    if inspect.isawaitable(result):
-        asyncio.get_running_loop().create_task(result)
-
-
-def _as_trace_event(kind: str, event: object) -> FrameworkTraceEvent:
-    """Wrap a typed runtime event into the trace event the sequenced sink reads."""
-    if isinstance(event, FrameworkTraceEvent):
-        return event
-    return FrameworkTraceEvent(
-        event=kind,
-        name=kind,
-        data=_event_data(event),
-        raw={},
-    )
-
-
-def _event_data(event: object) -> dict[str, object]:
-    if is_dataclass(event) and not isinstance(event, type):
-        return {field.name: getattr(event, field.name) for field in fields(event)}
-    return {"value": event}

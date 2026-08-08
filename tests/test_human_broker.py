@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import unittest
 
 import pytest
 
@@ -30,7 +31,9 @@ def _run_broker(
     )
 
 
-async def _request(broker: HumanRequestBroker, question: str, *, options: list[str] | None = None) -> asyncio.Task[str]:
+async def _request(
+    broker: HumanRequestBroker, question: str, *, options: list[str] | None = None
+) -> asyncio.Task[str]:
     return asyncio.create_task(
         broker.request(
             kind="question",
@@ -150,3 +153,61 @@ async def test_unknown_request_id_still_raises_key_error() -> None:
 
     with pytest.raises(KeyError):
         await broker.resolve_answer("does-not-exist", "Immediate", responder="web")
+
+
+class TelegramHealthGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_probe_health_false_when_get_me_fails(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from telegram.error import TimedOut
+
+        from z_apply_core.human.telegram import TelegramHumanChannel
+
+        channel = TelegramHumanChannel(token="t", chat_id=-100)
+        channel._app = MagicMock()
+        channel.bot = MagicMock()
+        channel.bot.get_me = AsyncMock(side_effect=TimedOut("timed out"))
+
+        self.assertFalse(await channel._probe_health())
+
+    async def test_probe_health_true_when_get_me_succeeds(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from z_apply_core.human.telegram import TelegramHumanChannel
+
+        channel = TelegramHumanChannel(token="t", chat_id=-100)
+        channel._app = MagicMock()
+        channel.bot = MagicMock()
+        channel.bot.get_me = AsyncMock(return_value=MagicMock())
+
+        self.assertTrue(await channel._probe_health())
+
+    async def test_ask_raises_fast_when_channel_unhealthy(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from z_apply_core.human.telegram import TelegramHumanChannel
+
+        channel = TelegramHumanChannel(token="t", chat_id=-100)
+        channel._app = MagicMock()
+        channel._healthy = False
+        channel._probe_health = AsyncMock(return_value=False)
+
+        with self.assertRaises(RuntimeError) as ctx:
+            await channel._ask_once(
+                request_id="req1",
+                question="q",
+                context="",
+                url="",
+                company="c",
+                role="r",
+                options=None,
+                risk="medium",
+                image_path="",
+            )
+
+        self.assertIn("Telegram", str(ctx.exception))
+        self.assertIn("unreachable", str(ctx.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

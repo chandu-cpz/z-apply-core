@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import time
 import warnings
@@ -51,7 +52,6 @@ class FrameworkTraceEvent:
 class TokenUsageEvent:
     """Measured model-visible prompt and schema token usage for one model call."""
 
-    run_id: str
     usage: TokenUsage
     model: str | None = None
     provider: str | None = None
@@ -107,10 +107,10 @@ async def consume_v3_events(
 
 
 async def _resolve_stream(stream: V3EventStream) -> AsyncIterator[Any]:
-    if inspect.isawaitable(stream):
-        resolved: Any = await stream
-        return cast(AsyncIterator[Any], resolved)
-    return cast(AsyncIterator[Any], stream)
+    resolved: Any = stream
+    while inspect.isawaitable(resolved):
+        resolved = await resolved
+    return cast(AsyncIterator[Any], resolved)
 
 
 @asynccontextmanager
@@ -187,7 +187,7 @@ async def _read_output(stream: AsyncIterator[Any]) -> dict[str, Any]:
     output = output_attr() if callable(output_attr) else output_attr
     if inspect.isawaitable(output):
         output = await output
-    return _mapping_from_value(output)
+    return _mapping_from_value(output) if isinstance(output, Mapping) else {}
 
 
 def _mapping_from_value(value: Any) -> dict[str, Any]:
@@ -196,3 +196,51 @@ def _mapping_from_value(value: Any) -> dict[str, Any]:
     if is_dataclass(value) and not isinstance(value, type):
         return {field.name: getattr(value, field.name) for field in fields(value)}
     return {}
+
+
+def sink_from_config(config: Mapping[str, Any]) -> FrameworkEventSink | None:
+    """Resolve the run-sequenced event sink from a runnable config."""
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    sink = configurable.get("sink")
+    if hasattr(sink, "accept"):
+        return sink
+    return None
+
+
+def ledger_from_config(config: Mapping[str, Any]) -> Any:
+    """Resolve the per-run call ledger from a runnable config, if any."""
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    ledger = configurable.get("call_ledger")
+    return ledger if ledger is not None else None
+
+
+def _event_data(event: object) -> dict[str, object]:
+    if is_dataclass(event) and not isinstance(event, type):
+        return {field.name: getattr(event, field.name) for field in fields(event)}
+    return {"value": event}
+
+
+def _as_trace_event(kind: str, event: object) -> FrameworkTraceEvent:
+    """Wrap a typed runtime event into the trace event the sink reads."""
+    if isinstance(event, FrameworkTraceEvent):
+        return event
+    return FrameworkTraceEvent(event=kind, name=kind, data=_event_data(event), raw={})
+
+
+def _emit_usage_sync(sink: FrameworkEventSink | None, event: object) -> None:
+    """Emit a token usage event into a sink, fire-and-forget.
+
+    ``TokenMetricMiddleware`` requires a synchronous ``emit``, but the sink's
+    ``accept`` is async. The event is wrapped into a ``FrameworkTraceEvent`` and
+    the resulting coroutine is scheduled on the running event loop instead of
+    being awaited.
+    """
+    if sink is None:
+        return
+    result = sink.accept(_as_trace_event("token_usage", event))
+    if inspect.isawaitable(result):
+        asyncio.get_running_loop().create_task(result)

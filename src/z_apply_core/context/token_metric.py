@@ -10,9 +10,10 @@ from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import AgentState, ContextT, ModelResponse, ResponseT
 from langchain_core.messages import BaseMessage
 
-from z_apply_core.context.context_budget import estimate_tokens
 from z_apply_core.context.model_metrics import (
     chunk_usage,
+    extract_cache_read,
+    extract_usage_dict,
     extract_usage_tokens,
     is_async_iterable,
 )
@@ -20,6 +21,11 @@ from z_apply_core.context.run_context import RunContext
 from z_apply_core.stream_events import TokenUsageEvent
 
 logger = logging.getLogger(__name__)
+
+
+def estimate_tokens(text: str) -> int:
+    """Coarse token estimate (chars / 4), used only for usage reporting."""
+    return max(1, len(text) // 4)
 
 
 def estimate_messages_tokens(messages: Sequence[BaseMessage]) -> int:
@@ -125,11 +131,13 @@ class TokenUsage:
     message_count: int
     tool_count: int
     completion_tokens: int = 0
+    cache_read_tokens: int = 0
 
     def __str__(self) -> str:
         return (
             f"prompt_tokens={self.prompt_tokens} "
             f"completion_tokens={self.completion_tokens} "
+            f"cache_read_tokens={self.cache_read_tokens} "
             f"tool_schema_tokens={self.tool_schema_tokens} "
             f"messages={self.message_count} "
             f"tools={self.tool_count}"
@@ -221,23 +229,9 @@ class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
         else:
             generation_ms = duration_ms
         tok_per_second = (
-            output_tokens_estimate / (generation_ms / 1000.0)
-            if generation_ms > 0
-            else 0.0
+            output_tokens_estimate / (generation_ms / 1000.0) if generation_ms > 0 else 0.0
         )
         self._publish(after, request, duration_ms, output_tokens_estimate, tok_per_second)
-
-    def _measure_ttft(
-        self,
-        result: ModelResponse[ResponseT],
-        t0: float,
-        duration_ms: int,
-    ) -> None:
-        response = result.result
-        if is_async_iterable(response):
-            self._last_ttft_ms = 0
-        else:
-            self._last_ttft_ms = duration_ms
 
     async def _timed_stream(
         self,
@@ -280,6 +274,8 @@ class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
                 prompt_tokens=(previous.prompt_tokens if previous else 0) + usage.prompt_tokens,
                 completion_tokens=(previous.completion_tokens if previous else 0)
                 + usage.completion_tokens,
+                cache_read_tokens=(previous.cache_read_tokens if previous else 0)
+                + usage.cache_read_tokens,
                 tool_schema_tokens=(previous.tool_schema_tokens if previous else 0)
                 + usage.tool_schema_tokens,
                 message_count=(previous.message_count if previous else 0) + usage.message_count,
@@ -301,7 +297,6 @@ class TokenMetricMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Res
         try:
             self._emit(
                 TokenUsageEvent(
-                    run_id="",
                     usage=usage,
                     model=_model_label(request),
                     provider=_provider_label(request),
@@ -338,10 +333,14 @@ def _usage_from_response(
         response_messages = list(result or [])
     messages = [*request.messages, *response_messages]
     message_count = len(messages) + (1 if is_async_iterable(result) else 0)
+    cache_read = extract_cache_read(stream_usage)
+    if cache_read is None:
+        cache_read = extract_cache_read(extract_usage_dict(result))
     if real is not None:
         return TokenUsage(
             prompt_tokens=real[0],
             completion_tokens=real[1],
+            cache_read_tokens=cache_read or 0,
             tool_schema_tokens=estimate_schema_tokens(request.tools),
             message_count=message_count,
             tool_count=len(request.tools),
@@ -351,6 +350,7 @@ def _usage_from_response(
         tool_schema_tokens=estimate_schema_tokens(request.tools),
         message_count=message_count,
         tool_count=len(request.tools),
+        cache_read_tokens=cache_read or 0,
     )
 
 
@@ -367,9 +367,7 @@ def _model_label(request: ModelRequest[ContextT]) -> str | None:
     if model is None:
         return None
     return str(
-        getattr(model, "model_name", None)
-        or getattr(model, "name", None)
-        or type(model).__name__
+        getattr(model, "model_name", None) or getattr(model, "name", None) or type(model).__name__
     )
 
 

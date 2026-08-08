@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from z_apply_core.browser_observation import BrowserCapabilities
 from z_apply_core.browser_session import (
     BrowserSession,
     BrowserToolExecutionError,
@@ -30,6 +31,7 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         tab = SimpleNamespace(
             page=page,
             resolve_target=AsyncMock(side_effect=resolve_target),
+            liveness=AsyncMock(return_value=True),
         )
 
         async def call_backend(name: str, *_args: object, **_kwargs: object) -> str:
@@ -55,10 +57,12 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
                 else SubmitControlKind.NOT_SUBMIT
             )
         )
+        session.inspect_capabilities = AsyncMock(  # type: ignore[method-assign]
+            return_value=BrowserCapabilities(enabled_form_submit_visible=True)
+        )
         return session, backend.call_tool
 
-    async def _approve(self, session: BrowserSession, target: str = "e10") -> None:
-        await session.prepare_submission_review(target)
+    async def _approve(self, session: BrowserSession) -> None:
         session.set_submit_approval(True)
 
     async def test_submit_control_is_blocked_before_browser_mutation(self) -> None:
@@ -99,7 +103,9 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
             await session.call_tool("browser_click", {"target": "e10"}),
             "clicked",
         )
-        self.assertEqual(call_tool.await_count, 2)
+        # The approved click is one layer call: gate + liveness + click, no
+        # pre-click snapshot/identity/capabilities round-trips.
+        self.assertEqual(call_tool.await_count, 1)
 
         with self.assertRaisesRegex(BrowserToolExecutionError, "submission is locked"):
             await session.call_tool("browser_click", {"target": "e10"})
@@ -112,7 +118,7 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
         await session.call_tool("browser_click", {"target": "e5"})
         await session.call_tool("browser_click", {"target": "e10"})
 
-        self.assertEqual(call_tool.await_count, 3)
+        self.assertEqual(call_tool.await_count, 2)
 
     async def test_structural_search_submit_is_not_treated_as_final_application(self) -> None:
         session, call_tool = self._session(is_submit=True)
@@ -179,29 +185,64 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
         call_tool.assert_not_awaited()
 
-    async def test_approval_is_revoked_when_reviewed_page_changes(self) -> None:
+    async def test_approval_clicks_without_pre_click_verification_round_trips(self) -> None:
         session, call_tool = self._session(is_submit=True)
         session.activate_submission_guard()
         await self._approve(session)
-        call_tool.side_effect = ["changed review state"]
 
-        with self.assertRaisesRegex(BrowserToolExecutionError, "was revoked"):
-            await session.call_tool("browser_click", {"target": "e10"})
-
-        with self.assertRaisesRegex(BrowserToolExecutionError, "submission is locked"):
-            await session.call_tool("browser_click", {"target": "e10"})
+        self.assertEqual(
+            await session.call_tool("browser_click", {"target": "e10"}),
+            "clicked",
+        )
+        # No snapshot/identity/capabilities calls before the click; the gate +
+        # liveness probe + one layer click call.
         self.assertEqual(call_tool.await_count, 1)
+        self.assertEqual(call_tool.await_args.args[0], "browser_click")
 
-    async def test_approval_rejects_a_different_submit_target(self) -> None:
+    async def test_approval_arms_any_current_form_submit_control(self) -> None:
         session, call_tool = self._session(
             is_submit=False,
             submit_targets={"e10", "e11"},
         )
         session.activate_submission_guard()
-        await self._approve(session, "e10")
+        await self._approve(session)
 
-        with self.assertRaisesRegex(BrowserToolExecutionError, "exact current submit"):
+        # Approval binds to the application, not a DOM ref: the runtime
+        # re-resolves the submit control from live DOM at click time, so a
+        # re-rendered control ref still submits exactly once.
+        self.assertEqual(
+            await session.call_tool("browser_click", {"target": "e11"}),
+            "clicked",
+        )
+        call_tool.assert_awaited_once()
+
+        with self.assertRaisesRegex(BrowserToolExecutionError, "submission is locked"):
             await session.call_tool("browser_click", {"target": "e11"})
+
+    async def test_submit_approved_application_clicks_under_armed_guard(self) -> None:
+        session, call_tool = self._session(is_submit=True, submit_targets={"e10"})
+        session.activate_submission_guard()
+        session.resolve_submit_control_target = AsyncMock(  # type: ignore[method-assign]
+            return_value="e10"
+        )
+        await self._approve(session)
+
+        result = await session.submit_approved_application()
+
+        self.assertIn("clicked", result)
+        invoked = [call.args[0] for call in call_tool.await_args_list]
+        self.assertIn("browser_click", invoked)
+        self.assertIn("browser_snapshot", invoked)
+
+    async def test_submit_approved_application_locked_without_approval(self) -> None:
+        session, call_tool = self._session(is_submit=True, submit_targets={"e10"})
+        session.activate_submission_guard()
+        session.resolve_submit_control_target = AsyncMock(  # type: ignore[method-assign]
+            return_value="e10"
+        )
+
+        with self.assertRaisesRegex(BrowserToolExecutionError, "submission is locked"):
+            await session.submit_approved_application()
 
         call_tool.assert_not_awaited()
 

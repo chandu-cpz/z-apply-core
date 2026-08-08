@@ -37,6 +37,10 @@ class ApplicationArtifactPublisher:
         )
         if not path.is_file():
             raise RuntimeError("The browser did not create the application review artifact.")
+        if path.stat().st_size == 0:
+            raise RuntimeError(
+                "The application review artifact is empty; skipping the image publish."
+            )
         if self._on_created is not None:
             await self._on_created("review_screenshot", path)
         await self._channel.send_artifact(

@@ -30,10 +30,22 @@ _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {
     "application_blocked",
     "application_submitted",
     "ask_human",
-    "request_submit_approval",
     "task",
 }
 _REPEATABLE_READ_TOOL_NAMES = frozenset({"browser_wait_for"})
+# Tools not subject to the identical-call slap: timed waits are legitimately
+# repeatable, terminal/review tools are single-shot flow signals, and subagent
+# delegation may genuinely be retried after an internal failure even with the
+# same parameters.
+_IDENTICAL_CALL_EXEMPT_TOOL_NAMES = frozenset(
+    {
+        "application_blocked",
+        "application_submitted",
+        "ask_human",
+        "browser_wait_for",
+        "task",
+    }
+)
 
 
 class NoProgressCircuitOpen(RuntimeError):
@@ -41,7 +53,14 @@ class NoProgressCircuitOpen(RuntimeError):
 
 
 class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
-    """End one agent turn after repeated denied or duplicate non-progress calls."""
+    """End one agent turn after repeated denied or duplicate non-progress calls.
+
+    The first layer refuses the exact same tool call (same name and arguments)
+    before the model has a chance to repeat it inside the same browser
+    revision. The model is told, in no uncertain terms, that it is repeating
+    itself and must do something different -- the identical call is a
+    no-progress loop, not a retry.
+    """
 
     def __init__(
         self,
@@ -73,6 +92,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._browser_signature: str | None = None
         self._state_action_failures: dict[str, int] = {}
         self._blocked_state_actions: set[str] = set()
+        self._identical_attempts: dict[str, int] = {}
         self._stagnant_tool_calls = 0
         self._stagnant_model_responses = 0
         self._action_window: deque[tuple[str, frozenset[str]] | None] = deque(
@@ -104,8 +124,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
 
         self._stagnant_model_responses += 1
         logger.warning(
-            "Model selected only non-progress tools against unchanged state "
-            "(%s/%s): %s",
+            "Model selected only non-progress tools against unchanged state (%s/%s): %s",
             self._stagnant_model_responses,
             limit,
             ", ".join(sorted(tool_names)),
@@ -134,13 +153,43 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         state_action = self._state_action_signature(request)
         read_signature = _read_signature(request)
         result: ToolMessage | Command[Any]
-        if state_action in self._blocked_state_actions:
+        attempt_no = self._identical_attempts.get(state_action, 0)
+        self._identical_attempts[state_action] = attempt_no + 1
+        identical_call_repeated = (
+            self._browser is not None
+            and self._browser_signature is not None
+            and self._is_repeatable_identical_call(request, attempt_no)
+        )
+        # Identical call slap: if the model already issued this exact tool call
+        # with the exact same arguments against the same unchanged browser
+        # revision, refuse it before it executes again. Repeating an identical
+        # call cannot make progress, so instead of burning another turn the
+        # guard smacks the model on the head and forces it to do something
+        # different. A browser revision change (real progress) resets the
+        # count via the embedded signature.
+        if self._browser is not None and state_action in self._blocked_state_actions:
             result = ToolMessage(
                 content=(
                     "RUNTIME STATE-ACTION CIRCUIT: this exact action repeatedly failed "
                     "against the current browser revision. It is unavailable until "
                     "browser evidence changes. Choose a different action or inspect "
                     "fresh evidence."
+                ),
+                name=str(request.tool_call.get("name", "runtime")),
+                tool_call_id=str(request.tool_call.get("id", "")),
+                status="error",
+            )
+        elif identical_call_repeated:
+            result = ToolMessage(
+                content=(
+                    "RUNTIME IDENTICAL-CALL SLAP: this is the SECOND time you are "
+                    f"issuing this exact tool call ({str(request.tool_call.get('name', 'runtime'))}) "
+                    "with the exact same parameters against the same unchanged browser "
+                    "revision. THAT IS A NO-PROGRESS LOOP - you are wasting the turn "
+                    "repeating yourself. STOP repeating it. Do not call this exact "
+                    "tool with these exact same parameters again. Instead: inspect "
+                    "fresh browser evidence, then choose a DIFFERENT action - act on "
+                    "a different control, or proceed even if an open list stays open."
                 ),
                 name=str(request.tool_call.get("name", "runtime")),
                 tool_call_id=str(request.tool_call.get("id", "")),
@@ -164,11 +213,17 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         browser_advanced = self._browser_signature != before_browser_signature
 
         tool_name = str(request.tool_call.get("name", ""))
+        # Subagent delegation (`task`) is productive resolution work even when
+        # the browser revision does not change: per-field AnswerWriter dispatch
+        # makes a resolution phase legitimately task-heavy, so those calls must
+        # not feed the stagnant counter. Genuine browser-mutation churn and
+        # read-heavy loops still do (reads are also caught by the read-repeat
+        # denial below).
         if browser_advanced or tool_name in {
             "application_blocked",
             "application_submitted",
             "ask_human",
-            "request_submit_approval",
+            "task",
         }:
             self._stagnant_tool_calls = 0
         else:
@@ -179,7 +234,11 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
             elif read_signature is not None:
                 self._last_read_signature = read_signature
         self._track_repeated_action(request.tool_call, _tool_succeeded(result))
-        if isinstance(result, ToolMessage) and result.status == "error":
+        if (
+            self._browser is not None
+            and isinstance(result, ToolMessage)
+            and result.status == "error"
+        ):
             failures = self._state_action_failures.get(state_action, 0) + 1
             self._state_action_failures[state_action] = failures
             if failures >= self._max_state_action_failures:
@@ -204,8 +263,9 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 self._same_denials = 0
                 self._non_progress = 0
                 raise NoProgressCircuitOpen(
-                    "Repeated denied or non-progress tool calls ended this agent turn; "
-                    "resume from fresh browser evidence with a different action."
+                    f"Repeated denied or non-progress tool calls ({tool_name}) ended "
+                    "this agent turn; resume from fresh browser evidence with a "
+                    "different action."
                 )
         else:
             self._last_denial = ""
@@ -216,15 +276,15 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
             and self._stagnant_tool_calls >= self._max_stagnant_tool_calls
         ):
             failure = ToolProtocolViolation(
-                "no_progress: tool calls repeatedly completed without changing the "
-                "browser revision"
+                "no_progress: tool calls repeatedly completed without changing the browser revision"
             )
             if self._on_no_progress is not None:
                 self._on_no_progress(failure)
             self._stagnant_tool_calls = 0
             raise NoProgressCircuitOpen(
-                "Tool activity did not advance the browser state; ending this agent "
-                "turn so the persistent goal can recover from fresh evidence."
+                f"Tool activity ({tool_name}) did not advance the browser state; "
+                "ending this agent turn so the persistent goal can recover from "
+                "fresh evidence."
             )
         return result
 
@@ -236,6 +296,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._browser_signature = signature
         self._state_action_failures.clear()
         self._blocked_state_actions.clear()
+        self._identical_attempts.clear()
         self._stagnant_tool_calls = 0
         self._stagnant_model_responses = 0
         self._action_window.clear()
@@ -267,10 +328,23 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 self._on_no_progress(failure)
             self._action_window.clear()
             raise NoProgressCircuitOpen(
-                "The same typed browser action repeated within the recent window "
-                "without advancing the application; ending this agent turn for "
-                "fresh-evidence recovery."
+                f"The same typed browser action ({signature[0]}) repeated within the "
+                "recent window without advancing the application; ending this agent "
+                "turn for fresh-evidence recovery."
             )
+
+    def _is_repeatable_identical_call(
+        self,
+        request: ToolCallRequest,
+        attempt_no: int,
+    ) -> bool:
+        """True when this exact browser call was already attempted this revision."""
+        if attempt_no < 1:
+            return False
+        tool_name = str(request.tool_call.get("name", ""))
+        if tool_name not in BROWSER_CHANGING_TOOL_NAMES:
+            return False
+        return tool_name not in _IDENTICAL_CALL_EXEMPT_TOOL_NAMES
 
     def _state_action_signature(self, request: ToolCallRequest) -> str:
         name = str(request.tool_call.get("name", ""))

@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from typing import Any
 
+from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
-from z_apply_core.agents.capability_context import CapabilityContextMiddleware
+from z_apply_core.agents.capability_context import (
+    CAPABILITY_CONTEXT_SOURCE,
+    CapabilityContextMiddleware,
+)
 from z_apply_core.browser_observation import BrowserCapabilities, BrowserObservation
 
 
@@ -45,18 +50,6 @@ def task() -> str:
 
 
 @tool
-def resolve_candidate_field() -> str:
-    """Resolve one candidate field."""
-    return "resolved"
-
-
-@tool
-def request_submit_approval() -> str:
-    """Request approval."""
-    return "requested"
-
-
-@tool
 def application_submitted() -> str:
     """Finish."""
     return "finished"
@@ -68,6 +61,12 @@ def ls() -> str:
     return "files"
 
 
+@tool
+def lookup_candidate_memory() -> str:
+    """Look up candidate memory."""
+    return "found"
+
+
 class CapabilityContextTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tools = [
@@ -77,10 +76,9 @@ class CapabilityContextTests(unittest.TestCase):
             browser_fill_form,
             browser_click_upload,
             task,
-            resolve_candidate_field,
-            request_submit_approval,
             application_submitted,
             ls,
+            lookup_candidate_memory,
         ]
 
     def test_browser_state_does_not_hide_safe_agent_actions(self) -> None:
@@ -91,9 +89,8 @@ class CapabilityContextTests(unittest.TestCase):
             "browser_fill_form",
             "browser_click_upload",
             "task",
-            "resolve_candidate_field",
-            "request_submit_approval",
             "application_submitted",
+            "lookup_candidate_memory",
         ]
         states = (
             BrowserCapabilities(auth_gate_visible=True),
@@ -115,6 +112,14 @@ class CapabilityContextTests(unittest.TestCase):
         )
 
         self.assertEqual([tool.name for tool in tools], ["browser_click_upload"])
+
+    def test_candidate_memory_lookup_survives_capability_filtering(self) -> None:
+        tools = CapabilityContextMiddleware._filter_tools(
+            self.tools,
+            BrowserCapabilities(editable_controls_visible=True),
+        )
+
+        self.assertIn("lookup_candidate_memory", [tool.name for tool in tools])
 
     def test_compact_observation_bounds_repeated_model_context(self) -> None:
         evidence = "\n".join(
@@ -164,3 +169,78 @@ class CapabilityContextTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UploadContextGatingTests(unittest.TestCase):
+    """The runtime must push an upload only when one is genuinely required.
+
+    An optional empty upload control must never be presented as required
+    work: once the resume is attached, the agent should ignore remaining
+    empty upload controls instead of chasing them.
+    """
+
+    def _context_text(self, capabilities: BrowserCapabilities | None) -> str:
+        import asyncio
+
+        from langchain.agents.middleware import ModelRequest
+        from langchain.agents.middleware.types import ModelResponse
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+        class StubBrowser:
+            pending_atomic_upload_target = ""
+            current_observation = None
+
+            async def inspect_capabilities(self) -> BrowserCapabilities | None:
+                return capabilities
+
+        middleware = CapabilityContextMiddleware(StubBrowser())  # type: ignore[arg-type]
+        captured: dict[str, Any] = {}
+
+        async def handler(request: Any) -> ModelResponse[Any]:
+            captured["request"] = request
+            return ModelResponse(result=[])
+
+        async def run() -> None:
+            request = ModelRequest(
+                model=GenericFakeChatModel(messages=iter(["ok"])),
+                messages=[HumanMessage(content="go")],
+                tools=[browser_click_upload],
+            )
+            await middleware.awrap_model_call(request, handler)
+
+        asyncio.run(run())
+        messages = captured["request"].messages
+        context = next(
+            message
+            for message in messages
+            if getattr(message, "name", None) == CAPABILITY_CONTEXT_SOURCE
+        )
+        return str(context.content)
+
+    def test_required_upload_pending_pushes_upload(self) -> None:
+        text = self._context_text(
+            BrowserCapabilities(
+                empty_file_upload_present=True,
+                required_file_upload_pending=True,
+            )
+        )
+
+        self.assertIn("required_file_upload_pending=true", text)
+        self.assertIn("REQUIRED file upload is still empty", text)
+
+    def test_optional_empty_upload_is_presented_as_not_work(self) -> None:
+        text = self._context_text(
+            BrowserCapabilities(
+                empty_file_upload_present=True,
+                required_file_upload_pending=False,
+            )
+        )
+
+        self.assertIn("optional_empty_upload_present=true", text)
+        self.assertIn("It is not work", text)
+        self.assertNotIn("must be attached", text)
+
+    def test_no_upload_flags_emit_no_upload_context(self) -> None:
+        text = self._context_text(BrowserCapabilities())
+
+        self.assertNotIn("file upload", text)

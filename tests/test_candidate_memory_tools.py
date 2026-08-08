@@ -46,9 +46,7 @@ class CandidateMemoryToolsTests(unittest.IsolatedAsyncioTestCase):
         tools = make_candidate_memory_tools(self.memory)
         tool = next(item for item in tools if item.name == "lookup_candidate_memory")
 
-        result = await tool.ainvoke(
-            {"query": "location", "field_label": "Preferred Location"}
-        )
+        result = await tool.ainvoke({"query": "location", "field_label": "Preferred Location"})
 
         self.assertEqual(result["lookup"]["memory_status"], "exact")
         sources = result["sources"]
@@ -81,6 +79,24 @@ class CandidateMemoryToolsTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result["lookup"], None)
         self.assertEqual(result["search"]["memory_status"], "empty")
+        self.assertEqual(result["sources"], [])
+
+    async def test_tool_never_surfaces_credential_facts(self) -> None:
+        await self.memory.remember_human_answer(
+            field_label="Password*",
+            question="Enter a password for this application",
+            answer="hunter2",
+        )
+
+        tools = make_candidate_memory_tools(self.memory)
+        tool = next(item for item in tools if item.name == "lookup_candidate_memory")
+
+        result = await tool.ainvoke({"query": "password", "field_label": "Password*"})
+
+        self.assertEqual(result["lookup"]["memory_status"], "empty")
+        self.assertEqual(result["lookup"]["matches"], [])
+        self.assertEqual(result["search"]["memory_status"], "empty")
+        self.assertEqual(result["search"]["matches"], [])
         self.assertEqual(result["sources"], [])
 
 

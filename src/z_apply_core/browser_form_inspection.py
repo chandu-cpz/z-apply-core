@@ -5,13 +5,12 @@ from dataclasses import dataclass
 from playwright.async_api import Locator, Page
 
 from z_apply_core.browser_observation import BrowserCapabilities, BrowserControlState
+from z_apply_core.browser_targeting import classify_submit_control
 
 CONTROL_SELECTOR = (
     'input:not([type="hidden"]), select, textarea, [contenteditable="true"], [role="combobox"]'
 )
-SUBMIT_SELECTOR = (
-    'button[type="submit"], input[type="submit"], input[type="image"], form button:not([type])'
-)
+SUBMIT_SELECTOR = 'button[type="submit"], input[type="submit"], input[type="image"], form button'
 ACTION_SELECTOR = (
     'button, a[href], input, select, textarea, [role="button"], [role="link"], [role="combobox"]'
 )
@@ -36,7 +35,12 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
     unresolved = 0
     invalid = 0
     for control in controls:
-        if await _is_required(control) and not await _has_value(control):
+        control_type = (await control.get_attribute("type") or "").lower()
+        if control_type == "radio":
+            has_value = await _radio_group_checked(page, control)
+        else:
+            has_value = await _has_value(control)
+        if await _is_required(control) and not has_value:
             unresolved += 1
         if await _is_invalid(page, control):
             invalid += 1
@@ -53,6 +57,12 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
     enabled_submit = 0
     disabled_submit = 0
     for control in await _visible(page.locator(SUBMIT_SELECTOR)):
+        try:
+            kind, _control = await classify_submit_control(page, control)
+        except Exception:  # noqa: BLE001 - a misbehaving control never breaks context
+            continue
+        if kind != "form_submit":
+            continue
         if await _is_disabled(control):
             disabled_submit += 1
         else:
@@ -77,7 +87,12 @@ async def inspect_page_blockers(page: Page) -> tuple[FormControlBlocker, ...]:
     blockers: list[FormControlBlocker] = []
     for control in await _visible_enabled(page.locator(CONTROL_SELECTOR)):
         reasons: list[str] = []
-        if await _is_required(control) and not await _has_value(control):
+        control_type = (await control.get_attribute("type") or "").lower()
+        if control_type == "radio":
+            has_value = await _radio_group_checked(page, control)
+        else:
+            has_value = await _has_value(control)
+        if await _is_required(control) and not has_value:
             reasons.append("required control is empty")
         if await control.get_attribute("aria-invalid") == "true":
             reasons.append("control is marked aria-invalid")
@@ -163,6 +178,23 @@ async def _has_value(locator: Locator) -> bool:
     if control_type in {"checkbox", "radio"}:
         return await locator.is_checked()
     return bool((await _control_value(locator)).strip())
+
+
+async def _radio_group_checked(page: Page, locator: Locator) -> bool:
+    """True when the radio group (same ``name``) has any checked option.
+
+    A radio group is ONE choice: once any option is selected the group is
+    answered, and the remaining unchecked options must not count as empty
+    required controls.
+    """
+    if await locator.is_checked():
+        return True
+    name = await locator.get_attribute("name")
+    if not name:
+        return False
+    escaped = name.replace("\\", "\\\\").replace('"', '\\"')
+    group_checked = page.locator(f'input[type="radio"][name="{escaped}"]:checked')
+    return await group_checked.count() > 0
 
 
 async def _control_value(locator: Locator) -> str:

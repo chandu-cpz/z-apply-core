@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
 import time
 from collections.abc import AsyncIterable, AsyncIterator
-from contextlib import asynccontextmanager
 from typing import Any, cast
 
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent, V3RunResult
+from z_apply_core.stream_events import (
+    FrameworkEventSink,
+    FrameworkTraceEvent,
+    V3RunResult,
+    _managed_stream,
+    _read_output,
+    _resolve_stream,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -323,41 +328,11 @@ async def _emit(
     )
 
 
-async def _resolve_stream(stream: Any) -> Any:
-    while inspect.isawaitable(stream):
-        stream = await stream
-    return stream
-
-
-@asynccontextmanager
-async def _managed_stream(stream: Any) -> AsyncIterator[Any]:
-    if hasattr(stream, "__aenter__") and hasattr(stream, "__aexit__"):
-        async with stream:
-            yield stream
-        return
-    yield stream
-
-
 def _projection(source: Any, name: str) -> AsyncIterable[Any]:
     value = getattr(source, name, None)
     if value is None:
         return _empty_async_iter()
     return cast(AsyncIterable[Any], value)
-
-
-async def _read_output(stream: Any) -> dict[str, Any]:
-    output = getattr(stream, "output", None)
-    if output is None:
-        return {}
-    value = output() if callable(output) else output
-    value = await _maybe_await(value)
-    return dict(value) if isinstance(value, dict) else {}
-
-
-async def _maybe_await(value: Any) -> Any:
-    if inspect.isawaitable(value):
-        return await value
-    return value
 
 
 async def _empty_async_iter() -> AsyncIterator[Any]:

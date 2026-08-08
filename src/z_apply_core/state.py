@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
 
 from langchain_core.tools import BaseTool
 from typing_extensions import TypedDict
@@ -23,7 +22,6 @@ class RunState(TypedDict, total=False):
     run_status: RunStatus
     runtime: RunRuntime | None
     browser_tools: Sequence[BaseTool]
-    messages: list[Any]
 
 
 def initial_state(job_url: str, *, task: str, live_view: bool) -> RunState:

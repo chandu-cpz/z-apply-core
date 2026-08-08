@@ -191,3 +191,31 @@ class OpenCodeGoToolChoiceTests(unittest.TestCase):
         self.assertEqual(bound.kwargs.get("tool_choice"), "auto")
         bound = llm.bind_tools([lookup_candidate_memory])
         self.assertIsNone(bound.kwargs.get("tool_choice"))
+
+
+class OpenCodeGoThinkingTests(unittest.TestCase):
+    """V4 thinking streams eat the output budget; default must be off."""
+
+    def _extra_body(self, env_patch: dict[str, str]) -> dict[str, object]:
+        import asyncio
+
+        from z_apply_core.agents.model_provider import OpenCodeGoProvider
+
+        with patch.dict("os.environ", env_patch, clear=False):
+            selection = asyncio.run(OpenCodeGoProvider(api_key="sk-test").lease())
+        return dict(selection.llm.extra_body or {})
+
+    def test_thinking_disabled_by_default(self) -> None:
+        extra = self._extra_body({})
+        self.assertEqual(extra.get("thinking"), {"type": "disabled"})
+        self.assertNotIn("reasoning_effort", extra)
+
+    def test_thinking_enabled_via_env(self) -> None:
+        extra = self._extra_body({"OPENCODEGO_THINKING": "1"})
+        self.assertEqual(extra.get("thinking"), {"type": "enabled"})
+        self.assertEqual(extra.get("reasoning_effort"), "high")
+
+    def test_cache_fields_survive_thinking_toggle(self) -> None:
+        extra = self._extra_body({})
+        self.assertEqual(extra.get("prompt_cache_key"), "z-apply")
+        self.assertEqual(extra.get("prompt_cache_retention"), "24h")

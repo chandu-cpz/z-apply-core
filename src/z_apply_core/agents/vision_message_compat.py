@@ -32,11 +32,16 @@ class VisionToolMessageCompatibilityMiddleware(
             if not image_blocks:
                 messages.append(message)
                 continue
-            messages.append(message.model_copy(update={"content": text_blocks or "Screenshot captured."}))
+            messages.append(
+                message.model_copy(update={"content": text_blocks or "Screenshot captured."})
+            )
             messages.append(
                 HumanMessage(
                     content=[
-                        {"type": "text", "text": "Current screenshot for the bounded visual question."},
+                        {
+                            "type": "text",
+                            "text": "Current screenshot for the bounded visual question.",
+                        },
                         *image_blocks,
                     ]
                 )

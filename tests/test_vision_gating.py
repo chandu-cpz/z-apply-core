@@ -35,6 +35,42 @@ def test_auth_dispatch_preserves_evidence_but_owns_recovery_order() -> None:
     assert "Complete Create Account at ref=e20." in description
 
 
+def test_task_without_subagent_type_defaults_to_answer_writer() -> None:
+    middleware = SubagentDispatchMiddleware(["AnswerWriter"])
+    call = {
+        "name": "task",
+        "args": {
+            "description": "Resolve the value for the field: Postcode (textbox ref=e163)",
+            "server_info": None,
+        },
+        "id": "task-1",
+    }
+
+    normalized_call = middleware._normalize_call(call)
+
+    assert normalized_call["name"] == "task"
+    assert normalized_call["args"]["subagent_type"] == "AnswerWriter"
+    assert "textbox ref=e163" in normalized_call["args"]["description"]
+    assert "server_info" not in normalized_call["args"]
+
+
+def test_explicit_valid_subagent_type_is_preserved() -> None:
+    middleware = SubagentDispatchMiddleware(["AnswerWriter", "VisionSpecialist"])
+    call = {
+        "name": "task",
+        "args": {
+            "subagent_type": "VisionSpecialist",
+            "description": "Read diagram",
+        },
+        "id": "vision-1",
+    }
+
+    normalized_call = middleware._normalize_call(call)
+
+    assert normalized_call["args"]["subagent_type"] == "VisionSpecialist"
+    assert normalized_call["args"]["description"] == "Read diagram"
+
+
 @pytest.mark.asyncio
 async def test_vision_delegation_is_denied_on_dom_operable_page() -> None:
     browser = SimpleNamespace(

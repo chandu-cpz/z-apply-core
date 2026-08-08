@@ -22,6 +22,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_full_snapshot_is_rooted_at_html_for_open_shadow_dom(self) -> None:
         backend = SimpleNamespace(
             call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),
+            _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
             close=AsyncMock(),
         )
         server = SimpleNamespace(
@@ -40,6 +41,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_explicit_snapshot_target_is_preserved(self) -> None:
         backend = SimpleNamespace(
             call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),
+            _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
             close=AsyncMock(),
         )
         server = SimpleNamespace(
@@ -100,6 +102,7 @@ class MultimodalBrowserTests(unittest.IsolatedAsyncioTestCase):
     async def test_capture_filenames_are_confined_to_artifact_workspace(self) -> None:
         backend = SimpleNamespace(
             call_tool=AsyncMock(return_value=SimpleNamespace(content=[])),
+            _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
             close=AsyncMock(),
         )
         server = SimpleNamespace(
