@@ -269,6 +269,61 @@ class OpenCodeGoPayloadCacheTests(unittest.TestCase):
         # Untouched middle: the first user message carries no breakpoint.
         self.assertNotIn("cache_control", messages[1]["content"][0])
 
+    def test_unsatisfied_tool_calls_pruned_from_assistant_message(self) -> None:
+        # A parallel batch where one call produced no result (framework dropped
+        # it mid-batch) must not reach the gateway: an assistant message whose
+        # tool_call_ids lack following tool messages is rejected with HTTP 400.
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+
+        payload = self._payload(
+            [
+                SystemMessage(content="system prompt"),
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "lookup", "args": {}, "id": "call-kept"},
+                        {"name": "lookup", "args": {}, "id": "call-dropped"},
+                    ],
+                ),
+                ToolMessage(content="fact", tool_call_id="call-kept"),
+                HumanMessage(content="continue"),
+            ]
+        )
+        messages = payload["messages"]
+        assistant = next(m for m in messages if m["role"] == "assistant")
+        call_ids = [call.get("id") for call in assistant["tool_calls"]]
+        self.assertEqual(call_ids, ["call-kept"])
+        tool_ids = [m.get("tool_call_id") for m in messages if m["role"] == "tool"]
+        self.assertEqual(tool_ids, ["call-kept"])
+
+    def test_empty_assistant_message_dropped_when_no_tool_result_survives(self) -> None:
+        # A tool_calls-only assistant whose results all vanished must not reach
+        # the gateway as a message with neither content nor tool_calls (HTTP
+        # 400 "content or tool_calls must be set").
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+            SystemMessage,
+        )
+
+        payload = self._payload(
+            [
+                SystemMessage(content="system prompt"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "lookup", "args": {}, "id": "call-gone"}],
+                ),
+                HumanMessage(content="continue"),
+            ]
+        )
+        messages = payload["messages"]
+        self.assertEqual([m["role"] for m in messages], ["system", "user"])
+
     def test_orphan_tool_result_dropped_on_the_wire_only(self) -> None:
         from langchain_core.messages import (
             AIMessage,

@@ -410,6 +410,21 @@ class OpenGatewayProvider:
 _OPENCODE_CACHE_MARKER: dict[str, Any] = {"type": "ephemeral", "ttl": "1h"}
 
 
+def _message_has_text(message: dict[str, Any]) -> bool:
+    """True when an outbound message carries any non-empty text content."""
+    content = message.get("content")
+    if isinstance(content, str):
+        return bool(content.strip())
+    if isinstance(content, list):
+        return any(
+            isinstance(block, dict)
+            and isinstance(block.get("text"), str)
+            and block["text"].strip()
+            for block in content
+        )
+    return False
+
+
 def _strip_cache_control(message: dict[str, Any]) -> None:
     """Remove stale ``cache_control`` markers from one outbound message."""
     content = message.get("content")
@@ -605,22 +620,59 @@ class OpenCodeGoProvider:
                     return payload
                 source_messages = self._convert_input(input_).to_messages()
                 # Rebuild the outbound message list, pairing each tool result
-                # to its pending assistant tool call by id and skipping orphan
-                # results on the wire only. Framework history stays byte-stable
-                # so the gateway prefix cache keeps hitting; the middleware that
-                # used to delete orphans from history broke the prefix for every
-                # later turn (full-price re-miss instead of $0.0028/M reads).
+                # to its pending assistant tool call by id, skipping orphan
+                # results on the wire only, and pruning assistant tool_calls
+                # that never produced a result message. Framework history stays
+                # byte-stable so the gateway prefix cache keeps hitting (the
+                # middleware that used to delete orphans from history broke the
+                # prefix for every later turn). Pruning is required by the
+                # gateway contract: an assistant message whose tool_call_ids
+                # lack following tool messages is rejected with HTTP 400, which
+                # the retry policy does not retry, so every such message used to
+                # burn a full model recovery.
                 pending_calls: list[dict[str, Any]] = []
                 pending_call_ids: set[str] = set()
+                pending_assistant: dict[str, Any] | None = None
+                satisfied: set[str] = set()
                 outbound: list[dict[str, Any]] = []
+
+                def close_pending_assistant() -> None:
+                    nonlocal pending_assistant, pending_calls, pending_call_ids, satisfied
+                    if pending_assistant is not None:
+                        calls = pending_assistant.get("tool_calls")
+                        if isinstance(calls, list):
+                            kept = [call for call in calls if call.get("id") in satisfied]
+                            if kept:
+                                pending_assistant["tool_calls"] = kept
+                            elif _message_has_text(pending_assistant):
+                                # Text-only assistant message: drop the dead
+                                # tool_calls, keep the text.
+                                pending_assistant.pop("tool_calls", None)
+                                pending_assistant.pop("reasoning_content", None)
+                            else:
+                                # No tool result survived and the assistant
+                                # carried no text: the gateway rejects a
+                                # message with neither content nor tool_calls,
+                                # so drop the empty message entirely.
+                                for index, existing in enumerate(outbound):
+                                    if existing is pending_assistant:
+                                        del outbound[index]
+                                        break
+                    pending_assistant = None
+                    pending_calls = []
+                    pending_call_ids = set()
+                    satisfied = set()
+
                 for message, source in zip(messages, source_messages, strict=True):
                     role = message.get("role")
                     if isinstance(source, AIMessage) and role == "assistant":
+                        close_pending_assistant()
                         if message.get("tool_calls"):
                             reasoning = source.additional_kwargs.get("reasoning_content")
                             message["reasoning_content"] = (
                                 reasoning if isinstance(reasoning, str) else ""
                             )
+                            pending_assistant = message
                             pending_calls = list(message["tool_calls"])
                             pending_call_ids = set()
                             for pending in pending_calls:
@@ -633,17 +685,25 @@ class OpenCodeGoProvider:
                                 if not call.get("id") and source_call.get("id"):
                                     call["id"] = source_call["id"]
                                     pending_call_ids.add(call["id"])
+                            satisfied = set()
                         else:
+                            pending_assistant = None
                             pending_calls = []
                             pending_call_ids = set()
+                            satisfied = set()
                     elif role == "tool":
                         tool_id = message.get("tool_call_id")
-                        if not isinstance(tool_id, str) or tool_id not in pending_call_ids:
+                        if (
+                            pending_assistant is None
+                            or not isinstance(tool_id, str)
+                            or tool_id not in pending_call_ids
+                        ):
                             # Orphan tool result: no pending call references it.
                             # Skip it on the wire only; framework history keeps
                             # it so the cached prefix never changes.
                             continue
                         pending_call_ids.discard(tool_id)
+                        satisfied.add(tool_id)
                         matched_call: dict[str, Any] | None = None
                         for candidate in pending_calls:
                             if candidate.get("id") == tool_id:
@@ -652,13 +712,13 @@ class OpenCodeGoProvider:
                         if matched_call is not None:
                             call_id = matched_call.get("id") or ""
                             if tool_id and not call_id:
-                                call["id"] = tool_id
+                                matched_call["id"] = tool_id
                             elif call_id and not tool_id:
                                 message["tool_call_id"] = call_id
                     else:
-                        pending_calls = []
-                        pending_call_ids = set()
+                        close_pending_assistant()
                     outbound.append(message)
+                close_pending_assistant()
                 messages[:] = outbound
                 _stamp_gateway_cache_breakpoints(payload)
                 dump_dir = os.environ.get("Z_APPLY_PAYLOAD_DUMP")
