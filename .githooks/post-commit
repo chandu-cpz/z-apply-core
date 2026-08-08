@@ -1,0 +1,56 @@
+#!/usr/bin/env sh
+# post-commit re-check: catches `git commit --no-verify` / `-n` bypasses.
+#
+# `--no-verify` skips the pre-commit hook but NEVER skips post-commit, so a
+# commit that dodged the ruff + mypy gate is detected here and automatically
+# undone (`git reset --soft HEAD~1`, changes stay staged) with a demand for
+# proper issue resolution.
+#
+# The fully unbypassable layer is the CI gate on push (github workflow);
+# `git -c core.hooksPath=/dev/null` can disable all local hooks, but CI still
+# refuses the push.
+set -u
+
+# No uv -> cannot check; do not punish the commit.
+if ! command -v uv >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Never undo merges, root commits are handled specially below.
+if [ "$(git rev-list --parents -n1 HEAD | wc -w)" -gt 2 ]; then
+  exit 0
+fi
+case "$(git reflog -1 --format=%gs 2>/dev/null)" in
+  *amend*|*cherry-pick*) exit 0 ;;
+esac
+
+cd "$(git rev-parse --show-toplevel)" || exit 0
+
+fail=0
+if ! uv run ruff check .; then
+  fail=1
+fi
+if ! uv run mypy; then
+  fail=1
+fi
+
+[ "$fail" -eq 0 ] && exit 0
+
+# Undo the bypassed commit; the working tree and index are preserved.
+if [ "$(git rev-list --parents -n1 HEAD | wc -w)" -le 1 ]; then
+  # Root commit (no parent): delete the branch ref so the repo is unborn
+  # again; the index keeps every staged change.
+  git update-ref -d HEAD
+else
+  git reset --soft HEAD~1
+fi
+
+echo ""
+echo "PRE-COMMIT GATE ENFORCED: a commit skipped the ruff + mypy gate" >&2
+echo "(--no-verify / -n) and was automatically reverted. Your changes are" >&2
+echo "still staged. Do proper issue resolution:" >&2
+echo "  1. uv run ruff check .   # fix every lint issue" >&2
+echo "  2. uv run mypy           # fix every type error" >&2
+echo "  3. git add <fixed files>" >&2
+echo "  4. git commit again (without --no-verify)" >&2
+exit 1
