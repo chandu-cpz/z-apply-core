@@ -398,6 +398,88 @@ class OpenGatewayProvider:
         logger.debug("OpenGatewayProvider: cooldown ignored for %s", model_id)
 
 
+# OpenCode Go prefix-cache breakpoint markers. The gateway
+# (opencode.ai/zen/go) auto-caches request prefixes with only a ~5 minute TTL;
+# ``prompt_cache_key`` + ``prompt_cache_retention`` (set in the provider's
+# ``extra_body``) persist that cache across gaps, and ``cache_control``
+# breakpoints tell it exactly which points in the conversation to cache so
+# earlier turns stay hits as the conversation grows. The pattern -- up to 2
+# system messages, the last 2 user/assistant messages, and the last tool
+# message -- mirrors the documented opencode-go cache setup; ``ttl: "1h"`` is
+# the documented ceiling.
+_OPENCODE_CACHE_MARKER: dict[str, Any] = {"type": "ephemeral", "ttl": "1h"}
+
+
+def _strip_cache_control(message: dict[str, Any]) -> None:
+    """Remove stale ``cache_control`` markers from one outbound message."""
+    content = message.get("content")
+    if not isinstance(content, list):
+        return
+    for block in content:
+        if isinstance(block, dict):
+            block.pop("cache_control", None)
+
+
+def _stamp_cache_control(message: dict[str, Any]) -> None:
+    """Stamp one breakpoint on the first text block of an outbound message.
+
+    Empty text (for example an assistant message that only carries tool calls)
+    carries no tokens worth caching, so it is left unstamped.
+    """
+    content = message.get("content")
+    if isinstance(content, str):
+        if not content.strip():
+            return
+        message["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": dict(_OPENCODE_CACHE_MARKER),
+            }
+        ]
+        return
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and isinstance(block.get("text"), str):
+                if not block["text"].strip():
+                    continue
+                block["cache_control"] = dict(_OPENCODE_CACHE_MARKER)
+                return
+
+
+def _stamp_gateway_cache_breakpoints(payload: dict[str, Any]) -> None:
+    """Stamp OpenCode Go prefix-cache breakpoints on an outbound payload.
+
+    Runs at the wire (raw payload dicts), so breakpoints survive serialization
+    for every role -- the previous message-level stamping could not reach
+    assistant or tool messages. Stale markers from an earlier call are stripped
+    first so breakpoints land exactly where this call wants them.
+    """
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if isinstance(message, dict):
+            _strip_cache_control(message)
+    system_indices = [
+        i
+        for i, message in enumerate(messages)
+        if isinstance(message, dict) and message.get("role") == "system"
+    ][:2]
+    tail_indices = [
+        i
+        for i, message in enumerate(messages)
+        if isinstance(message, dict) and message.get("role") in {"user", "assistant"}
+    ][-2:]
+    tool_indices = [
+        i
+        for i, message in enumerate(messages)
+        if isinstance(message, dict) and message.get("role") == "tool"
+    ][-1:]
+    for index in system_indices + tail_indices + tool_indices:
+        _stamp_cache_control(messages[index])
+
+
 class OpenCodeGoProvider:
     """OpenAI-compatible provider for the opencode Zen gateway.
 
@@ -522,34 +604,63 @@ class OpenCodeGoProvider:
                 if not isinstance(messages, list):
                     return payload
                 source_messages = self._convert_input(input_).to_messages()
-                pending_calls: list[dict[str, Any]] | None = None
+                # Rebuild the outbound message list, pairing each tool result
+                # to its pending assistant tool call by id and skipping orphan
+                # results on the wire only. Framework history stays byte-stable
+                # so the gateway prefix cache keeps hitting; the middleware that
+                # used to delete orphans from history broke the prefix for every
+                # later turn (full-price re-miss instead of $0.0028/M reads).
+                pending_calls: list[dict[str, Any]] = []
+                pending_call_ids: set[str] = set()
+                outbound: list[dict[str, Any]] = []
                 for message, source in zip(messages, source_messages, strict=True):
-                    if isinstance(source, AIMessage) and message.get("role") == "assistant":
+                    role = message.get("role")
+                    if isinstance(source, AIMessage) and role == "assistant":
                         if message.get("tool_calls"):
                             reasoning = source.additional_kwargs.get("reasoning_content")
                             message["reasoning_content"] = (
                                 reasoning if isinstance(reasoning, str) else ""
                             )
                             pending_calls = list(message["tool_calls"])
+                            pending_call_ids = set()
+                            for pending in pending_calls:
+                                pending_id = pending.get("id")
+                                if isinstance(pending_id, str) and pending_id:
+                                    pending_call_ids.add(pending_id)
                             for call, source_call in zip(
                                 pending_calls, source.tool_calls, strict=False
                             ):
                                 if not call.get("id") and source_call.get("id"):
                                     call["id"] = source_call["id"]
+                                    pending_call_ids.add(call["id"])
                         else:
-                            pending_calls = None
-                    elif (
-                        message.get("role") == "tool"
-                        and pending_calls
-                        and isinstance(message.get("tool_call_id"), str)
-                    ):
-                        call = pending_calls.pop(0)
-                        call_id = call.get("id") or ""
-                        tool_id = message["tool_call_id"]
-                        if tool_id and not call_id:
-                            call["id"] = tool_id
-                        elif call_id and not tool_id:
-                            message["tool_call_id"] = call_id
+                            pending_calls = []
+                            pending_call_ids = set()
+                    elif role == "tool":
+                        tool_id = message.get("tool_call_id")
+                        if not isinstance(tool_id, str) or tool_id not in pending_call_ids:
+                            # Orphan tool result: no pending call references it.
+                            # Skip it on the wire only; framework history keeps
+                            # it so the cached prefix never changes.
+                            continue
+                        pending_call_ids.discard(tool_id)
+                        matched_call: dict[str, Any] | None = None
+                        for candidate in pending_calls:
+                            if candidate.get("id") == tool_id:
+                                matched_call = candidate
+                                break
+                        if matched_call is not None:
+                            call_id = matched_call.get("id") or ""
+                            if tool_id and not call_id:
+                                call["id"] = tool_id
+                            elif call_id and not tool_id:
+                                message["tool_call_id"] = call_id
+                    else:
+                        pending_calls = []
+                        pending_call_ids = set()
+                    outbound.append(message)
+                messages[:] = outbound
+                _stamp_gateway_cache_breakpoints(payload)
                 dump_dir = os.environ.get("Z_APPLY_PAYLOAD_DUMP")
                 if dump_dir:
                     import json

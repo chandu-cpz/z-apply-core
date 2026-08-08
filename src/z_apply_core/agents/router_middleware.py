@@ -18,9 +18,6 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     AnyMessage,
-    HumanMessage,
-    SystemMessage,
-    ToolMessage,
 )
 from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
@@ -115,34 +112,6 @@ def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
         ),
         True,
     )
-
-
-def _drop_orphan_tool_messages(messages: Sequence[AnyMessage]) -> list[AnyMessage]:
-    """Preserve only tool results adjacent to their structured assistant call."""
-    pending_tool_call_ids: set[str] = set()
-    normalized: list[AnyMessage] = []
-    removed = 0
-    for message in messages:
-        if isinstance(message, AIMessage):
-            pending_tool_call_ids = {
-                call_id
-                for call in message.tool_calls
-                if isinstance((call_id := call.get("id")), str) and call_id
-            }
-            normalized.append(message)
-            continue
-        if isinstance(message, ToolMessage):
-            if message.tool_call_id not in pending_tool_call_ids:
-                removed += 1
-                continue
-            pending_tool_call_ids.remove(message.tool_call_id)
-            normalized.append(message)
-            continue
-        pending_tool_call_ids.clear()
-        normalized.append(message)
-    if removed:
-        logger.warning("Removed %d orphan tool result message(s) before model handoff", removed)
-    return normalized
 
 
 def _prompt_preview(messages: Sequence[AnyMessage], limit: int = 400) -> str:
@@ -415,10 +384,12 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
         begin_model_call()
         try:
             leased_model: BaseChatModel = selection.llm
-            sanitized_messages = _drop_orphan_tool_messages(request.messages)
+            # Orphan tool results stay in framework history on purpose: any
+            # mid-conversation deletion changes the byte prefix the gateway's
+            # prompt cache keys on, so every later turn re-misses at the full
+            # input price instead of cheap cache reads. Orphans are filtered
+            # at the wire in the provider payload builder instead.
             override: dict[str, Any] = {"model": leased_model}
-            if len(sanitized_messages) != len(request.messages):
-                override["messages"] = sanitized_messages
             timeout_seconds = _model_call_timeout_seconds(self._provider)
             async with asyncio.timeout(timeout_seconds):
                 result: ModelResponse[ResponseT] = await handler(request.override(**override))
@@ -724,12 +695,12 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
             self._announced = True
 
         prompt_preview = _prompt_preview(request.messages)
+        # OpenCode Go prefix-cache breakpoints are stamped at the wire in the
+        # provider payload builder (ZenGatewayDeepSeek._get_request_payload),
+        # where assistant/tool content blocks survive serialization. Stamping
+        # framework messages here cannot reach those roles, and rewriting the
+        # request would risk the byte-stable prefix the gateway cache needs.
         call_request = request
-        if _provider_stamps_cache_markers(self._provider):
-            stamped = _stamp_prompt_cache_markers(list(request.messages or []))
-            if stamped is not None:
-                call_request = request.override(messages=stamped)
-                prompt_preview = _prompt_preview(stamped)
         input_tokens_estimate = estimate_messages_tokens(call_request.messages)
         await self._emit(
             "model_call_start",
@@ -837,56 +808,6 @@ def is_nim_provider(provider: ModelProvider) -> bool:
     from z_apply_core.agents.model_provider import NIMProvider
 
     return isinstance(provider, NIMProvider)
-
-
-_PROMPT_CACHE_MARKER: dict[str, Any] = {"type": "ephemeral", "ttl": "1h"}
-
-
-def _stamp_prompt_cache_markers(
-    messages: list[AnyMessage],
-) -> list[AnyMessage] | None:
-    """Add ``cache_control`` breakpoints at the stable system message and the
-    moving tail (last human message) so the gateway persists cache units at
-    those boundaries.
-
-    Markers ride on content-block dicts; ChatDeepSeek preserves extra keys on
-    system/user block lists but flattens assistant and tool messages, so only
-    those two roles are stamped.
-    """
-    if not messages:
-        return None
-    system_idx = next(
-        (i for i, message in enumerate(messages) if isinstance(message, SystemMessage)),
-        None,
-    )
-    human_idx = next(
-        (i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], HumanMessage)),
-        None,
-    )
-    if system_idx is None and human_idx is None:
-        return None
-    stamped: list[AnyMessage] = []
-    for i, message in enumerate(messages):
-        if i in {system_idx, human_idx} and isinstance(message.content, str):
-            message = message.model_copy(
-                update={
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": message.content,
-                            "cache_control": dict(_PROMPT_CACHE_MARKER),
-                        }
-                    ]
-                }
-            )
-        stamped.append(message)
-    return stamped
-
-
-def _provider_stamps_cache_markers(provider: ModelProvider) -> bool:
-    from z_apply_core.agents.model_provider import OpenCodeGoProvider
-
-    return isinstance(provider, OpenCodeGoProvider)
 
 
 def build_router_middleware(

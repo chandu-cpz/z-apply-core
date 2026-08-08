@@ -219,3 +219,104 @@ class OpenCodeGoThinkingTests(unittest.TestCase):
         extra = self._extra_body({})
         self.assertEqual(extra.get("prompt_cache_key"), "z-apply")
         self.assertEqual(extra.get("prompt_cache_retention"), "24h")
+
+
+class OpenCodeGoPayloadCacheTests(unittest.TestCase):
+    """Wire-level prefix-cache breakpoints and orphan tool-result filtering.
+
+    Breakpoints are stamped on the outbound payload (where assistant and tool
+    blocks survive serialization); orphan tool results are skipped on the wire
+    only, so framework history stays byte-stable and the gateway's prefix
+    cache keeps hitting across turns.
+    """
+
+    def _payload(self, messages: list[object]) -> dict[str, object]:
+        from z_apply_core.agents.model_provider import OpenCodeGoProvider
+
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        selection = asyncio.run(provider.lease())
+        return selection.llm._get_request_payload(messages)
+
+    def test_stamps_breakpoints_on_system_tail_and_last_tool(self) -> None:
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+
+        payload = self._payload(
+            [
+                SystemMessage(content="system prompt"),
+                HumanMessage(content="first question"),
+                AIMessage(
+                    content="I will look that up.",
+                    tool_calls=[{"name": "lookup", "args": {}, "id": "call-1"}],
+                ),
+                ToolMessage(content="fact", tool_call_id="call-1"),
+                HumanMessage(content="latest question"),
+            ]
+        )
+        messages = payload["messages"]
+        marker = {"type": "ephemeral", "ttl": "1h"}
+        # Stable prefix: system breakpoint.
+        self.assertEqual(messages[0]["content"][0]["cache_control"], marker)
+        # Moving tail: last 2 user/assistant messages (assistant + latest user).
+        self.assertEqual(messages[2]["content"][0]["cache_control"], marker)
+        self.assertEqual(messages[4]["content"][0]["cache_control"], marker)
+        # Last tool result.
+        self.assertEqual(messages[3]["content"][0]["cache_control"], marker)
+        # Untouched middle: the first user message carries no breakpoint.
+        self.assertNotIn("cache_control", messages[1]["content"][0])
+
+    def test_orphan_tool_result_dropped_on_the_wire_only(self) -> None:
+        from langchain_core.messages import (
+            AIMessage,
+            HumanMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+
+        payload = self._payload(
+            [
+                SystemMessage(content="system prompt"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "lookup", "args": {}, "id": "call-valid"}],
+                ),
+                ToolMessage(content="orphan result", tool_call_id="call-orphan"),
+                ToolMessage(content="fact", tool_call_id="call-valid"),
+                HumanMessage(content="continue"),
+            ]
+        )
+        roles = [message["role"] for message in payload["messages"]]
+        self.assertEqual(roles, ["system", "assistant", "tool", "user"])
+        tool_messages = [
+            message for message in payload["messages"] if message["role"] == "tool"
+        ]
+        self.assertEqual(len(tool_messages), 1)
+        self.assertEqual(tool_messages[0]["content"][0]["text"], "fact")
+
+    def test_stale_cache_control_stripped_before_restamping(self) -> None:
+        from langchain_core.messages import HumanMessage, SystemMessage
+
+        payload = self._payload(
+            [
+                SystemMessage(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": "system prompt",
+                            "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                        }
+                    ]
+                ),
+                HumanMessage(content="hi"),
+            ]
+        )
+        messages = payload["messages"]
+        self.assertEqual(
+            messages[0]["content"][0]["cache_control"],
+            {"type": "ephemeral", "ttl": "1h"},
+        )
+        self.assertEqual(messages[1]["content"][0]["cache_control"], {"type": "ephemeral", "ttl": "1h"})

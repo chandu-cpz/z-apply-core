@@ -451,6 +451,7 @@ class RichStreamRenderer:
             title=(
                 f"LLM calls this run: {len(entries)} calls \u00b7 "
                 f"in={ledger.total_input_tokens:,} out={ledger.total_output_tokens:,} \u00b7 "
+                f"{self._ledger_cache_ratio()} \u00b7 "
                 f"{self._ledger_total_label()}"
             ),
             title_justify="left",
@@ -485,11 +486,20 @@ class RichStreamRenderer:
             "",
             f"{ledger.total_input_tokens:,}",
             f"{ledger.total_output_tokens:,}",
-            "",
+            self._ledger_cache_ratio(),
             self._ledger_total_label(),
             style="bold",
         )
         return table
+
+    def _ledger_cache_ratio(self) -> str:
+        """Share of run input tokens served from the provider's prefix cache."""
+        assert self._ledger is not None
+        cached = sum(entry.cache_read_tokens for entry in self._ledger.entries)
+        total = self._ledger.total_input_tokens
+        if total <= 0:
+            return "cache n/a"
+        return f"cache {cached / total:.0%}"
 
     def _ledger_total_label(self) -> str:
         assert self._ledger is not None

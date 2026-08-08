@@ -1,0 +1,43 @@
+#!/usr/bin/env sh
+# Pre-commit gate: block commits until `uv run ruff` and `uv run mypy` pass.
+#
+# This is the enforcement point for the repo rule "never commit without
+# running the lint/type checks first". Git refuses the commit when this
+# script exits non-zero, regardless of which tool (CLI, agent, IDE) invoked
+# `git commit`.
+#
+# Escape hatch (not recommended): git commit --no-verify
+set -u
+
+# Skip on merge commits (MERGE_HEAD present): a merge carries no staged review
+# burden and the hook would only block clean merge flows.
+if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  exit 0
+fi
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+fail=0
+
+echo "==> uv run ruff check"
+if ! uv run ruff check .; then
+  fail=1
+fi
+
+echo ""
+echo "==> uv run mypy"
+if ! uv run mypy; then
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "PRE-COMMIT GATE FAILED: ruff and/or mypy reported issues above."
+  echo "Fix them, stage the fixes (git add), then commit again."
+  echo "To skip (not recommended): git commit --no-verify"
+  exit 1
+fi
+
+echo ""
+echo "==> ruff + mypy clean. Commit allowed."
+exit 0

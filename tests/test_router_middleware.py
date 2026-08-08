@@ -10,27 +10,29 @@ from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    SystemMessage,
     ToolMessage,
 )
 from nim_router import NimRouter
 from nim_router.errors import ErrorKind
 from nim_router.schemas import ModelSelection
 
-from z_apply_core.agents.model_provider import NIMProvider, OpenCodeGoProvider
+from z_apply_core.agents.model_provider import NIMProvider
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.router_middleware import (
     ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     NimRouterMiddleware,
     StaticModelRouter,
-    _stamp_prompt_cache_markers,
     build_router_middleware,
 )
 from z_apply_core.stream_events import FrameworkTraceEvent
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
-    async def test_removes_orphan_tool_result_before_model_handoff(self) -> None:
+    async def test_orphan_tool_result_passes_through_untouched(self) -> None:
+        # Orphan results must stay in framework history: deleting them changes
+        # the byte prefix the gateway's prompt cache keys on, so every later
+        # turn re-misses at the full input price. They are filtered at the wire
+        # in the provider payload builder instead.
         router = MagicMock(spec=NimRouter)
         model = MagicMock()
         selection = cast(
@@ -45,7 +47,9 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
                 ToolMessage(content="stale result", tool_call_id="call-orphan"),
             ],
         )
-        request.override.side_effect = lambda **values: SimpleNamespace(**values)
+        request.override.side_effect = lambda **values: SimpleNamespace(
+            messages=request.messages, **values
+        )
         handler = AsyncMock(return_value=sentinel.response)
 
         await NimRouterMiddleware(
@@ -55,7 +59,11 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         ).awrap_model_call(request, handler)
 
         forwarded = handler.await_args.args[0]
-        self.assertEqual([type(message) for message in forwarded.messages], [HumanMessage])
+        self.assertEqual(
+            [type(message) for message in forwarded.messages],
+            [HumanMessage, ToolMessage],
+        )
+        self.assertEqual(forwarded.messages[1].tool_call_id, "call-orphan")
 
     async def test_preserves_tool_result_with_matching_assistant_call(self) -> None:
         router = MagicMock(spec=NimRouter)
@@ -105,7 +113,9 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
                 ToolMessage(content="replayed fact", tool_call_id="call-valid"),
             ],
         )
-        request.override.side_effect = lambda **values: SimpleNamespace(**values)
+        request.override.side_effect = lambda **values: SimpleNamespace(
+            messages=request.messages, **values
+        )
         handler = AsyncMock(return_value=sentinel.response)
 
         await NimRouterMiddleware(
@@ -117,7 +127,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         forwarded = handler.await_args.args[0]
         self.assertEqual(
             [type(message) for message in forwarded.messages],
-            [AIMessage, ToolMessage, HumanMessage],
+            [AIMessage, ToolMessage, HumanMessage, ToolMessage],
         )
 
     async def test_rejects_empty_response_without_reasoning_or_tool_calls(self) -> None:
@@ -560,56 +570,6 @@ class StaticRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed[0].data["model_id"], "agnes/agnes-2.0-flash")
         self.assertEqual(failed[0].data["error_type"], "RuntimeError")
         self.assertIn("boom", failed[0].data["error"])
-
-    async def test_static_router_stamps_cache_markers_for_opencodego(self) -> None:
-        provider = OpenCodeGoProvider(api_key="sk-test", model="deepseek-v4-flash")
-        middleware = StaticModelRouter(provider, role="AnswerWriter", selection=self._selection())
-        seen: dict[str, Any] = {}
-
-        async def capture(req: Any) -> Any:
-            seen["messages"] = req.messages
-            return sentinel.response
-
-        request = MagicMock(
-            tools=[],
-            response_format=None,
-            messages=[
-                SystemMessage(content="system prompt"),
-                HumanMessage(content="first question"),
-                HumanMessage(content="latest question"),
-            ],
-        )
-        request.override.side_effect = lambda **values: SimpleNamespace(**values)
-
-        await middleware.awrap_model_call(request, capture)
-
-        messages = seen["messages"]
-        self.assertIsInstance(messages[0].content, list)
-        self.assertEqual(
-            messages[0].content[0]["cache_control"], {"type": "ephemeral", "ttl": "1h"}
-        )
-        self.assertIsInstance(messages[1].content, str)
-        self.assertEqual(messages[1].content, "first question")
-        self.assertEqual(
-            messages[2].content[0]["cache_control"], {"type": "ephemeral", "ttl": "1h"}
-        )
-
-    def test_stamp_prompt_cache_markers_leaves_other_roles_untouched(self) -> None:
-        messages = [
-            SystemMessage(content="system prompt"),
-            AIMessage(content="assistant answer"),
-            ToolMessage(content="tool result", tool_call_id="c1"),
-            HumanMessage(content="latest question"),
-        ]
-        stamped = _stamp_prompt_cache_markers(messages)
-        self.assertIsNotNone(stamped)
-        self.assertIsInstance(stamped[0].content, list)
-        self.assertEqual(stamped[1].content, "assistant answer")
-        self.assertEqual(stamped[2].content, "tool result")
-        self.assertIsInstance(stamped[3].content, list)
-        self.assertIsNone(
-            _stamp_prompt_cache_markers([ToolMessage(content="x", tool_call_id="c1")])
-        )
 
 
 if __name__ == "__main__":
