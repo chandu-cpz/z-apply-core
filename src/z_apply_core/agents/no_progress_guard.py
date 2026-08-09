@@ -352,6 +352,27 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
     def _state_action_signature(self, request: ToolCallRequest) -> str:
         name = str(request.tool_call.get("name", ""))
         args = request.tool_call.get("args", {})
+        if name == "browser_fill_form" and isinstance(args, dict):
+            # Normalize fill-form args so the identical-call slap fires on a
+            # refill even when the model varies the human-readable field-name
+            # case ("Email" vs "email") or field order between calls: the
+            # SAME fields targeted twice is the same action, full stop.
+            fields = args.get("fields")
+            if isinstance(fields, list):
+                normalized: list[dict[str, Any]] = []
+                for field in fields:
+                    if not isinstance(field, dict):
+                        continue
+                    normalized.append(
+                        {
+                            "target": field.get("target", ""),
+                            "name": str(field.get("name", "")).casefold(),
+                            "type": field.get("type", ""),
+                            "value": field.get("value", ""),
+                        }
+                    )
+                normalized.sort(key=lambda f: str(f.get("target", "")))
+                args = {**args, "fields": normalized}
         encoded = json.dumps(args, sort_keys=True, default=str, separators=(",", ":"))
         return f"{self._browser_signature or '(unknown)'}:{name}:{encoded}"
 
