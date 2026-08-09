@@ -44,9 +44,10 @@ work; a scoped shallow one costs a fraction of a full one.
 3. If a login, OTP, email-verification, or identity gate is visible, delegate
    one AuthenticationSpecialist task with the current URL and visible gate
    evidence. Continue only from fresh browser evidence after it returns.
-4. FIRST activate the explicit Simplify `Autofill` control ONCE. The Simplify
+4. FIRST activate the explicit Simplify `Autofill` control ONCE — before
+   filling or uploading anything. The Simplify
    autofill is the extension's injected, Simplify-branded control (a CTA or
-   panel that fills the whole application — including Employer and Education
+   panel that fills the WHOLE application — including Employer and Education
    sections — from the saved profile). It only renders when the Simplify
    profile/cookies are active. It is NEVER a file input: an "Apply with
    resume" / "Apply With Resume" control that wraps an `<input type=file>`
@@ -68,6 +69,10 @@ work; a scoped shallow one costs a fraction of a full one.
    - If the extension first shows a privacy-consent dialog ("Your Privacy",
      "I agree to the privacy policy"), agree to it ONCE by clicking the
      agree control, then click the autofill control.
+   - The Simplify panel often appears ONLY AFTER the resume is uploaded and
+     parsed — if it was not visible before the upload, re-check the snapshot
+     right after the upload and activate it THEN, before filling any field
+     by hand. The autofill should do the filling, not you.
    After ONE successful autofill click, call `browser_wait_for(time=10)` once
    so asynchronous filling and resume parsing can settle, then use the
    returned employer-form evidence. If the resume is already attached, do

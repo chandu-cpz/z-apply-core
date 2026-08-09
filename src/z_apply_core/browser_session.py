@@ -254,12 +254,13 @@ class BrowserSession:
         just burns tokens. This runs before snapshots AND clicks using only
         native Playwright locators (role/name, CSS — which pierce open shadow
         roots) — no JS. The consent dialog is auto-closed if present
-        (idempotent), and the autofill CTA is clicked once per page URL so the
-        model sees the filled form. Failures are logged and ignored (no-op on
-        pages without the extension).
+        (idempotent). The autofill CTA is attempted on EVERY call (the panel
+        often appears only AFTER the resume upload, on the same URL, so a
+        once-per-URL guard would miss it); Simplify clicks are idempotent, so
+        re-attempting is safe. Failures are logged and ignored (no-op on pages
+        without the extension).
         """
         try:
-            url = page.url
             # Auto-close the Simplify privacy dialog: it gates on a custom
             # toggle (a label wraps the hidden checkbox and intercepts pointer
             # events), so toggle it first, then Accept becomes enabled.
@@ -274,19 +275,40 @@ class BrowserSession:
             )
             if await consent.count():
                 await consent.first.click(timeout=3000)
-                logger.info("simplify preflight on %s: consent accepted", url)
-            if allow_autofill and url != self._simplify_autofill_url:
-                autofill = page.get_by_role(
-                    "button",
-                    name=re.compile(
-                        r"autofill|auto[- ]?fill|fill application|fill with simplify|enable ai autofill",
-                        re.I,
-                    ),
-                )
-                if await autofill.count():
-                    await autofill.first.click(timeout=3000)
-                    self._simplify_autofill_url = url
-                    logger.info("simplify preflight on %s: autofill activated", url)
+                logger.info("simplify preflight: consent accepted on %s", page.url)
+            if not allow_autofill:
+                return
+            # The autofill CTA: any Simplify-branded action button — by name
+            # first (the extension labels it "Enable AI autofill", "Autofill",
+            # "Auto fill", "Fill application", "Fill with Simplify"), then a
+            # fallback to the first non-consent/close button inside the shadow
+            # host. The consent buttons are excluded so we never re-open the
+            # dialog or uninstall.
+            autofill = page.get_by_role(
+                "button",
+                name=re.compile(
+                    r"enable ai autofill|autofill|auto[- ]?fill|fill application|fill with simplify|fill this application|simplify fill",
+                    re.I,
+                ),
+            )
+            clicked = False
+            if await autofill.count():
+                await autofill.first.click(timeout=3000)
+                clicked = True
+            else:
+                host_buttons = page.locator('.simplify-jobs-shadow-root button')
+                for index in range(await host_buttons.count()):
+                    button = host_buttons.nth(index)
+                    name = ((await button.get_attribute("aria-label")) or "").lower()
+                    text = ((await button.inner_text()) or "").lower() if await button.count() else ""
+                    combined = f"{name} {text}"
+                    if any(word in combined for word in ("accept", "decline", "uninstall", "close", "continue")):
+                        continue
+                    await button.click(timeout=3000)
+                    clicked = True
+                    break
+            if clicked:
+                logger.info("simplify preflight: autofill activated on %s", page.url)
         except Exception:
             logger.debug("simplify preflight skipped", exc_info=True)
 
