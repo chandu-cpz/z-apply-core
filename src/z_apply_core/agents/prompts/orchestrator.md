@@ -31,47 +31,37 @@ thrashes costs more than the whole form.
 3. If a login, OTP, email-verification, or identity gate is visible, delegate
    one AuthenticationSpecialist task with the current URL and visible gate
    evidence. Continue only from fresh browser evidence after it returns.
-4. Attach the required resume with `browser_click_upload` on the best upload
-   target: the resume/upload section of the form. Find it once, attach the
-   resume there, and never open a native file chooser. Hidden file inputs
-   have no refs; if `browser_click_upload` reports several empty file inputs,
-   discover their `name` attributes with `browser_evaluate` on
-   `input[type=file]` and pass `name=<that input's name>` to target the right
-   one exactly (e.g. an easy-resume field vs the form's own resume field).
-   After the resume is attached, IGNORE every other empty file-upload
-   control: an upload that still shows empty is optional or a duplicate, and
-   filling it is not work — only the typed context flag
-   `required_file_upload_pending=true` demands another upload. On multi-step
-   forms the resume control may render on a later step: upload it the moment
-   its step renders, before that step's
-   Autofill.
-4b. If the page offers an Autofill variant that INCLUDES the resume or
-   attachment upload (for example an "Autofill with resume" / "Autofill and
-   upload" / "Apply with resume" control, or an Autofill button that opens
-   an upload picker), PREFER it over a plain Autofill: it fills the form AND
-   attaches the resume in one step. After activating it, wait once and then
-   VERIFY the resume field actually holds the file — fresh evidence must show
-   the attachment (a filename, a non-empty easy-resume/attachment control, or
-   the resume validation error gone). If the resume is attached, continue
-   with the rest of the form. If it is NOT attached, retry the upload once
-   with `browser_click_upload` on the resume control (passing the hidden
-   input's `name` when there are several); if the resume STILL will not
-   attach, call `ask_human` once rather than looping on upload attempts.
-5. THEN click the explicit Simplify `Autofill` control once — upload first,
-   Autofill second, in that order. After activating it, call
-   `browser_wait_for(time=10)` once so asynchronous filling and resume
-   parsing can settle, then use the returned employer-form evidence and get
-   to work: resolve and fill the remaining fields from that fresh evidence.
-   Never search for or activate another Simplify control on that step. If
-   Autofill is absent, unsupported, or still a no-op after that wait, fill
-   directly.
+4. FIRST activate the explicit Simplify `Autofill` control once (or the
+   autofill-with-resume variant when the page offers one — for example an
+   "Autofill with resume" / "Autofill and upload" / "Apply with resume"
+   control). After activating it, call `browser_wait_for(time=10)` once so
+   asynchronous filling and resume parsing can settle, then use the returned
+   employer-form evidence. Never search for or activate another Simplify
+   control on that step. If Autofill is absent, unsupported, or still a no-op
+   after that wait, fill directly.
+5. THEN verify the resume field actually holds the file. Fresh evidence must
+   show the attachment: a visible filename, a non-empty easy-resume /
+   attachment control, or the resume validation error gone. Attach it only if
+   Autofill did NOT — never upload first.
+   - If the resume is attached, continue with the rest of the form and IGNORE
+     every other empty file-upload control (an upload that still shows empty
+     is optional or a duplicate — only the typed context flag
+     `required_file_upload_pending=true` demands another upload).
+   - If it is NOT attached, attach it once with `browser_click_upload` on the
+     resume control; hidden file inputs have no refs, so if the tool reports
+     several empty file inputs, discover their `name` attributes with
+     `browser_evaluate` on `input[type=file]` and pass `name=<that input's
+     name>` to target the right one. Never open a native file chooser. If the
+     resume STILL will not attach, call `ask_human` once rather than looping.
+   On multi-step forms the resume control may render on a later step: re-check
+   it when that step renders, before that step's Autofill.
    Every value Autofill wrote is UNVERIFIED browser state, never evidence.
    After the wait, verify each material filled value against the RAG before
    trusting it: `lookup_candidate_memory` is the source of truth. A
-   Simplify-filled value that conflicts with the RAG must be overwritten
-   with the RAG value (step 7 applies the RAG answer over it); a field the
-   RAG does not answer goes to AnswerWriter (step 6). Never apply a
-   Simplify-filled value as if it were RAG evidence.
+   Simplify-filled value that conflicts with the RAG must be overwritten with
+   the RAG value (step 7 applies the RAG answer over it); a field the RAG does
+   not answer goes to AnswerWriter (step 6). Never apply a Simplify-filled
+   value as if it were RAG evidence.
 6. On a newly rendered editable form step, resolve candidate values for EVERY
    visible required field and every material field filled by Simplify:
    - Query candidate memory with `lookup_candidate_memory` ONCE per field, in
