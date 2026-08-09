@@ -47,22 +47,30 @@ work; a scoped shallow one costs a fraction of a full one.
 4. FIRST activate the explicit Simplify `Autofill` control ONCE. The Simplify
    autofill is the extension's injected, Simplify-branded control (a CTA or
    panel that fills the whole application — including Employer and Education
-   sections — from the saved profile). It is NEVER a file input: an
-   "Apply with resume" / "Apply With Resume" control that wraps an
-   `<input type=file>` is the EMPLOYER's resume upload, not the Simplify
-   autofill — never treat it as such. Look for the Simplify-branded control
-   separately. HOW to activate it: the CTA is a normal visible button —
-   find its ref in the latest snapshot by its text ("Simplify", "Autofill",
+   sections — from the saved profile). It only renders when the Simplify
+   profile/cookies are active, and it appears inside the extension's shadow
+   root — the snapshot includes it as "SHADOW-DOM EXTENSION CONTENT". It is
+   NEVER a file input: an "Apply with resume" / "Apply With Resume" control
+   that wraps an `<input type=file>` is the EMPLOYER's resume upload, not the
+   Simplify autofill — never treat it as such. Look for the Simplify-branded
+   control separately. HOW to activate it: the CTA is a normal visible button
+   — find its ref in the latest snapshot by its text ("Simplify", "Autofill",
    "Auto fill", "Fill application", "Fill with Simplify") and click it with
    `browser_click`; if no ref shows it, locate it with `browser_find` or
    `browser_evaluate` on a `button`/`[role=button]` whose text matches
-   /simplify|autofill|auto[- ]?fill/i and click the returned ref. After ONE
-   successful click, call `browser_wait_for(time=10)` once so asynchronous
-   filling and resume parsing can settle, then use the returned employer-form
-   evidence. Never search for or activate another Simplify control on that
-   step. If no Simplify-branded Autofill control can be found, or the click
-   is a no-op after that wait, STOP hunting (at most 2 locate+click attempts
-   total) and fill directly (steps 5-7) — and you must then fill the
+   /simplify|autofill|auto[- ]?fill/i and click the returned ref. If the
+   extension first shows a privacy-consent dialog ("Your Privacy", "I agree
+   to the privacy policy") inside the SHADOW-DOM EXTENSION CONTENT, agree to
+   it ONCE by clicking the agree control. After ONE successful autofill
+   click, call `browser_wait_for(time=10)` once so asynchronous filling and
+   resume parsing can settle, then use the returned employer-form evidence.
+   Never search for or activate another Simplify control on that step.
+   AFTER the autofill has filled the form and you have verified it, CLOSE the
+   Simplify panel: find its close (X) control in the snapshot and click it so
+   the extension stops intercepting pointer events and never blocks your
+   later actions. If no Simplify-branded Autofill control can be found, or the
+   click is a no-op after that wait, STOP hunting (at most 2 locate+click
+   attempts total) and fill directly (steps 5-7) — and you must then fill the
    Employer and Education sections yourself from the RAG: if the form renders
    "Add Employer" / "Add Education" controls, add and fill them with the
    candidate's work experience and education from `lookup_candidate_memory`

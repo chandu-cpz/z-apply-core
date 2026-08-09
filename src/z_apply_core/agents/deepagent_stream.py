@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncIterable, AsyncIterator
 from typing import Any, cast
 
+from langchain_core.language_models.chat_model_stream import AsyncProjection
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
@@ -115,11 +116,7 @@ async def _consume_messages(
         )
         text = turn["text"]
         reasoning = turn["reasoning"]
-        tool_calls = [
-            call
-            for call in turn["tool_calls"]
-            if call.get("name") or call.get("id")
-        ]
+        tool_calls = [call for call in turn["tool_calls"] if call.get("name") or call.get("id")]
         if not text and not reasoning and not tool_calls:
             continue
         first_delta_seen = turn["first_delta_seen"]
@@ -195,17 +192,29 @@ async def _consume_message_reasoning(
 
 async def _consume_message_tool_call_chunks(
     source: str,
-    tool_calls: AsyncIterable[Any],
+    tool_calls: AsyncProjection,
     sink: FrameworkEventSink | None,
     turn: dict[str, Any],
     message_id: str,
     turn_index: int,
 ) -> None:
+    # Live UI: relay the raw chunk dicts the framework pushes onto the
+    # ``message_stream.tool_calls`` projection (``ToolCallChunk`` shape with
+    # ``id`` / ``name`` / ``args`` keys). The framework already merges
+    # sticky id/name and concatenates args fragments; the chunks are plain
+    # dicts, so read them with ``.get`` — not ``getattr``.
     async for chunk in tool_calls:
-        chunk_data = _serialize_tool_call_chunk(chunk)
+        if not isinstance(chunk, dict):
+            continue
+        chunk_data = {
+            "index": int(chunk.get("index") or 0),
+            "id": str(chunk.get("id") or ""),
+            "name": str(chunk.get("name") or ""),
+            "args": str(chunk.get("args") or ""),
+        }
         # Some providers announce a tool call with a placeholder chunk whose
         # id/name/args are all empty (the real invocation arrives through the
-        # executed-tool stream). Recording it pollutes the turn's tool-call
+        # executed-tool stream). Recording it pollutes the live tool-call
         # list with a nameless entry, so skip completely empty chunks.
         if not chunk_data["id"] and not chunk_data["name"] and not chunk_data["args"]:
             continue
@@ -217,33 +226,15 @@ async def _consume_message_tool_call_chunks(
             source,
             chunk_data,
         )
-        _record_tool_call_chunk(turn, chunk_data)
 
-
-def _serialize_tool_call_chunk(chunk: Any) -> dict[str, Any]:
-    index = getattr(chunk, "tool_call_index", None) or getattr(chunk, "index", 0) or 0
-    args = getattr(chunk, "args", "")
-    if not isinstance(args, str):
-        args = str(args)
-    return {
-        "index": int(index),
-        "id": str(getattr(chunk, "id", "") or getattr(chunk, "tool_call_id", "") or ""),
-        "name": str(getattr(chunk, "name", "") or ""),
-        "args": args,
-    }
-
-
-def _record_tool_call_chunk(turn: dict[str, Any], chunk_data: dict[str, Any]) -> None:
-    tool_calls = turn["tool_calls"]
-    for entry in tool_calls:
-        if entry["index"] == chunk_data["index"]:
-            entry["args"] += chunk_data["args"]
-            if chunk_data["id"]:
-                entry["id"] = chunk_data["id"]
-            if chunk_data["name"]:
-                entry["name"] = chunk_data["name"]
-            return
-    tool_calls.append(dict(chunk_data))
+    # Record: await the same projection for the framework-finalized list of
+    # ``ToolCall`` dicts — sticky id/name, concatenated args parsed as JSON,
+    # and malformed args marked as ``invalid_tool_call`` are all handled by
+    # langchain-core's chunk-store sweep at ``message-finish``. This replaces
+    # the hand-rolled merge that previously produced empty ``{id, name,
+    # args}`` entries.
+    finalized = await tool_calls
+    turn["tool_calls"] = finalized or []
 
 
 async def _read_message_output(message_stream: Any) -> None:

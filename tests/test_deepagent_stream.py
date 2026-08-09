@@ -21,6 +21,31 @@ async def done(value: Any = None) -> Any:
     return value
 
 
+class FakeToolCallsProjection:
+    """Mimic langchain-core's ``AsyncProjection``: iterable chunk deltas + awaitable final list.
+
+    Iteration yields the raw ``ToolCallChunk`` dicts the framework pushes; awaiting
+    returns the framework-finalized ``ToolCall`` dicts (sticky id/name, args parsed).
+    """
+
+    def __init__(
+        self,
+        chunks: list[dict[str, Any]],
+        finalized: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self._chunks = list(chunks)
+        self._finalized = list(finalized) if finalized is not None else [dict(c) for c in chunks]
+
+    def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+        return async_items(self._chunks)
+
+    def __await__(self) -> Any:
+        async def _final() -> list[dict[str, Any]]:
+            return self._finalized
+
+        return _final().__await__()
+
+
 class CollectingSink:
     def __init__(self) -> None:
         self.events: list[FrameworkTraceEvent] = []
@@ -38,7 +63,7 @@ class FakeMessage:
     ) -> None:
         self.text = async_items(text or [])
         self.reasoning = async_items(reasoning or [])
-        self.tool_calls = async_items([])
+        self.tool_calls = FakeToolCallsProjection([])
         self.output = done()
 
 
@@ -181,29 +206,110 @@ class DeepAgentStreamTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CANDIDATE_FIELD_EXECUTION_ERROR", output["content"])
 
 
-class FakeToolChunk:
-    def __init__(self, index: int, name: str, args: str, tool_id: str = "") -> None:
-        self.tool_call_index = index
-        self.name = name
-        self.args = args
-        self.id = tool_id
-
-
 class FakeMessageWithToolChunks(FakeMessage):
-    def __init__(self, chunks: list[FakeToolChunk]) -> None:
+    def __init__(
+        self,
+        chunks: list[dict[str, Any]],
+        finalized: list[dict[str, Any]] | None = None,
+    ) -> None:
         super().__init__()
-        self.tool_calls = async_items(chunks)
+        self.tool_calls = FakeToolCallsProjection(chunks, finalized=finalized)
 
 
 class EmptyToolChunkTests(unittest.IsolatedAsyncioTestCase):
+    async def test_tool_call_chunks_relay_real_dict_values(self) -> None:
+        # Regression: the framework pushes ``ToolCallChunk`` dicts onto the
+        # projection, not objects — ``getattr`` on them previously zeroed every
+        # field and silently dropped the deltas. Read them as dicts.
+        sink = CollectingSink()
+        message = FakeMessageWithToolChunks(
+            [{"index": 0, "id": "call-1", "name": "browser_click", "args": '{"target": "e23"}'}],
+            finalized=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "browser_click",
+                    "args": {"target": "e23"},
+                }
+            ],
+        )
+        fake_stream = SimpleNamespace(
+            messages=async_items([message]),
+            tool_calls=async_items([]),
+            subagents=async_items([]),
+            output=done({}),
+        )
+        await consume_deepagent_stream(fake_stream, sink=sink, root_source="orchestrator")
+
+        deltas = [e for e in sink.events if e.event == "agent_model_tool_call"]
+        self.assertEqual(len(deltas), 1)
+        self.assertEqual(deltas[0].data["id"], "call-1")
+        self.assertEqual(deltas[0].data["name"], "browser_click")
+        self.assertEqual(deltas[0].data["args"], '{"target": "e23"}')
+
+        turn = next(e for e in sink.events if e.event == "agent_turn")
+        self.assertEqual(
+            turn.data["tool_calls"],
+            [
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "browser_click",
+                    "args": {"target": "e23"},
+                }
+            ],
+        )
+
+    async def test_await_yields_finalized_tool_call_from_idless_fragments(self) -> None:
+        # The turn record comes from awaiting the projection: the framework
+        # merges id/name sticky and concatenates + JSON-parses args fragments.
+        # Even when the live chunks carry no id/name (announcement + args
+        # fragments arrive separately), the finalized record is complete.
+        sink = CollectingSink()
+        message = FakeMessageWithToolChunks(
+            [
+                {"index": 0, "id": "", "name": "", "args": '{"target": "e2'},
+                {"index": 0, "id": "", "name": "", "args": '3"}'},
+            ],
+            finalized=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "browser_click",
+                    "args": {"target": "e23"},
+                }
+            ],
+        )
+        fake_stream = SimpleNamespace(
+            messages=async_items([message]),
+            tool_calls=async_items([]),
+            subagents=async_items([]),
+            output=done({}),
+        )
+        await consume_deepagent_stream(fake_stream, sink=sink, root_source="orchestrator")
+
+        turn = next(e for e in sink.events if e.event == "agent_turn")
+        self.assertEqual(len(turn.data["tool_calls"]), 1)
+        self.assertEqual(turn.data["tool_calls"][0]["id"], "call-1")
+        self.assertEqual(turn.data["tool_calls"][0]["name"], "browser_click")
+        self.assertEqual(turn.data["tool_calls"][0]["args"], {"target": "e23"})
+
     async def test_empty_tool_call_chunks_are_skipped_but_named_ones_kept(self) -> None:
         sink = CollectingSink()
         message = FakeMessageWithToolChunks(
             [
-                FakeToolChunk(index=0, name="", args="", tool_id=""),
-                FakeToolChunk(index=0, name="browser_click", args="", tool_id="call-1"),
-                FakeToolChunk(index=0, name="", args='{"target": "e23"}'),
-            ]
+                {"index": 0, "id": "", "name": "", "args": ""},
+                {"index": 0, "id": "call-1", "name": "browser_click", "args": ""},
+                {"index": 0, "id": "call-1", "name": "browser_click", "args": '{"target": "e23"}'},
+            ],
+            finalized=[
+                {
+                    "type": "tool_call",
+                    "id": "call-1",
+                    "name": "browser_click",
+                    "args": {"target": "e23"},
+                }
+            ],
         )
         fake_stream = SimpleNamespace(
             messages=async_items([message]),
@@ -218,11 +324,14 @@ class EmptyToolChunkTests(unittest.IsolatedAsyncioTestCase):
         tool_calls = turn_events[0].data["tool_calls"]
         self.assertEqual(len(tool_calls), 1)
         self.assertEqual(tool_calls[0]["name"], "browser_click")
-        self.assertEqual(tool_calls[0]["args"], '{"target": "e23"}')
+        self.assertEqual(tool_calls[0]["args"], {"target": "e23"})
 
     async def test_turn_with_only_empty_chunks_is_dropped_entirely(self) -> None:
         sink = CollectingSink()
-        message = FakeMessageWithToolChunks([FakeToolChunk(index=0, name="", args="", tool_id="")])
+        message = FakeMessageWithToolChunks(
+            [{"index": 0, "id": "", "name": "", "args": ""}],
+            finalized=[],
+        )
         fake_stream = SimpleNamespace(
             messages=async_items([message]),
             tool_calls=async_items([]),
