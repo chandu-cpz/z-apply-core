@@ -33,6 +33,7 @@ def is_network_error(exc: Exception) -> bool:
         return True
     name = type(exc).__name__
     if name in {
+        "APIConnectionError",
         "ConnectError",
         "ConnectTimeout",
         "ReadTimeout",
@@ -50,6 +51,7 @@ def is_network_error(exc: Exception) -> bool:
             "connection reset",
             "connection aborted",
             "connection closed",
+            "connection error",
             "failed to connect",
             "network is unreachable",
             "name or service not known",
