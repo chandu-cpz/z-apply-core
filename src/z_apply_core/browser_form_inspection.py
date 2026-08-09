@@ -18,14 +18,6 @@ STRONG_AUTH_INPUT_SELECTOR = (
     'input[type="password"], input[autocomplete="current-password"], '
     'input[autocomplete="new-password"], input[autocomplete="one-time-code"]'
 )
-# The Simplify extension's injected autofill CTA: a visible enabled control
-# whose text mentions Simplify. Best-effort — the extension may render inside
-# a shadow root on some sites, in which case this stays false and the agent
-# falls back to manual fill (the prompt already handles that).
-SIMPLIFY_AUTOFILL_SELECTOR = (
-    'button:has-text("simplify"):visible, a:has-text("simplify"):visible, '
-    '[role="button"]:has-text("simplify"):visible, [role="link"]:has-text("simplify"):visible'
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,7 +46,6 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
             invalid += 1
 
     auth_gate = bool(await _visible_enabled(page.locator(STRONG_AUTH_INPUT_SELECTOR)))
-    simplify_autofill = bool(await _visible_enabled(page.locator(SIMPLIFY_AUTOFILL_SELECTOR)))
     # Hidden file inputs are the norm (styled upload buttons), so visibility
     # must NOT be required here: the upload resolver and the form's own
     # validation see these controls, and the typed context must agree with
@@ -89,7 +80,6 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
         unresolved_required_controls=unresolved,
         invalid_controls=invalid,
         auth_gate_visible=auth_gate,
-        simplify_autofill_visible=simplify_autofill,
         empty_file_upload_present=bool(empty_file_inputs),
         required_file_upload_pending=required_upload,
         enabled_form_submit_visible=enabled_submit > 0,
