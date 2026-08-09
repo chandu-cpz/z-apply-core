@@ -45,8 +45,15 @@ def make_manual_auth_tool(
     channel: HumanChannel,
     *,
     human_challenge_image_path: str = "",
+    max_attempts: int = 2,
 ) -> BaseTool:
-    """Create one fixed, credential-safe manual authentication handoff."""
+    """Create one fixed, credential-safe manual authentication handoff.
+
+    ``max_attempts`` bounds how many times the tool may be invoked within one
+    agent run: a challenge the human cannot resolve after two asks must be
+    reported as a ``BLOCKED`` result instead of looping on the human.
+    """
+    attempts = 0
 
     @tool
     async def request_manual_auth(
@@ -60,6 +67,17 @@ def make_manual_auth_tool(
         Never requests credentials in Telegram. The human replies with one
         button after completing the browser action or when unable to continue.
         """
+        nonlocal attempts
+        attempts += 1
+        if attempts > max_attempts:
+            return {
+                "manual_auth": "exhausted",
+                "error": (
+                    f"request_manual_auth was already called {max_attempts} times for "
+                    "this gate and the human could not resolve it. Stop asking. Finish "
+                    "with a BLOCKED result naming the concrete unresolved dependency."
+                ),
+            }
         answer = await channel.ask(
             question=(
                 "Please complete the visible authentication or CAPTCHA in the live "

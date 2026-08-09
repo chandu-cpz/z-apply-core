@@ -95,6 +95,7 @@ class ModelProvider(Protocol):
         structured: bool = False,
         vision: bool = False,
         reasoning: bool = False,
+        reasoning_effort: str | None = None,
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection: ...
@@ -132,6 +133,7 @@ class AgnesProvider:
         structured: bool = False,
         vision: bool = False,
         reasoning: bool = False,
+        reasoning_effort: str | None = None,
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:
@@ -202,6 +204,7 @@ class InferXProvider:
         structured: bool = False,
         vision: bool = False,
         reasoning: bool = False,
+        reasoning_effort: str | None = None,
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:
@@ -290,6 +293,7 @@ class GroqProvider:
         structured: bool = False,
         vision: bool = False,
         reasoning: bool = False,
+        reasoning_effort: str | None = None,
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:
@@ -360,6 +364,7 @@ class OpenGatewayProvider:
         structured: bool = False,
         vision: bool = False,
         reasoning: bool = False,
+        reasoning_effort: str | None = None,
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:
@@ -547,6 +552,7 @@ class OpenCodeGoProvider:
         structured: bool = False,
         vision: bool = False,
         reasoning: bool = False,
+        reasoning_effort: str | None = None,
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:
@@ -738,7 +744,15 @@ class OpenCodeGoProvider:
             "prompt_cache_key": self._cache_key,
             "prompt_cache_retention": "24h",
         }
-        if os.environ.get("OPENCODEGO_THINKING", "").strip().lower() in {
+        requested_effort = (reasoning_effort or "").strip().lower()
+        if requested_effort in {"low", "medium", "high"}:
+            # Explicit per-call reasoning effort turns thinking on for that
+            # agent only (e.g. the authentication specialist at "low").
+            # Everything else stays in fast non-thinking mode.
+            extra_body.update(
+                {"thinking": {"type": "enabled"}, "reasoning_effort": requested_effort}
+            )
+        elif os.environ.get("OPENCODEGO_THINKING", "").strip().lower() in {
             "1",
             "true",
             "yes",
@@ -797,6 +811,7 @@ class NIMProvider:
         structured: bool = False,
         vision: bool = False,
         reasoning: bool = False,
+        reasoning_effort: str | None = None,
         priority: str = "balanced",
         excluded_model_ids: frozenset[str] | None = None,
     ) -> ModelSelection:

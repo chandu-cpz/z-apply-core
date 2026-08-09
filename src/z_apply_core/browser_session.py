@@ -402,8 +402,14 @@ class BrowserSession:
             self.run_context.action_log.record(receipt)
         return receipt.render()
 
-    async def upload_files(self, target: str, paths: list[str]) -> str:
-        """Resolve an upload trigger to its file input without opening a chooser."""
+    async def upload_files(self, target: str, paths: list[str], name: str = "") -> str:
+        """Resolve an upload trigger to its file input without opening a chooser.
+
+        ``name`` optionally disambiguates when the page has several hidden empty
+        file inputs (e.g. an easy-resume field plus the form's own resume
+        field): pass the target input's ``name`` attribute, discoverable via
+        browser_evaluate on ``input[type=file]``.
+        """
         before = self._current_observation()
         pending_chooser = getattr(self, "_pending_file_chooser", None)
         async with self._operation_scope():
@@ -419,14 +425,23 @@ class BrowserSession:
                 # Clear any layer-recorded chooser first, then attach directly.
                 await self._drain_layer_choosers()
                 tab = await self._backend._ensure_tab()
-                file_input = await self._resolve_upload_file_input(tab, target)
+                file_input = await self._resolve_upload_file_input(tab, target, name=name)
                 if file_input is None:
+                    names = await self._file_input_names(tab.page)
+                    hint = (
+                        f"Pass name={names[0]!r} to browser_click_upload to target the "
+                        "input exactly"
+                        if len(names) == 1
+                        else (
+                            "Pass one of the input name attributes to browser_click_upload "
+                            f"to target it exactly: {names}"
+                        )
+                    )
                     raise BrowserToolExecutionError(
                         f"Upload target {target!r} could not be associated with "
                         "exactly one file input and the page has no unambiguous "
-                        "empty file control. Capture fresh evidence and call "
-                        "browser_click_upload on the upload control; never click it "
-                        "to open a native chooser."
+                        f"empty file control. {hint}. Capture fresh evidence and "
+                        "retry; never click the control to open a native chooser."
                     )
                 await file_input.set_input_files(paths)
         evidence = await self.call_tool("browser_snapshot")
@@ -486,16 +501,18 @@ class BrowserSession:
             return False
         return await resolve_file_input(tab.page, resolved.locator) is not None
 
-    async def _resolve_upload_file_input(self, tab: Any, target: str) -> Any | None:
+    async def _resolve_upload_file_input(
+        self, tab: Any, target: str, *, name: str = ""
+    ) -> Any | None:
         """Resolve an upload target to its file input without failing on a label.
 
         The ARIA snapshot often exposes no ref for a hidden or unstyled file
         control, so a model legitimately passes a label or a nearby section ref.
         First resolve the requested target; if that finds a file control, use it.
         Otherwise fall back to the page's single empty file input (the same
-        deterministic DOM fact the capability inspector reports). Ambiguity stays
-        an error: the model must name an unresolvable or non-unique upload
-        explicitly instead of the runtime guessing which of several files to fill.
+        deterministic DOM fact the capability inspector reports). When the page
+        has several hidden empty file inputs, the model must disambiguate by the
+        input's ``name`` attribute; ambiguity without a name stays an error.
         """
         resolved = None
         if target.strip():
@@ -508,6 +525,10 @@ class BrowserSession:
             if file_input is not None:
                 return file_input
         empty_inputs = await self._empty_file_inputs(tab.page)
+        if name:
+            for control in empty_inputs:
+                if await control.get_attribute("name") == name:
+                    return control
         if len(empty_inputs) == 1:
             return empty_inputs[0]
         return None
@@ -528,6 +549,19 @@ class BrowserSession:
             if await control.is_enabled() and not await control.input_value():
                 empty_inputs.append(control)
         return empty_inputs
+
+    @staticmethod
+    async def _file_input_names(page: Any) -> list[str]:
+        """Name attributes of every empty file input, for disambiguation hints."""
+        controls = page.locator('input[type="file"]')
+        names: list[str] = []
+        for index in range(await controls.count()):
+            control = controls.nth(index)
+            if await control.is_enabled() and not await control.input_value():
+                attr = await control.get_attribute("name")
+                if attr:
+                    names.append(attr)
+        return names
 
     async def _pre_select_type_target(self, arguments: dict[str, Any]) -> None:
         """Select a browser_type target's existing text so typing replaces it.

@@ -33,12 +33,17 @@ thrashes costs more than the whole form.
    evidence. Continue only from fresh browser evidence after it returns.
 4. Attach the required resume with `browser_click_upload` on the best upload
    target: the resume/upload section of the form. Find it once, attach the
-   resume there, and never open a native file chooser. After the resume is
-   attached, IGNORE every other empty file-upload control: an upload that
-   still shows empty is optional or a duplicate, and filling it is not work —
-   only the typed context flag `required_file_upload_pending=true` demands
-   another upload. On multi-step forms the resume control may render on a
-   later step: upload it the moment its step renders, before that step's
+   resume there, and never open a native file chooser. Hidden file inputs
+   have no refs; if `browser_click_upload` reports several empty file inputs,
+   discover their `name` attributes with `browser_evaluate` on
+   `input[type=file]` and pass `name=<that input's name>` to target the right
+   one exactly (e.g. an easy-resume field vs the form's own resume field).
+   After the resume is attached, IGNORE every other empty file-upload
+   control: an upload that still shows empty is optional or a duplicate, and
+   filling it is not work — only the typed context flag
+   `required_file_upload_pending=true` demands another upload. On multi-step
+   forms the resume control may render on a later step: upload it the moment
+   its step renders, before that step's
    Autofill.
 5. THEN click the explicit Simplify `Autofill` control once — upload first,
    Autofill second, in that order. After activating it, call

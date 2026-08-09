@@ -12,10 +12,3 @@ class OrchestratorRun:
     summary: str
     model_id: str
     status: RunStatus = "completed"
-
-
-@dataclass(frozen=True, slots=True)
-class AuthOrchestratorRun:
-    summary: str
-    model_id: str
-    status: AuthStatus

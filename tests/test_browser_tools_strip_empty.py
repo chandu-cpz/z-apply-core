@@ -260,7 +260,7 @@ class StripEmptyArgsTests(unittest.TestCase):
             )
         )
 
-        uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
+        uploader.assert_awaited_once_with("e40", ["/resume.pdf"], "")
         self.assertIn("resume attached", result.content)
         self.assertIn("current form snapshot", result.content)
 
@@ -270,7 +270,7 @@ class StripEmptyArgsTests(unittest.TestCase):
 
         result = self._run(tool.ainvoke(_tool_call({"target": "e40", "paths": []})))
 
-        uploader.assert_awaited_once_with("e40", ["/resume.pdf"])
+        uploader.assert_awaited_once_with("e40", ["/resume.pdf"], "")
         self.assertEqual(result.content, "resume attached")
 
     def test_atomic_click_upload_resolves_configured_resume_basename(self) -> None:
@@ -287,6 +287,7 @@ class StripEmptyArgsTests(unittest.TestCase):
         uploader.assert_awaited_once_with(
             "e40",
             ["/profiles/candidate/Chandrakanth-V-Resume.pdf"],
+            "",
         )
         self.assertEqual(result.content, "resume attached")
 
@@ -304,6 +305,7 @@ class StripEmptyArgsTests(unittest.TestCase):
         uploader.assert_awaited_once_with(
             "e40",
             ["/profiles/candidate/Chandrakanth-V-Resume.pdf"],
+            "",
         )
         self.assertIn("Requested path does not exist", result.content)
         self.assertIn("Chandrakanth-V-Resume.pdf", result.content)
@@ -320,7 +322,7 @@ class StripEmptyArgsTests(unittest.TestCase):
                 tool.ainvoke(_tool_call({"target": "e40", "paths": ["/tmp/cover-letter.pdf"]}))
             )
 
-        uploader.assert_awaited_once_with("e40", ["/tmp/cover-letter.pdf"])
+        uploader.assert_awaited_once_with("e40", ["/tmp/cover-letter.pdf"], "")
         self.assertEqual(result.content, "resume attached")
 
     def test_auth_submit_adapter_returns_stale_ref_failure_to_agent(self) -> None:

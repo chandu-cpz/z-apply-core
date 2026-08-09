@@ -46,7 +46,12 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
             invalid += 1
 
     auth_gate = bool(await _visible_enabled(page.locator(STRONG_AUTH_INPUT_SELECTOR)))
-    file_inputs = await _visible_enabled(page.locator('input[type="file"]'))
+    # Hidden file inputs are the norm (styled upload buttons), so visibility
+    # must NOT be required here: the upload resolver and the form's own
+    # validation see these controls, and the typed context must agree with
+    # them or the agent loops on a contradiction ("no upload pending" vs the
+    # form's "Resume cannot be empty").
+    file_inputs = await _enabled(page.locator('input[type="file"]'))
     empty_file_inputs = [control for control in file_inputs if not await _has_value(control)]
     required_upload = False
     for control in empty_file_inputs:
@@ -137,10 +142,19 @@ async def inspect_control_options(page: Page, locator: Locator) -> tuple[str, ..
 
 
 async def required_file_upload_pending(page: Page) -> bool:
-    for control in await _visible_enabled(page.locator('input[type="file"]')):
+    for control in await _enabled(page.locator('input[type="file"]')):
         if await _is_required(control) and not await _has_value(control):
             return True
     return False
+
+
+async def _enabled(locator: Locator) -> list[Locator]:
+    """Enabled controls regardless of visibility (hidden styled upload inputs)."""
+    return [
+        item
+        for item in (locator.nth(index) for index in range(await locator.count()))
+        if not await _is_disabled(item)
+    ]
 
 
 async def _visible(locator: Locator) -> list[Locator]:

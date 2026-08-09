@@ -5,14 +5,10 @@ import logging
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
 
+from z_apply_core.agents.authentication import build_authentication_tools
 from z_apply_core.agents.model_provider import provider_from_config
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
-from z_apply_core.browser_tools import (
-    AUTHENTICATION_SPECIALIST_BROWSER_TOOLS,
-    make_auth_submit_tool,
-    make_verification_link_tool,
-)
 from z_apply_core.config import DEFAULT_RESUME_PATH, load_settings
 from z_apply_core.gmail_tools import make_gmail_tools
 from z_apply_core.human.channel import HumanChannel
@@ -114,22 +110,17 @@ def _authentication_tools(
     state: RunState,
     runtime: RunRuntime | None,
 ) -> list[BaseTool]:
+    """The mid-run AuthenticationSpecialist's canonical tool set."""
     if runtime is None:
         return []
-    allowed = set(AUTHENTICATION_SPECIALIST_BROWSER_TOOLS)
-    allowed.discard("browser_tabs")
-    browser_tools = [
-        browser_tool
-        for browser_tool in state.get("browser_tools", ())
-        if getattr(browser_tool, "name", "") in allowed
-    ]
     settings = load_settings()
-    return [
-        *browser_tools,
-        make_auth_submit_tool(runtime.browser.submit_auth_form),
-        make_verification_link_tool(runtime.browser.open_verification_link),
-        *make_gmail_tools(
+    return build_authentication_tools(
+        browser_tools=state.get("browser_tools", ()),
+        submit_auth_form=runtime.browser.submit_auth_form,
+        open_verification_link=runtime.browser.open_verification_link,
+        gmail_tools=make_gmail_tools(
             credentials_path=settings.gmail_credentials_path,
             token_path=settings.gmail_token_path,
         ),
-    ]
+        human_channel=runtime.human_channel,
+    )

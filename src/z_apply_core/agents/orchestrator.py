@@ -3,10 +3,9 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import cast
 
-from deepagents import FilesystemPermission, create_deep_agent
+from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.runnables.config import RunnableConfig
@@ -14,6 +13,7 @@ from langchain_core.tools import BaseTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 from nim_router import NimRouter
 
+from z_apply_core.agents.authentication import captcha_artifact_path
 from z_apply_core.agents.browser_mutation_serializer import SerializeBrowserMutationsMiddleware
 from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
@@ -22,7 +22,11 @@ from z_apply_core.agents.goal_runner import (
     ActiveGoalMiddleware,
     run_persistent_goal,
 )
-from z_apply_core.agents.harness_profile import configure_z_apply_harness_profile
+from z_apply_core.agents.harness_profile import (
+    CANDIDATE_CONTEXT_VIRTUAL_PATH,
+    configure_z_apply_harness_profile,
+    deepagent_filesystem_permissions,
+)
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen, NoProgressGuardMiddleware
@@ -45,7 +49,7 @@ from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.context.token_metric import TokenMetricMiddleware
 from z_apply_core.human.channel import HumanChannel
-from z_apply_core.human.tools import make_human_tools, make_manual_auth_tool
+from z_apply_core.human.tools import make_human_tools
 from z_apply_core.log_labels import node_info
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.memory.platform_playbooks import (
@@ -91,33 +95,6 @@ def decide_goal_stall(
         stall_count = 0
     stall_count += 1
     return stall_count, stall_count >= limit
-
-
-ARTIFACTS_VIRTUAL_ROOT = "/.z-apply/runs"
-CANDIDATE_CONTEXT_VIRTUAL_PATH = "/chandrakanth_v_resume.md"
-
-
-def deepagent_filesystem_permissions(run_id: str = "") -> list[FilesystemPermission]:
-    artifact_root = (
-        f"{ARTIFACTS_VIRTUAL_ROOT}/{run_id}/browser-artifacts" if run_id else ARTIFACTS_VIRTUAL_ROOT
-    )
-    return [
-        FilesystemPermission(
-            operations=["read"],
-            paths=[artifact_root, f"{artifact_root}/**"],
-            mode="allow",
-        ),
-        FilesystemPermission(
-            operations=["read"],
-            paths=[CANDIDATE_CONTEXT_VIRTUAL_PATH],
-            mode="allow",
-        ),
-        FilesystemPermission(operations=["read"], paths=["/**"], mode="deny"),
-        FilesystemPermission(operations=["write"], paths=["/**"], mode="deny"),
-    ]
-
-
-DEEPAGENT_FILESYSTEM_PERMISSIONS = deepagent_filesystem_permissions()
 
 
 async def run_orchestrator(
@@ -308,17 +285,6 @@ async def run_orchestrator(
             )
             if tool.name == "ask_human"
         ]
-    manual_auth_tools = (
-        [
-            make_manual_auth_tool(
-                human_channel,
-                human_challenge_image_path=str(_captcha_path(run_id)),
-            )
-        ]
-        if human_channel is not None
-        else []
-    )
-
     @tool(return_direct=True)
     async def application_submitted(confirmation: str) -> str:
         """Finish after approval, final submit, and visible submission confirmation."""
@@ -434,7 +400,6 @@ async def run_orchestrator(
             ],
             authentication_tools=[
                 *authentication_tools,
-                *manual_auth_tools,
             ],
             submission_reviewer_tools=submission_reviewer_tools,
             sink=event_sink,
@@ -526,7 +491,7 @@ def _task_prompt(
     resume_path: str,
     run_id: str,
 ) -> str:
-    captcha_path = _captcha_path(run_id)
+    captcha_path = captcha_artifact_path(run_id)
     resume_text = _candidate_resume_context()
     resume_section = f"Configured resume file for uploads: {resume_path}"
     if resume_text:
@@ -551,12 +516,6 @@ Use browser tools directly. Finish only through application_submitted after
 the Submission Reviewer reports SUBMITTED. If ordinary work fails, recover through fresh
 evidence and another legal action; do not invent a terminal blocker.
 """
-
-
-def _captcha_path(run_id: str) -> Path:
-    return (
-        CORE_ROOT / ".z-apply" / "runs" / run_id / "browser-artifacts" / "captcha.png"
-    ).resolve()
 
 
 def _candidate_resume_context() -> str:

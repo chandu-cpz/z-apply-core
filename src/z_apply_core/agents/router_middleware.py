@@ -60,14 +60,16 @@ ROLE_POLICY: dict[str, dict[str, Any]] = {
         "reasoning": True,
         "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     },
-    "auth_orchestrator": {
+    "authenticate_default_account": {
         "priority": "balanced",
         "reasoning": True,
+        "reasoning_effort": "low",
         "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     },
     "AuthenticationSpecialist": {
         "priority": "balanced",
         "reasoning": True,
+        "reasoning_effort": "low",
         "excluded_model_ids": ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     },
     "BrowserSpecialist": {"priority": "balanced", "reasoning": True},
@@ -332,6 +334,7 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                 structured=structured,
                 vision=vision,
                 reasoning=reasoning,
+                reasoning_effort=self._policy.get("reasoning_effort"),
                 priority=priority,
                 excluded_model_ids=excluded_model_ids,
             )
@@ -672,6 +675,7 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
                 structured=request.response_format is not None,
                 vision=_detect_vision(request.messages) or bool(self._policy.get("force_vision")),
                 reasoning=bool(self._policy.get("reasoning", False)),
+                reasoning_effort=self._policy.get("reasoning_effort"),
                 priority=cast(
                     "Literal['fast', 'quality', 'balanced']",
                     self._policy.get("priority", "balanced"),

@@ -9,6 +9,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
+from z_apply_core.agents.authentication import AuthenticationBudgetMiddleware
 from z_apply_core.agents.browser_mutation_serializer import SerializeBrowserMutationsMiddleware
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.model_provider import ModelProvider
@@ -103,6 +104,7 @@ async def build_specialists(
             ledger=ledger,
             extra_middleware=[
                 HumanEscalationGuardMiddleware(allowed_reasons=frozenset({"human_challenge"})),
+                AuthenticationBudgetMiddleware(max_waits=1),
                 SerializeBrowserMutationsMiddleware(sink=sink, lock=mutation_lock),
             ],
             sink=sink,

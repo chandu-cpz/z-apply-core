@@ -30,7 +30,7 @@ REF_TAG_RE = re.compile(r"\[ref=([^\]]+)\]")
 
 TextToolCaller = Callable[[str, dict[str, Any]], Awaitable[str]]
 LangChainToolCaller = Callable[[str, dict[str, Any]], Awaitable[Any]]
-FileUploader = Callable[[str, list[str]], Awaitable[str]]
+FileUploader = Callable[[str, list[str], str], Awaitable[str]]
 BrowserObserver = Callable[[], Awaitable[str]]
 AuthSubmitter = Callable[[str], Awaitable[str]]
 VerificationLinkOpener = Callable[[str], Awaitable[str]]
@@ -272,8 +272,15 @@ def make_click_upload_tool(
         tool_call_id: Annotated[str, InjectedToolCallId] = "",
         paths: Annotated[list[str] | None, BeforeValidator(_decode_json_container)] = None,
         element: str = "file upload control",
+        name: str = "",
     ) -> str | ToolMessage:
-        """Attach the configured resume directly to a file control without a native chooser."""
+        """Attach the configured resume directly to a file control without a native chooser.
+
+        ``name`` targets a specific hidden file input by its ``name`` attribute
+        when the page has several empty upload controls (e.g. an easy-resume
+        field plus the form's own resume field). Discover names via
+        browser_evaluate on ``input[type=file]``.
+        """
         resolved_paths = paths or configured_paths
         fallback_note = ""
         if len(resolved_paths) == 1 and len(configured_paths) == 1:
@@ -295,7 +302,7 @@ def make_click_upload_tool(
         if not isinstance(normalized_target, str) or not normalized_target:
             raise ValueError("browser_click_upload requires a resolvable target.")
         try:
-            result = await uploader(normalized_target, resolved_paths)
+            result = await uploader(normalized_target, resolved_paths, name)
         except ToolException:
             raise
         except Exception as exc:

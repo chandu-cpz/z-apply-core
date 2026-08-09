@@ -6,7 +6,7 @@ from typing import cast
 from deepagents import SubAgent
 from langchain_core.tools import BaseTool
 
-from z_apply_core.agents.prompts import load_prompt
+from z_apply_core.agents.authentication import AUTHENTICATION_SYSTEM_PROMPT
 
 
 def build_authentication_specialist(tools: Sequence[BaseTool]) -> SubAgent:
@@ -18,7 +18,7 @@ def build_authentication_specialist(tools: Sequence[BaseTool]) -> SubAgent:
                 "Resolve one visible login, email verification, OTP, or identity gate in "
                 "the current shared browser, then return fresh browser evidence."
             ),
-            "system_prompt": load_prompt("authentication_specialist.md"),
+            "system_prompt": AUTHENTICATION_SYSTEM_PROMPT,
             "tools": list(tools),
         },
     )

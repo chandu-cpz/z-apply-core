@@ -30,6 +30,7 @@ _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {
     "application_blocked",
     "application_submitted",
     "ask_human",
+    "request_manual_auth",
     "task",
 }
 _REPEATABLE_READ_TOOL_NAMES = frozenset({"browser_wait_for"})
@@ -43,6 +44,7 @@ _IDENTICAL_CALL_EXEMPT_TOOL_NAMES = frozenset(
         "application_submitted",
         "ask_human",
         "browser_wait_for",
+        "request_manual_auth",
         "task",
     }
 )
@@ -223,6 +225,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
             "application_blocked",
             "application_submitted",
             "ask_human",
+            "request_manual_auth",
             "task",
         }:
             self._stagnant_tool_calls = 0
