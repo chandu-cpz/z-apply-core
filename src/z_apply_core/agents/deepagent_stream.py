@@ -92,7 +92,10 @@ async def _consume_messages(
     messages: AsyncIterable[Any],
     sink: FrameworkEventSink | None,
 ) -> None:
+    turn_index = 0
     async for message_stream in messages:
+        turn_index += 1
+        message_id = f"{source}:turn-{turn_index}"
         turn_started = time.monotonic()
         turn: dict[str, Any] = {
             "text": "",
@@ -101,9 +104,13 @@ async def _consume_messages(
             "first_delta_seen": None,
         }
         await asyncio.gather(
-            _consume_message_text(source, message_stream.text, sink, turn),
-            _consume_message_reasoning(source, message_stream.reasoning, sink, turn),
-            _consume_message_tool_call_chunks(source, message_stream.tool_calls, sink, turn),
+            _consume_message_text(source, message_stream.text, sink, turn, message_id, turn_index),
+            _consume_message_reasoning(
+                source, message_stream.reasoning, sink, turn, message_id, turn_index
+            ),
+            _consume_message_tool_call_chunks(
+                source, message_stream.tool_calls, sink, turn, message_id, turn_index
+            ),
             _read_message_output(message_stream),
         )
         text = turn["text"]
@@ -133,6 +140,8 @@ async def _consume_message_text(
     text: AsyncIterable[str],
     sink: FrameworkEventSink | None,
     turn: dict[str, Any],
+    message_id: str,
+    turn_index: int,
 ) -> None:
     async for delta in text:
         if not delta:
@@ -147,6 +156,8 @@ async def _consume_message_text(
             {
                 "kind": "text",
                 "delta": delta,
+                "message_id": message_id,
+                "turn_index": turn_index,
             },
         )
 
@@ -156,6 +167,8 @@ async def _consume_message_reasoning(
     reasoning: AsyncIterable[str],
     sink: FrameworkEventSink | None,
     turn: dict[str, Any],
+    message_id: str,
+    turn_index: int,
 ) -> None:
     async for delta in reasoning:
         if not delta:
@@ -170,6 +183,8 @@ async def _consume_message_reasoning(
             {
                 "kind": "reasoning",
                 "delta": delta,
+                "message_id": message_id,
+                "turn_index": turn_index,
             },
         )
 
@@ -179,9 +194,13 @@ async def _consume_message_tool_call_chunks(
     tool_calls: AsyncIterable[Any],
     sink: FrameworkEventSink | None,
     turn: dict[str, Any],
+    message_id: str,
+    turn_index: int,
 ) -> None:
     async for chunk in tool_calls:
         chunk_data = _serialize_tool_call_chunk(chunk)
+        chunk_data["message_id"] = message_id
+        chunk_data["turn_index"] = turn_index
         await _emit(
             sink,
             "agent_model_tool_call",

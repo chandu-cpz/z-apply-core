@@ -170,8 +170,33 @@ def _report_call(
 
     ``model_call_metrics`` keeps its historical shape (backend consumers),
     while ``model_call_content`` carries the model's reasoning, text, and tool
-    calls so the Rich stream shows every LLM call in every phase.
+    calls so the Rich stream shows every LLM call in every phase. Both carry
+    the resolved cost (gateway-reported or rate-card estimate) and tokens/s so
+    the backend can persist an auditable per-call ledger without re-deriving
+    rates.
     """
+    cost_usd: float | None = metrics.cost_usd
+    if ledger is not None:
+        # Record first so the ledger's rate-card fallback resolves the cost
+        # when the gateway reports none; that resolved value is what ships.
+        input_tokens = (
+            metrics.input_tokens
+            if metrics.input_tokens is not None
+            else (input_tokens_estimate if input_tokens_estimate is not None else 0)
+        )
+        output_tokens = metrics.output_tokens if metrics.output_tokens is not None else 0
+        entry = ledger.record(
+            agent=role,
+            model_id=model_id,
+            provider=provider,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=metrics.cache_read_tokens or 0,
+            ttft_ms=metrics.ttft_ms,
+            duration_ms=metrics.duration_ms,
+            gateway_cost_usd=metrics.cost_usd,
+        )
+        cost_usd = entry.cost.usd
     common = {
         "role": role,
         "provider": provider,
@@ -180,6 +205,8 @@ def _report_call(
         "input_tokens": metrics.input_tokens,
         "output_tokens": metrics.output_tokens,
         "cache_read_tokens": metrics.cache_read_tokens,
+        "tok_per_second": metrics.tok_per_second,
+        "cost_usd": round(cost_usd, 6) if cost_usd is not None else None,
     }
     tool_calls = [
         {
@@ -210,25 +237,6 @@ def _report_call(
             "prompt_preview": prompt_preview,
         },
     )
-
-    if ledger is not None:
-        input_tokens = (
-            metrics.input_tokens
-            if metrics.input_tokens is not None
-            else (input_tokens_estimate if input_tokens_estimate is not None else 0)
-        )
-        output_tokens = metrics.output_tokens if metrics.output_tokens is not None else 0
-        ledger.record(
-            agent=role,
-            model_id=model_id,
-            provider=provider,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cache_read_tokens=metrics.cache_read_tokens or 0,
-            ttft_ms=metrics.ttft_ms,
-            duration_ms=metrics.duration_ms,
-            gateway_cost_usd=metrics.cost_usd,
-        )
 
 
 class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
@@ -524,6 +532,14 @@ class NimRouterMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, Respo
                         role=self._role,
                         provider_id=provider,
                     ),
+                    on_progress=lambda metrics, content: _emit_live_progress(
+                        self._sink,
+                        self._role,
+                        selection.info.id,
+                        provider,
+                        metrics,
+                        content,
+                    ),
                 )
             else:
                 usage = extract_usage_dict(result)
@@ -584,6 +600,42 @@ def _emit_router_event_sync(
     except RuntimeError:
         return
     loop.create_task(_emit_router_event(sink, role, event, model_id, {"role": role, **data}))
+
+
+def _emit_live_progress(
+    sink: FrameworkEventSink | None,
+    role: str,
+    model_id: str,
+    provider_id: str,
+    metrics: CallMetrics,
+    content: CallContent,
+) -> None:
+    """Publish rolling generation metrics to the live stream (~every 2s).
+
+    The provider reports final usage only on the last chunk, so the token count
+    is a character-based estimate from the captured content; TTFT and tok/s are
+    rolling and correct the moment the first chunk lands.
+    """
+    text = content.text or ""
+    reasoning = content.reasoning or ""
+    output_estimate = (len(text) + len(reasoning)) // 4
+    ttft_ms = metrics.ttft_ms
+    generation_ms = metrics.duration_ms - (ttft_ms or 0)
+    tok_per_second = (output_estimate / (generation_ms / 1000.0)) if generation_ms > 0 else 0.0
+    _emit_router_event_sync(
+        sink,
+        role,
+        "model_call_progress",
+        model_id,
+        {
+            "provider": provider_id,
+            "model": model_id,
+            "ttft_ms": ttft_ms,
+            "tok_per_second": round(tok_per_second, 1),
+            "output_tokens_estimate": output_estimate,
+            "duration_ms": metrics.duration_ms,
+        },
+    )
 
 
 def _model_call_timeout_seconds(provider: ModelProvider) -> float | None:
@@ -779,6 +831,14 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
                     role=self._role,
                     provider_id=self._provider_name,
                 ),
+                on_progress=lambda metrics, content: _emit_live_progress(
+                    self._sink,
+                    self._role,
+                    selection.info.id,
+                    self._provider_name,
+                    metrics,
+                    content,
+                ),
             )
         else:
             usage = extract_usage_dict(result)
@@ -801,6 +861,9 @@ class StaticModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, Respons
 
     async def _emit(self, event: str, model_id: str, data: dict[str, Any]) -> None:
         await _emit_router_event(self._sink, self._role, event, model_id, data)
+
+    def _emit_from_sync(self, event: str, model_id: str, data: dict[str, Any]) -> None:
+        _emit_router_event_sync(self._sink, self._role, event, model_id, data)
 
 
 ModelRouter = NimRouterMiddleware | StaticModelRouter

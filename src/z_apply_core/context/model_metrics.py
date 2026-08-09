@@ -320,14 +320,19 @@ class MetricStream:
         *,
         started: float,
         on_done: Callable[[CallMetrics, CallContent], None] | None = None,
+        on_progress: Callable[[CallMetrics, CallContent], None] | None = None,
+        progress_interval: float = 2.0,
     ) -> None:
         self._stream = stream
         self._started = started
         self._on_done = on_done
+        self._on_progress = on_progress
+        self._progress_interval = progress_interval
         self._first_at: float | None = None
         self._usage: dict[str, Any] | None = None
         self._cost: Any = None
         self._content = CallContent()
+        self._last_progress = started
 
     def __aiter__(self) -> AsyncIterator[Any]:
         return self._iterate()
@@ -347,6 +352,14 @@ class MetricStream:
                 if cost is not None:
                     self._cost = cost
                 capture_chunk_content(item, self._content)
+                if self._on_progress is not None:
+                    now = time.monotonic()
+                    if now - self._last_progress >= self._progress_interval:
+                        self._last_progress = now
+                        try:
+                            self._on_progress(self._progress_snapshot(now), self._content)
+                        except Exception:
+                            logger.exception("metric stream failed to report progress")
                 yield item
         finally:
             if self._on_done is not None:
@@ -379,6 +392,26 @@ class MetricStream:
             duration_ms=duration_ms,
             ttft_ms=ttft_ms,
             cost_usd=cost_usd,
+        )
+
+    def _progress_snapshot(self, now: float) -> CallMetrics:
+        """Mid-stream metrics for live progress reporting: TTFT once known,
+        elapsed duration, and no final usage counts (unknown until the last
+        chunk). The middleware derives a token estimate from captured content.
+        """
+        duration_ms = int((now - self._started) * 1000)
+        ttft_ms = (
+            int((self._first_at - self._started) * 1000)
+            if self._first_at is not None
+            else None
+        )
+        return CallMetrics(
+            input_tokens=None,
+            output_tokens=None,
+            cache_read_tokens=None,
+            duration_ms=duration_ms,
+            ttft_ms=ttft_ms,
+            cost_usd=None,
         )
 
 

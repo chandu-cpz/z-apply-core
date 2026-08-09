@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import logging
 import mimetypes
 import os
 from collections.abc import AsyncIterator, Awaitable
@@ -21,6 +22,7 @@ from z_apply_core.agents.context_inbox import ContextInbox, ContextMessage
 from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.browser_session import ARTIFACT_ROOT
 from z_apply_core.browser_workspace import BrowserWorkspace
+from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.graph import make_router, run_job
 from z_apply_core.human.broker import (
     BrokeredHumanChannel,
@@ -60,12 +62,14 @@ from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 from z_apply_core.text_utils import utc_now
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_TASK = (
     "Complete the job application carefully, ask only for unavailable candidate facts, "
     "verify the review, and require human approval before final submission."
 )
 
-_LIVE_ONLY_EVENTS = frozenset({"agent.message.delta", "model.tool_call.delta"})
+_LIVE_ONLY_EVENTS = frozenset({"agent.message.delta", "model.tool_call.delta", "stream.metrics"})
 
 
 class _Run:
@@ -100,6 +104,9 @@ class _Run:
         self.artifacts: list[CoreArtifact] = []
         self.context_inbox = ContextInbox()
         self.human_broker: HumanRequestBroker | None = None
+        # Per-run LLM call ledger: recorded at the router boundary for every
+        # successful model call (cost resolved with the rate-card fallback).
+        self.call_ledger: RunCallLedger | None = None
 
 
 class _GraphSink(FrameworkEventSink):
@@ -462,18 +469,45 @@ class ZApplyCore:
     async def subscribe(self, *, run_id: str | None = None) -> AsyncIterator[CoreEvent]:
         async with self._broadcaster.subscription() as stream:
             async for event in stream:
+                # The keepalive-capable subscription type includes None markers;
+                # the durable broadcaster never schedules keepalives, so this
+                # guard is purely for the type checker.
+                if event is None:
+                    continue
                 if run_id is None or event.run_id == run_id:
                     yield event
 
-    async def subscribe_live(self) -> AsyncIterator[CoreEvent]:
+    async def subscribe_live(
+        self,
+        *,
+        keepalive: float | None = None,
+        coalesce: bool = True,
+    ) -> AsyncIterator[CoreEvent | None]:
         """Subscribe to high-frequency, non-persisted streaming events.
 
         Reasoning/text/tool-call deltas are published here so an open cockpit
-        can render them in real time without writing one DB row per token.
+        can render them in real time without writing one DB row per token. The
+        broadcaster's bounded replay tail (500 events) is delivered first, so a
+        reconnecting EventSource resumes without losing the in-flight stream.
+
+        ``keepalive`` (seconds): when no event arrives within the window the
+        iterator yields ``None`` so transport adapters can emit an SSE comment
+        and hold the connection open through silent stretches (long tool
+        executions emit no token deltas).
+
+        ``coalesce``: merge consecutive token deltas into batched frames
+        (``deltas``/``args_deltas`` arrays) to cut SSE frame count 10-20x; the
+        durable channel always stays per-event.
         """
-        async with self._live_broadcaster.subscription() as stream:
+        async with self._live_broadcaster.subscription(
+            keepalive=keepalive, coalesce=coalesce
+        ) as stream:
             async for event in stream:
                 yield event
+
+    async def live_stream_snapshot(self) -> dict[str, object]:
+        """Observability snapshot of the live token broadcaster."""
+        return await self._live_broadcaster.snapshot()
 
     async def _schedule(self) -> None:
         while not self._closing:
@@ -523,6 +557,7 @@ class ZApplyCore:
                 phase=RunPhase.AUTHENTICATION,
             )
             await self._emit(run, "run.phase_changed", {"phase": RunPhase.AUTHENTICATION.value})
+            run.call_ledger = RunCallLedger(job_url=run.request.job_url)
             state, result = await run_job(
                 run.request.job_url,
                 task=run.request.task or DEFAULT_TASK,
@@ -533,6 +568,7 @@ class ZApplyCore:
                 cleanup_resources=False,
                 context_inbox=run.context_inbox,
                 prepared_runtime=runtime,
+                call_ledger=run.call_ledger,
             )
             status = str(state.get("run_status", "failed"))
             outcome = {
@@ -558,6 +594,7 @@ class ZApplyCore:
             )
             if outcome is RunOutcome.SUBMITTED_VERIFIED:
                 await self._workspace.close_run(run.run_id)
+            await self._emit_run_ledger(run, status=str(status))
             await self._emit(run, "run.terminal", {"outcome": outcome, "summary": summary})
             assert run.done is not None
             run.done.set_result(
@@ -600,6 +637,7 @@ class ZApplyCore:
             summary=summary,
             finished_at=utc_now(),
         )
+        await self._emit_run_ledger(run, status=outcome.value)
         await self._emit(
             run,
             "run.terminal",
@@ -611,6 +649,38 @@ class ZApplyCore:
                 CoreRunResult(
                     run.run_id, outcome, summary, run.view.finished_at or utc_now(), run.sequence
                 )
+            )
+
+    async def _emit_run_ledger(self, run: _Run, *, status: str) -> None:
+        """Persist the run's LLM call ledger.
+
+        Writes the same JSON history the CLI path writes (so every run is
+        auditable on disk regardless of how it was started) and emits a durable
+        ``run.ledger`` event with the record; per-call rows already landed in
+        the backend's ``model_calls`` table live via ``model.call.metrics``.
+        """
+        ledger = run.call_ledger
+        if ledger is None:
+            return
+        try:
+            from z_apply_core.config import CORE_ROOT
+
+            history_path, run_copy = ledger.write_history(
+                CORE_ROOT / ".z-apply",
+                run_id=run.run_id,
+                status=status,
+            )
+            paths = [str(history_path)]
+            if run_copy is not None:
+                paths.append(str(run_copy))
+            logger.info("LLM call ledger saved: %s", ", ".join(paths))
+        except Exception:
+            logger.exception("failed to persist call ledger for run %s", run.run_id)
+        if ledger.call_count:
+            await self._emit(
+                run,
+                "run.ledger",
+                ledger.to_record(run_id=run.run_id, status=status),
             )
 
     async def _cancel(self, run: _Run) -> CoreRunView:
@@ -908,8 +978,10 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "agent_tool_delta": "tool.progress",
         "agent_message_delta": "agent.message.delta",
         "agent_model_tool_call": "model.tool_call.delta",
+        "model_call_progress": "stream.metrics",
         "model_selected": "model.selected",
         "model_call_start": "model.call_started",
+        "model_call_metrics": "model.call.metrics",
         "model_call_content": "model.call_completed",
         "model_failed": "model.failed",
         "model_rotated": "model.rotated",
