@@ -76,6 +76,26 @@ def should_retry_model_error(exc: Exception) -> bool:
     return not (isinstance(status_code, int) and status_code in {400, 401, 403, 404, 422})
 
 
+class NetworkLossRetryMiddleware(ModelRetryMiddleware):
+    """Retry genuine network failures with a long, paced backoff.
+
+    Named distinctly so it can stack with the provider's own
+    ``ModelRetryMiddleware``: deepagents requires every middleware in a chain to
+    have a unique name, and a dead network needs waiting, not instant re-spray.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            max_retries=40,
+            retry_on=is_network_error,
+            on_failure="error",
+            initial_delay=5.0,
+            backoff_factor=1.8,
+            max_delay=60.0,
+            jitter=True,
+        )
+
+
 def model_retry_middleware(provider: object | None = None) -> list[ModelRetryMiddleware]:
     """Retry transient model failures; PAUSE (long backoff) on network loss.
 
@@ -107,13 +127,4 @@ def model_retry_middleware(provider: object | None = None) -> list[ModelRetryMid
             max_delay=12.0,
             jitter=True,
         )
-    network_wait = ModelRetryMiddleware(
-        max_retries=40,
-        retry_on=is_network_error,
-        on_failure="error",
-        initial_delay=5.0,
-        backoff_factor=1.8,
-        max_delay=60.0,
-        jitter=True,
-    )
-    return [network_wait, inner]
+    return [NetworkLossRetryMiddleware(), inner]

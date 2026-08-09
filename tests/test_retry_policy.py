@@ -41,6 +41,11 @@ class TestRetryPolicy(unittest.TestCase):
         self.assertTrue(inner.jitter)
         self.assertEqual(network.max_retries, 40)
 
+    def test_middleware_names_are_unique(self) -> None:
+        # deepagents rejects duplicate middleware names in one chain.
+        mw = model_retry_middleware()
+        self.assertEqual(len({m.name for m in mw}), len(mw))
+
 
 if __name__ == "__main__":
     unittest.main()
