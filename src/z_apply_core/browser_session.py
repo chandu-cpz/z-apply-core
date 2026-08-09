@@ -128,6 +128,7 @@ class BrowserSession:
         self._last_auth_submit_snapshot = ""
         self._pending_atomic_upload_target = ""
         self._pending_file_chooser: Any | None = None
+        self._simplify_autofill_url: str | None = None
         self._capture_workspace = ARTIFACT_ROOT / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(tools if tools is not None else server.backend_pool.tools),
@@ -235,10 +236,59 @@ class BrowserSession:
         if guarded_submit:
             self._submission.consume()
         text = _text_content(result)
-        if name == "browser_snapshot":
+        if name == "browser_snapshot" and normalized.get("target") in (None, "", "html"):
+            # Only full-page snapshots define the page observation. A scoped
+            # snapshot (target=<ref>) is a subtree view for the model; recording
+            # it would corrupt the revision/signature that the capability
+            # context keys evidence injection on.
             self._last_snapshot = text
             self._record_observation(text, url=page_url, title=page_title)
         return text
+
+    async def _simplify_preflight(self, page: Any, *, allow_autofill: bool) -> None:
+        """Deterministically drive the Simplify extension (consent + autofill).
+
+        The extension renders its privacy dialog and autofill CTA inside a
+        shadow root the full-page ARIA snapshot never traverses, so the model
+        can neither see nor click them — any "find the Simplify control" loop
+        just burns tokens. This runs before snapshots AND clicks using only
+        native Playwright locators (role/name, CSS — which pierce open shadow
+        roots) — no JS. The consent dialog is auto-closed if present
+        (idempotent), and the autofill CTA is clicked once per page URL so the
+        model sees the filled form. Failures are logged and ignored (no-op on
+        pages without the extension).
+        """
+        try:
+            url = page.url
+            # Auto-close the Simplify privacy dialog: it gates on a custom
+            # toggle (a label wraps the hidden checkbox and intercepts pointer
+            # events), so toggle it first, then Accept becomes enabled.
+            toggle = page.locator(
+                '[class*="simplify"] label[for="toggle-privacy-consent-checkbox"]'
+            )
+            if await toggle.count():
+                await toggle.first.click(timeout=3000)
+            consent = page.get_by_role(
+                "button",
+                name=re.compile(r"accept and continue|i agree( to the privacy policy)?", re.I),
+            )
+            if await consent.count():
+                await consent.first.click(timeout=3000)
+                logger.info("simplify preflight on %s: consent accepted", url)
+            if allow_autofill and url != self._simplify_autofill_url:
+                autofill = page.get_by_role(
+                    "button",
+                    name=re.compile(
+                        r"autofill|auto[- ]?fill|fill application|fill with simplify|enable ai autofill",
+                        re.I,
+                    ),
+                )
+                if await autofill.count():
+                    await autofill.first.click(timeout=3000)
+                    self._simplify_autofill_url = url
+                    logger.info("simplify preflight on %s: autofill activated", url)
+        except Exception:
+            logger.debug("simplify preflight skipped", exc_info=True)
 
     async def _call_backend_tool(self, name: str, arguments: dict[str, Any]) -> Any:
         """Execute one backend tool while suppressing native file chooser UI.
@@ -252,6 +302,16 @@ class BrowserSession:
         """
         tab = await self._backend._ensure_tab()
         page = tab.page
+        # The Simplify extension renders its consent dialog and autofill CTA
+        # inside a shadow root that the full-page ARIA snapshot never
+        # traverses — so the model can neither see nor click it, and any
+        # "find the Simplify control" loop just burns tokens. Handle it here
+        # deterministically instead: agree to the consent dialog and activate
+        # the autofill CTA once per page, before the snapshot is taken, so the
+        # model sees the already-filled form. Shadow roots are pierced with
+        # plain JS (a single evaluate keeps this out of the model's budget).
+        if name in ("browser_snapshot", "browser_click"):
+            await self._simplify_preflight(page, allow_autofill=True)
         pending_chooser: Any | None = None
 
         def record_file_chooser(chooser: Any) -> None:
@@ -310,13 +370,36 @@ class BrowserSession:
             return f"{result}\n{render_bounded(observation, evidence_store)}"
         return f"{result}\n{observation.compact_render()}"
 
-    async def observe(self) -> str:
-        """Return one revisioned browser observation for the active page."""
+    async def observe(self, *, full: bool = False) -> str:
+        """Return a compact browser state signal, or the full evidence tree when ``full``.
+
+        The model-facing ``browser_observe`` tool uses the compact probe so casual
+        state checks never dump the full ARIA tree into the conversation history.
+        The full evidence stays available through the ``browser_snapshot`` tool and
+        the bounded post-action view arrives automatically via mutation receipts and
+        the injected capability context. Internal callers that need the complete
+        tree (e.g. the initial run snapshot embedded in the task prompt) pass
+        ``full=True``.
+        """
+        before = self._last_observation
         await self.call_tool("browser_snapshot")
         observation = self._last_observation
         if observation is None:
             raise BrowserToolExecutionError("The browser did not produce current evidence.")
-        return observation.render()
+        if full:
+            return observation.render()
+        changed = before is None or before.signature != observation.signature
+        return (
+            "BROWSER STATE PROBE\n"
+            f"revision: {observation.revision}\n"
+            f"changed_since_last_observation: {'true' if changed else 'false'}\n"
+            f"signature: {observation.signature[:16]}\n"
+            f"url: {observation.url or '(unknown)'}\n"
+            f"title: {observation.title or '(untitled)'}\n"
+            "This probe carries no page evidence. The bounded post-action view is "
+            "injected into your context automatically; call browser_snapshot only "
+            "when you need the full accessibility tree.\n"
+        )
 
     @property
     def last_observation_revision(self) -> int | None:
