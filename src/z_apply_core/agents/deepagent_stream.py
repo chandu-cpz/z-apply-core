@@ -115,7 +115,11 @@ async def _consume_messages(
         )
         text = turn["text"]
         reasoning = turn["reasoning"]
-        tool_calls = turn["tool_calls"]
+        tool_calls = [
+            call
+            for call in turn["tool_calls"]
+            if call.get("name") or call.get("id")
+        ]
         if not text and not reasoning and not tool_calls:
             continue
         first_delta_seen = turn["first_delta_seen"]
@@ -199,6 +203,12 @@ async def _consume_message_tool_call_chunks(
 ) -> None:
     async for chunk in tool_calls:
         chunk_data = _serialize_tool_call_chunk(chunk)
+        # Some providers announce a tool call with a placeholder chunk whose
+        # id/name/args are all empty (the real invocation arrives through the
+        # executed-tool stream). Recording it pollutes the turn's tool-call
+        # list with a nameless entry, so skip completely empty chunks.
+        if not chunk_data["id"] and not chunk_data["name"] and not chunk_data["args"]:
+            continue
         chunk_data["message_id"] = message_id
         chunk_data["turn_index"] = turn_index
         await _emit(
