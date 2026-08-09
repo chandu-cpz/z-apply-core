@@ -88,12 +88,15 @@ class BrowserObservation:
             f"{self.evidence}"
         )
 
-    def compact_render(self, *, max_chars: int = 8_000) -> str:
+    def compact_render(self, *, max_chars: int = 5_000) -> str:
         """Render bounded, interaction-focused evidence for a model turn.
 
         The complete observation remains available from browser tools and artifacts.
         This projection only limits repeated context injection; it is not used to
-        infer browser state or authorize an action.
+        infer browser state or authorize an action. The 5k budget keeps every
+        repeated receipt focused on controls (they are prioritized first) while
+        roughly halving the context growth that makes cumulative input tokens
+        balloon across a run.
         """
         header = (
             "BROWSER OBSERVATION\n"

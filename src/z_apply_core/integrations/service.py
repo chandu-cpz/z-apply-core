@@ -151,10 +151,16 @@ class _GraphSink(FrameworkEventSink):
             usage_value = payload.get("usage")
             if isinstance(usage_value, dict):
                 input_tokens = int(usage_value.get("prompt_tokens") or 0)
+                cache_read = int(usage_value.get("cache_read_tokens") or 0)
             else:
                 input_tokens = (
                     int(getattr(usage_value, "prompt_tokens", 0) or 0)
                     if usage_value is not None and hasattr(usage_value, "prompt_tokens")
+                    else 0
+                )
+                cache_read = (
+                    int(getattr(usage_value, "cache_read_tokens", 0) or 0)
+                    if usage_value is not None and hasattr(usage_value, "cache_read_tokens")
                     else 0
                 )
             output_tokens = int(payload.get("output_tokens_estimate") or 0)
@@ -163,6 +169,7 @@ class _GraphSink(FrameworkEventSink):
                 "provider": payload.get("provider"),
                 "agent": payload.get("agent"),
                 "input_tokens": input_tokens,
+                "cache_read_tokens": min(cache_read, input_tokens),
                 "output_tokens": output_tokens,
                 "duration_ms": payload.get("duration_ms"),
                 "ttft_ms": payload.get("ttft_ms"),
