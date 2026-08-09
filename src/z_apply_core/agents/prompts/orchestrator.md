@@ -51,16 +51,28 @@ work; a scoped shallow one costs a fraction of a full one.
    "Apply with resume" / "Apply With Resume" control that wraps an
    `<input type=file>` is the EMPLOYER's resume upload, not the Simplify
    autofill — never treat it as such. Look for the Simplify-branded control
-   separately. After activating the Simplify autofill, call
-   `browser_wait_for(time=10)` once so asynchronous filling and resume
-   parsing can settle, then use the returned employer-form evidence. Never
-   search for or activate another Simplify control on that step. If no
-   Simplify-branded Autofill control is present, or it is still a no-op after
-   that wait, fill directly (steps 5-7) — and you must then fill the
-   Employer and Education sections yourself from the RAG: after the resume
-   attaches, if the form renders "Add Employer" / "Add Education" controls,
-   add and fill them with the candidate's work experience and education from
-   `lookup_candidate_memory` before requesting submission approval.
+   separately. HOW to activate it: the CTA is a normal visible button —
+   find its ref in the latest snapshot by its text ("Simplify", "Autofill",
+   "Auto fill", "Fill application", "Fill with Simplify") and click it with
+   `browser_click`; if no ref shows it, locate it with `browser_find` or
+   `browser_evaluate` on a `button`/`[role=button]` whose text matches
+   /simplify|autofill|auto[- ]?fill/i and click the returned ref. After ONE
+   successful click, call `browser_wait_for(time=10)` once so asynchronous
+   filling and resume parsing can settle, then use the returned employer-form
+   evidence. Never search for or activate another Simplify control on that
+   step. If no Simplify-branded Autofill control can be found, or the click
+   is a no-op after that wait, STOP hunting (at most 2 locate+click attempts
+   total) and fill directly (steps 5-7) — and you must then fill the
+   Employer and Education sections yourself from the RAG: if the form renders
+   "Add Employer" / "Add Education" controls, add and fill them with the
+   candidate's work experience and education from `lookup_candidate_memory`
+   before requesting submission approval.
+   Single-page form rule: on a one-page form, activate autofill (or give up
+   and fill manually) ONCE — never revisit autofill later in the run. Only
+   multi-step (multi-page) forms get a re-check: on each newly rendered step,
+   activate that step's autofill (or verify the resume control) before
+   filling that step. Otherwise ignore repeated "Apply with resume" or
+   empty file-upload controls unless `required_file_upload_pending=true`.
 5. THEN verify the resume field actually holds the file. Fresh evidence must
    show the attachment: a visible filename, a non-empty easy-resume /
    attachment control, or the resume validation error gone. Attach it only if
