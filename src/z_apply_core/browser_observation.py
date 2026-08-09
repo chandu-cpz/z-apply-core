@@ -25,6 +25,7 @@ class BrowserCapabilities:
     unresolved_required_controls: int = 0
     invalid_controls: int = 0
     auth_gate_visible: bool = False
+    simplify_autofill_visible: bool = False
     empty_file_upload_present: bool = False
     required_file_upload_pending: bool = False
     enabled_form_submit_visible: bool = False
@@ -38,6 +39,7 @@ class BrowserCapabilities:
                 f"unresolved_required_controls={self.unresolved_required_controls}",
                 f"invalid_controls={self.invalid_controls}",
                 f"auth_gate_visible={str(self.auth_gate_visible).lower()}",
+                f"simplify_autofill_visible={str(self.simplify_autofill_visible).lower()}",
                 f"empty_file_upload_present={str(self.empty_file_upload_present).lower()}",
                 f"required_file_upload_pending={str(self.required_file_upload_pending).lower()}",
                 f"enabled_form_submit_visible={str(self.enabled_form_submit_visible).lower()}",
@@ -136,7 +138,7 @@ class BrowserObservation:
 
         marker = (
             "\n[bounded current-page view; full accessibility evidence remains "
-            "available through browser_observe/browser_snapshot]\n"
+            "available through browser_snapshot]\n"
         )
         budget = max(0, max_chars - len(header) - len(marker))
         selected: set[int] = set()

@@ -22,6 +22,19 @@ already returned to you instead of paying for extra snapshots, and escalate a
 stuck control to `application_blocked` instead of retrying it. A run that
 thrashes costs more than the whole form.
 
+`browser_observe` is a cheap state probe, NOT an evidence tool: it returns
+only the browser revision, whether the page changed since the last
+observation, and the page URL/title — no page evidence. Mutation receipts and
+the injected post-action context already carry the bounded evidence you need;
+prefer them. Call `browser_snapshot` only when you truly need an
+accessibility tree — long option lists, dense field-by-field verification, or
+ambiguous or shadow DOM. When you snapshot, SCOPE IT to stay cheap: pass
+`target=<ref>` to snapshot only that subtree (the form container's ref, or a
+specific section) instead of the whole page, and pass a `depth` (e.g.
+`depth=2`) for a shallow tree when you only need a section or a few controls.
+Omit both only when you need the complete page tree. Every snapshot is paid
+work; a scoped shallow one costs a fraction of a full one.
+
 ## Core flow
 
 1. If a browser mutation just returned, continue from its post-action evidence.
@@ -31,14 +44,23 @@ thrashes costs more than the whole form.
 3. If a login, OTP, email-verification, or identity gate is visible, delegate
    one AuthenticationSpecialist task with the current URL and visible gate
    evidence. Continue only from fresh browser evidence after it returns.
-4. FIRST activate the explicit Simplify `Autofill` control once (or the
-   autofill-with-resume variant when the page offers one — for example an
-   "Autofill with resume" / "Autofill and upload" / "Apply with resume"
-   control). After activating it, call `browser_wait_for(time=10)` once so
-   asynchronous filling and resume parsing can settle, then use the returned
-   employer-form evidence. Never search for or activate another Simplify
-   control on that step. If Autofill is absent, unsupported, or still a no-op
-   after that wait, fill directly.
+4. FIRST activate the explicit Simplify `Autofill` control ONCE. The Simplify
+   autofill is the extension's injected, Simplify-branded control (a CTA or
+   panel that fills the whole application — including Employer and Education
+   sections — from the saved profile). It is NEVER a file input: an
+   "Apply with resume" / "Apply With Resume" control that wraps an
+   `<input type=file>` is the EMPLOYER's resume upload, not the Simplify
+   autofill — never treat it as such. Look for the Simplify-branded control
+   separately. After activating the Simplify autofill, call
+   `browser_wait_for(time=10)` once so asynchronous filling and resume
+   parsing can settle, then use the returned employer-form evidence. Never
+   search for or activate another Simplify control on that step. If no
+   Simplify-branded Autofill control is present, or it is still a no-op after
+   that wait, fill directly (steps 5-7) — and you must then fill the
+   Employer and Education sections yourself from the RAG: after the resume
+   attaches, if the form renders "Add Employer" / "Add Education" controls,
+   add and fill them with the candidate's work experience and education from
+   `lookup_candidate_memory` before requesting submission approval.
 5. THEN verify the resume field actually holds the file. Fresh evidence must
    show the attachment: a visible filename, a non-empty easy-resume /
    attachment control, or the resume validation error gone. Attach it only if
@@ -62,6 +84,11 @@ thrashes costs more than the whole form.
    the RAG value (step 7 applies the RAG answer over it); a field the RAG does
    not answer goes to AnswerWriter (step 6). Never apply a Simplify-filled
    value as if it were RAG evidence.
+   After any autofill or manual fill, verify the Employer and Education
+   sections are actually populated when the form offers them: a fresh
+   snapshot must show "Add Employer"/"Add Education" either absent or
+   replaced by filled rows. An empty Employer/Education section on a form that
+   offers it is a material gap — fill it from the RAG before approval.
 6. On a newly rendered editable form step, resolve candidate values for EVERY
    visible required field and every material field filled by Simplify:
    - Query candidate memory with `lookup_candidate_memory` ONCE per field, in
@@ -95,10 +122,10 @@ thrashes costs more than the whole form.
      browser mutation in that response (never batch it with fills, uploads, or
      other clicks: any mutation in the same batch re-renders the page and
      invalidates the refs from your current snapshot, so the combobox click
-     fails against a stale ref) — and call `browser_observe` in that SAME
+     fails against a stale ref) — and call `browser_snapshot` in that SAME
      response. The observed options are readable on your NEXT turn, so on the
      following response dispatch that combobox's `task` call with the
-     now-observed options in its field entry. This open/observe pair is an
+     now-observed options in its field entry. This open/snapshot pair is an
      intentional, evidence-bounded sequence, not the forbidden checkbox/radio
      double-click. If an open click fails, re-snapshot once and retry with a
      FRESH ref from the new snapshot — never repeat the same stale ref. Close
@@ -144,7 +171,7 @@ thrashes costs more than the whole form.
      your context and costs nothing, so use it before spending another call. If
      the receipt reports `changed: false` or the control still does not hold
      the value, take ONE distinct alternative action (different tool or
-     approach), then read its receipt; call `browser_observe` only when the
+     approach), then read its receipt; call `browser_snapshot` only when the
      returned evidence cannot show the state. Keep the attempt budget small:
      two distinct standard attempts; a stubborn control may then get ONE
      targeted `browser_evaluate` attempt (see the rule below); a field that
@@ -169,11 +196,11 @@ thrashes costs more than the whole form.
      then re-enter the full international number through the native value
      setter and input/change events, and verify the dial code in the
      post-action evidence.
-   Then verify the step ONCE with `browser_observe`: every answered field
+   Then verify the step ONCE with `browser_snapshot`: every answered field
    holds its value with no `aria-invalid`, the checkboxes you completed are
    checked, and the final submit control is enabled when the page enables it.
-   Do not re-observe per field when the receipts already proved the writes; the
-   single observe is the step-level confirmation.
+   Do not re-snapshot per field when the receipts already proved the writes;
+   the single snapshot is the step-level confirmation.
 8. A requested field with no returned answer: re-delegate that ONE field to
    AnswerWriter — it asks the human for the exact value, one fact per ask,
    never a batch or numbered list. If several fields need human values,
@@ -310,13 +337,13 @@ Custom combobox selection sequence:
 2. Options are readable and clickable ONLY from the snapshot taken AFTER the
    list opened. A ref from any earlier snapshot is stale for the option click
    — never reuse it. If the list opened but your snapshot predates it, call
-   `browser_observe` before clicking any option.
+   `browser_snapshot` before clicking any option.
 3. Choose the option:
    - If the snapshot shows the exact option visible, ONE `browser_click` on
      that option's ref.
    - For a searchable combobox (react-select, typeahead) with a long list,
      `browser_type` the exact option text into the combobox input to filter
-     the list, re-observe, then click the filtered option. Filtering is
+     the list, re-snapshot, then click the filtered option. Filtering is
      faster and safer than scrolling a long menu; never scroll to an option
      that filtering can surface.
    - Never click the trigger again to "select" an option — a trigger click
@@ -354,7 +381,7 @@ never query `[ref=...]`:
 - Searchable combobox: filter first, then click. Set the input through the
   native setter, dispatch `input` (bubbling), and in the SAME evaluate click
   the option only if it is already in the DOM; otherwise return a
-  follow-up signal so the next turn re-observes and clicks the filtered
+  follow-up signal so the next turn re-snapshots and clicks the filtered
   option.
 
 After any evaluate selection, verify with the post-action typed context that
@@ -411,7 +438,7 @@ human challenge/CAPTCHA. It is not normal control flow.
   costs tokens and latency. Keep failed attempts few and distinct; a control
   that rejects its budget escalates to `application_blocked`, never a loop.
 - A receipt with `changed: false` means the page did not change; the runtime
-  blocks exact replays. Re-observe once and attempt one different legal action.
+  blocks exact replays. Re-snapshot once and attempt one different legal action.
   After two distinct failed attempts on the same control, call
   `application_blocked` with the refs, the attempted values, and the receipt
   evidence — a stuck control is a clean BLOCKED exit, never a loop.
@@ -428,7 +455,7 @@ human challenge/CAPTCHA. It is not normal control flow.
   through the same native setter first. Dropdowns and selects have their own
   evaluate recipes — see `## Choice controls (dropdowns and selects)`. Keep it
   a targeted, evidence-driven last resort: state the exact target/ref and the
-  observable value you intend, then verify with fresh `browser_observe`
+  observable value you intend, then verify with fresh `browser_snapshot`
   evidence that the control now holds a valid value. If the evaluate receipt
   reports `changed: false`, the framework ignored the write — do not repeat
   it; escalate. Never use evaluation to bypass validation or to fabricate a
