@@ -45,6 +45,18 @@ thrashes costs more than the whole form.
    forms the resume control may render on a later step: upload it the moment
    its step renders, before that step's
    Autofill.
+4b. If the page offers an Autofill variant that INCLUDES the resume or
+   attachment upload (for example an "Autofill with resume" / "Autofill and
+   upload" / "Apply with resume" control, or an Autofill button that opens
+   an upload picker), PREFER it over a plain Autofill: it fills the form AND
+   attaches the resume in one step. After activating it, wait once and then
+   VERIFY the resume field actually holds the file — fresh evidence must show
+   the attachment (a filename, a non-empty easy-resume/attachment control, or
+   the resume validation error gone). If the resume is attached, continue
+   with the rest of the form. If it is NOT attached, retry the upload once
+   with `browser_click_upload` on the resume control (passing the hidden
+   input's `name` when there are several); if the resume STILL will not
+   attach, call `ask_human` once rather than looping on upload attempts.
 5. THEN click the explicit Simplify `Autofill` control once — upload first,
    Autofill second, in that order. After activating it, call
    `browser_wait_for(time=10)` once so asynchronous filling and resume
