@@ -143,6 +143,17 @@ work; a scoped shallow one costs a fraction of a full one.
      and lookup; it ignores resolution instructions.
    - Skip any control whose rendered value is a masked `<secret>NAME</secret>`
      token: it is already filled.
+   - NEVER prose-loop on a field. If a required-looking input appears empty
+     but you suspect it is pre-filled (e.g. Email from the saved profile,
+     whose value the accessibility tree does not show), read its actual value
+     ONCE with `browser_evaluate` on the control (e.g.
+     `document.querySelector('input[type=email]').value`), then EITHER fill it
+     with a real value OR skip it. Do not repeat the same "I need to fill X"
+     prose turn without a browser mutation — the no-progress guard ends the
+     run. If you cannot resolve a field in two tool calls, delegate it to
+     AnswerWriter or move on to the next field; an empty OPTIONAL field
+     (Mobile, Social Network, Middle Name, Employer/Education only if the
+     form offers them) is fine to leave empty.
    - Before dispatching a combobox/select whose options are NOT visible in the
      snapshot (the list is closed), FIRST open each closed combobox, ONE per
      response. The open click is a STANDALONE action — it must be the ONLY
