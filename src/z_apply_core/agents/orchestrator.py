@@ -614,7 +614,7 @@ def build_orchestrator_middleware(
             ["AnswerWriter", "AuthenticationSpecialist", "SubmissionReviewer", "VisionSpecialist"],
             browser=active_browser,
         ),
-        model_retry_middleware(provider),
+        *model_retry_middleware(provider),
         router_middleware,
         ProseToolCallGuardMiddleware(),
         orchestrator_human_guard,

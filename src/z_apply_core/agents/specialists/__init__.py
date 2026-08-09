@@ -67,7 +67,7 @@ def _with_routing(
             max_identical_denials=3,
             max_non_progress=5,
         ),
-        model_retry_middleware(provider),
+        *model_retry_middleware(provider),
         router_middleware,
         ProseToolCallGuardMiddleware(),
     ]

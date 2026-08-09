@@ -20,6 +20,48 @@ def is_instant_retry_provider(provider: object) -> bool:
     return isinstance(provider, OpenCodeGoProvider)
 
 
+def is_network_error(exc: Exception) -> bool:
+    """True for connection-level failures where the run should WAIT, not spray.
+
+    A dead network (gateway unreachable, DNS failure, TLS/read timeout, remote
+    end closed) cannot be fixed by an instant re-send. These need a long,
+    paced backoff so the run pauses until connectivity returns. Queue-full and
+    rate-limit responses are NOT network errors: they clear on their own and
+    keep the provider's fast retry behavior.
+    """
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    name = type(exc).__name__
+    if name in {
+        "ConnectError",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "ReadError",
+        "RemoteProtocolError",
+        "NetworkError",
+        "ProtocolError",
+    }:
+        return True
+    message = str(exc).casefold()
+    return any(
+        marker in message
+        for marker in (
+            "connection refused",
+            "connection reset",
+            "connection aborted",
+            "connection closed",
+            "failed to connect",
+            "network is unreachable",
+            "name or service not known",
+            "temporarily unavailable",
+            "remote end closed connection",
+            "read timed out",
+            "connect timed out",
+            "timeout",
+        )
+    )
+
+
 def should_retry_model_error(exc: Exception) -> bool:
     """Return True for transport/provider failures safe to retry.
 
@@ -34,15 +76,19 @@ def should_retry_model_error(exc: Exception) -> bool:
     return not (isinstance(status_code, int) and status_code in {400, 401, 403, 404, 422})
 
 
-def model_retry_middleware(provider: object | None = None) -> ModelRetryMiddleware:
-    """Retry transient model failures long enough for router cooldowns to rotate.
+def model_retry_middleware(provider: object | None = None) -> list[ModelRetryMiddleware]:
+    """Retry transient model failures; PAUSE (long backoff) on network loss.
 
-    When *provider* is the opencode Zen gateway (``OpenCodeGoProvider``),
-    retries run immediately with zero backoff: the gateway queue clears on
-    its own and an instant re-request succeeds, so any sleep is pure stall.
+    Two stacked layers: the inner layer keeps the provider's fast retry pacing
+    (instant for the queue-based opencode Zen gateway, paced backoff for other
+    providers); the outer layer catches genuine network failures and waits with
+    a long exponential backoff (5s up to 60s, up to 40 attempts) so a dead
+    network pauses the run instead of failing fast or churning recovery. When
+    the network is fine, the outer layer passes every error straight through to
+    the inner layer's normal pacing.
     """
     if is_instant_retry_provider(provider):
-        return ModelRetryMiddleware(
+        inner = ModelRetryMiddleware(
             max_retries=8,
             retry_on=should_retry_model_error,
             on_failure="error",
@@ -51,12 +97,23 @@ def model_retry_middleware(provider: object | None = None) -> ModelRetryMiddlewa
             max_delay=0.0,
             jitter=False,
         )
-    return ModelRetryMiddleware(
-        max_retries=8,
-        retry_on=should_retry_model_error,
+    else:
+        inner = ModelRetryMiddleware(
+            max_retries=8,
+            retry_on=should_retry_model_error,
+            on_failure="error",
+            initial_delay=1.0,
+            backoff_factor=1.7,
+            max_delay=12.0,
+            jitter=True,
+        )
+    network_wait = ModelRetryMiddleware(
+        max_retries=40,
+        retry_on=is_network_error,
         on_failure="error",
-        initial_delay=1.0,
-        backoff_factor=1.7,
-        max_delay=12.0,
+        initial_delay=5.0,
+        backoff_factor=1.8,
+        max_delay=60.0,
         jitter=True,
     )
+    return [network_wait, inner]

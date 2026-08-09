@@ -239,7 +239,7 @@ async def run_authentication_agent(
             TokenMetricMiddleware(agent="authenticate_default_account", emit=usage_emit),
             AuthenticationBudgetMiddleware(max_waits=1),
             make_authentication_no_progress_guard(browser),
-            model_retry_middleware(provider),
+            *model_retry_middleware(provider),
             router_middleware,
             ProseToolCallGuardMiddleware(),
         ],
