@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,6 +14,8 @@ from z_apply_core.browser_config import build_browser_config
 from z_apply_core.browser_session import ARTIFACT_ROOT, BrowserSession, BrowserToolExecutionError
 from z_apply_core.live_view import LiveView
 from z_apply_core.virtual_display import VirtualDisplaySession
+
+logger = logging.getLogger(__name__)
 
 _RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS = 15.0
 
@@ -113,7 +116,14 @@ class RunBrowserLease:
         for page in tuple(self.owned_pages):
             with contextlib.suppress(Exception):
                 if not page.is_closed():
-                    await page.close()
+                    # A page mid-navigation (hung network, stuck load) can make
+                    # playwright's close() block forever, hanging the whole
+                    # backend shutdown. Bound each close so teardown always
+                    # completes and the reloader can restart.
+                    try:
+                        await asyncio.wait_for(page.close(), timeout=5)
+                    except TimeoutError:
+                        logger.warning("page.close() timed out; continuing shutdown")
         self.owned_pages.clear()
 
     async def stop_loading(self) -> None:
