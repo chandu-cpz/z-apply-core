@@ -155,6 +155,9 @@ async def test_return_control_stops_stalled_load_and_retries_snapshot() -> None:
 @pytest.mark.asyncio
 async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
     workspace = BrowserWorkspace()
+    # Isolate from the real master/profile slots: the default pool provisions
+    # real directories.
+    workspace._pool = SimpleNamespace(provision=AsyncMock())  # type: ignore[method-assign]
 
     with (
         patch("z_apply_core.browser_workspace.VirtualDisplaySession.start") as display_start,
