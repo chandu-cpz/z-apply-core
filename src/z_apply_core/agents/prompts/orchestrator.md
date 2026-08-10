@@ -52,41 +52,45 @@ work; a scoped shallow one costs a fraction of a full one.
    profile/cookies are active. It is NEVER a file input: an "Apply with
    resume" / "Apply With Resume" control that wraps an `<input type=file>`
    is the EMPLOYER's resume upload, not the Simplify autofill — never treat
-   it as such. ACTIVATE IT DECISIVELY — no searching loops:
-   - The control appears in the CURRENT snapshot as a button labelled
-     "Simplify", "Autofill", "Auto fill", "Fill application", "Fill with
-     Simplify", or "Enable AI autofill". "Enable AI autofill" IS the
-     Simplify autofill activation control — click it; do not wait for a
+   it as such.
+   HOW TO SEE THE SIMPLIFY CONTROLS: the consent dialog and the autofill CTA
+   live inside the extension's shadow root, which the FULL-page snapshot does
+   NOT show. To reveal them, take a TARGETED snapshot of the shadow host:
+   `browser_snapshot` with `target=".simplify-jobs-shadow-root"`. A targeted
+   snapshot pierces the shadow root and returns the Simplify controls with
+   clickable `[ref=...]` tokens.
+   ACTIVATE IT DECISIVELY — no searching loops:
+   - If the extension shows a privacy-consent dialog ("Your Privacy",
+     "Accept and Continue"), agree to it ONCE by clicking the agree control
+     in the targeted snapshot (if "Accept and Continue" is disabled, first
+     click the consent toggle in the same snapshot).
+   - Then click the autofill button — labelled "Simplify", "Autofill",
+     "Auto fill", "Fill application", "Fill with Simplify", or "Enable AI
+     autofill" — via its `[ref=...]` with `browser_click`. "Enable AI
+     autofill" IS the activation control; click it, do not wait for a
      different button.
-   - If that button has a `[ref=...]` in the snapshot, CLICK IT DIRECTLY
-     with `browser_click` on that ref. Do NOT call `browser_find` or
-     `browser_evaluate` to "locate" it when the snapshot already shows it —
-     that is exactly how runs stall and burn tokens.
    - Use at most ONE `browser_find`/`browser_evaluate` call total to locate
-     it, and ONLY if the snapshot shows no Simplify button at all. If that
-     single call finds no clickable ref, STOP and fill manually (steps 5-7).
+     it, and ONLY if the targeted snapshot shows no Simplify button at all.
      Never repeat a "let me find the Simplify control" turn.
-   - If the extension first shows a privacy-consent dialog ("Your Privacy",
-     "I agree to the privacy policy"), agree to it ONCE by clicking the
-     agree control, then click the autofill control.
    - The Simplify panel often appears ONLY AFTER the resume is uploaded and
-     parsed — if it was not visible before the upload, re-check the snapshot
-     right after the upload and activate it THEN, before filling any field
-     by hand. The autofill should do the filling, not you.
+     parsed — if the targeted snapshot showed no autofill control before the
+     upload, take the targeted snapshot again right after the upload and
+     activate it THEN, before filling any field by hand. The autofill should
+     do the filling, not you.
    After ONE successful autofill click, call `browser_wait_for(time=10)` once
    so asynchronous filling and resume parsing can settle, then use the
    returned employer-form evidence. If the resume is already attached, do
    NOT upload it again. Never search for or activate another Simplify control
    on that step.
    AFTER the autofill has filled the form and you have verified it, CLOSE the
-   Simplify panel: find its close (X) control in the snapshot and click it so
-   the extension stops intercepting pointer events and never blocks your
-   later actions. If no Simplify-branded Autofill control can be found or
-   activated, fill directly (steps 5-7) — and you must then fill the
-   Employer and Education sections yourself from the RAG: if the form renders
-   "Add Employer" / "Add Education" controls, add and fill them with the
-   candidate's work experience and education from `lookup_candidate_memory`
-   before requesting submission approval.
+   Simplify panel: take the targeted snapshot again, find its close (X)
+   control, and click it so the extension stops intercepting pointer events
+   and never blocks your later actions. If no Simplify-branded Autofill
+   control can be found or activated, fill directly (steps 5-7) — and you
+   must then fill the Employer and Education sections yourself from the RAG:
+   if the form renders "Add Employer" / "Add Education" controls, add and
+   fill them with the candidate's work experience and education from
+   `lookup_candidate_memory` before requesting submission approval.
    Single-page form rule: on a one-page form, activate autofill (or give up
    and fill manually) ONCE — never revisit autofill later in the run. Only
    multi-step (multi-page) forms get a re-check: on each newly rendered step,
