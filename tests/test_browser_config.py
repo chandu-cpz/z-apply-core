@@ -80,6 +80,23 @@ class BrowserConfigTests(unittest.TestCase):
         )
         self.assertEqual(config["timeouts"]["navigation"], 120_000)
 
+    def test_profile_dir_override_points_browser_at_a_slot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            addon = Path(directory) / "simplify"
+            addon.mkdir()
+            slot = Path(directory) / "slot-1"
+            settings = SimpleNamespace(
+                default_username="",
+                default_password="",
+                camoufox_browser="",
+                simplify_addon_path=addon,
+            )
+            with patch("z_apply_core.browser_config.load_settings", return_value=settings):
+                config = build_browser_config("run-42", profile_dir=slot)
+
+            self.assertEqual(config["browser"]["userDataDir"], str(slot))
+            self.assertTrue(slot.is_dir())
+
 
 if __name__ == "__main__":
     unittest.main()
