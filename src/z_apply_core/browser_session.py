@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import re
+import shutil
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from enum import StrEnum
@@ -47,6 +48,7 @@ from z_apply_core.browser_tools import (
 from z_apply_core.config import CORE_ROOT
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
+from z_apply_core.profile_pool import PROFILES_ROOT
 from z_apply_core.text_utils import collapsed_label
 
 logger = logging.getLogger(__name__)
@@ -107,12 +109,14 @@ class BrowserSession:
         owns_backend: bool = True,
         run_context: RunContext | None = None,
         evidence_store: EvidenceStore | None = None,
+        scratch_profile: Path | None = None,
     ) -> None:
         self._server = server
         self._backend = backend if backend is not None else server.backend
         self._mutation_gate = mutation_gate
         self._lease: BrowserLease | None = None
         self._owns_backend = owns_backend
+        self._scratch_profile = scratch_profile
         self.run_id = run_id
         self.run_context = run_context
         self.evidence_store = evidence_store
@@ -150,10 +154,18 @@ class BrowserSession:
         )
 
     @classmethod
-    async def start(cls, *, run_id: str | None = None) -> Self:
+    async def start(cls, *, run_id: str | None = None, profile_dir: Path | None = None) -> Self:
         resolved_run_id = run_id or uuid4().hex
+        if profile_dir is None:
+            # Never launch on the sealed master: standalone sessions get a
+            # disposable per-run profile dir instead.
+            profile_dir = PROFILES_ROOT / f"scratch-{resolved_run_id[:12]}"
         return cls(
-            await create_connection(build_browser_config(resolved_run_id)), run_id=resolved_run_id
+            await create_connection(
+                build_browser_config(resolved_run_id, profile_dir=profile_dir)
+            ),
+            run_id=resolved_run_id,
+            scratch_profile=profile_dir,
         )
 
     @classmethod
@@ -911,6 +923,11 @@ class BrowserSession:
     async def close(self) -> None:
         if getattr(self, "_owns_backend", True):
             await self._backend.close()
+        if getattr(self, "_scratch_profile", None) is not None:
+            scratch = self._scratch_profile
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
+                self._scratch_profile = None
 
     def artifact_path(self, filename: str) -> Path:
         """Return the run-owned path used by browser capture tools."""

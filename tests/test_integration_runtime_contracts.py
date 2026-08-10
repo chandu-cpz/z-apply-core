@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
 
 from z_apply_core.agents.context_inbox import ContextInbox, ContextMessage
+from z_apply_core.browser_pool import BrowserPool
 from z_apply_core.browser_workspace import BrowserControlGate, BrowserWorkspace
 from z_apply_core.human.broker import HumanRequestBroker
 from z_apply_core.integrations.models import StartRunRequest
@@ -152,59 +155,91 @@ async def test_return_control_stops_stalled_load_and_retries_snapshot() -> None:
 @pytest.mark.asyncio
 async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
     workspace = BrowserWorkspace()
-    tabs = [SimpleNamespace(page=object()), SimpleNamespace(page=object())]
-    context = SimpleNamespace(new_tab=AsyncMock(side_effect=tabs), tabs=lambda: [])
-    anchor = SimpleNamespace(_ensure_context=AsyncMock(return_value=context))
-    pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor), tools=())
-    server = SimpleNamespace(backend_pool=pool)
 
     with (
-        patch(
-            "z_apply_core.browser_workspace.create_connection",
-            AsyncMock(return_value=server),
-        ) as create,
         patch("z_apply_core.browser_workspace.VirtualDisplaySession.start") as display_start,
         patch("z_apply_core.browser_workspace.LiveView.start"),
     ):
         await asyncio.gather(workspace.start(), workspace.start(), workspace.start())
-        first, second = await asyncio.gather(
-            workspace.open_run("run-1"), workspace.open_run("run-2")
-        )
 
-    create.assert_awaited_once()
-    pool.backend_for.assert_awaited_once_with("__z_apply_workspace__")
-    anchor._ensure_context.assert_awaited_once()
     display_start.assert_called_once()
-    assert first.backend is anchor and second.backend is anchor
-    assert first.context is context and second.context is context
-    assert first.primary_tab is tabs[0] and second.primary_tab is tabs[1]
+    assert workspace._started
 
 
 @pytest.mark.asyncio
-async def test_browser_workspace_retains_blank_anchor_and_discards_restored_pages() -> None:
-    workspace = BrowserWorkspace()
-    anchor_page = SimpleNamespace(goto=AsyncMock(), is_closed=lambda: False, close=AsyncMock())
-    restored_page = SimpleNamespace(is_closed=lambda: False, close=AsyncMock())
-    context = SimpleNamespace(
-        tabs=lambda: [SimpleNamespace(page=anchor_page), SimpleNamespace(page=restored_page)]
+async def test_browser_workspace_opens_per_run_instances_from_the_pool(tmp_path: Path) -> None:
+    # Each run gets its OWN backend/context/tab from the pool (dedicated
+    # instance), not a tab in one shared context.
+    tabs = [SimpleNamespace(page=object()), SimpleNamespace(page=object())]
+    contexts = [
+        SimpleNamespace(new_tab=AsyncMock(side_effect=[tabs[0]]), tabs=lambda: [tabs[0]]),
+        SimpleNamespace(new_tab=AsyncMock(side_effect=[tabs[1]]), tabs=lambda: [tabs[1]]),
+    ]
+    backends = [object(), object()]
+    servers = [
+        SimpleNamespace(backend_pool=SimpleNamespace(tools=(), backend_for=AsyncMock(return_value=backends[0]))),
+        SimpleNamespace(backend_pool=SimpleNamespace(tools=(), backend_for=AsyncMock(return_value=backends[1]))),
+    ]
+    launcher_calls = []
+
+    async def fake_launcher(run_id: str, profile_dir: Path) -> tuple[Any, Any, Any]:
+        launcher_calls.append((run_id, profile_dir))
+        idx = len(launcher_calls) - 1
+        return servers[idx], backends[idx], contexts[idx]
+
+    master = tmp_path / "master"
+    (master / "storage" / "default" / "moz-extension+++addon-1").mkdir(parents=True)
+    (master / "extensions.json").write_text("{}")
+    (master / "prefs.js").write_text("user_pref('x', true);")
+    (master / "cookies.sqlite").write_bytes(b"cookies")
+
+    pool = BrowserPool(
+        master=master,
+        slots_root=tmp_path / "slots",
+        slot_count=2,
+        max_active=2,
+        launcher=fake_launcher,
+        launch_timeout=5,
+        probe_timeout=2,
+        close_timeout=2,
     )
-    anchor = SimpleNamespace(_ensure_context=AsyncMock(return_value=context))
-    pool = SimpleNamespace(backend_for=AsyncMock(return_value=anchor), tools=())
-    server = SimpleNamespace(backend_pool=pool)
+    workspace = BrowserWorkspace(pool=pool)
 
     with (
-        patch(
-            "z_apply_core.browser_workspace.create_connection",
-            AsyncMock(return_value=server),
-        ),
         patch("z_apply_core.browser_workspace.VirtualDisplaySession.start"),
         patch("z_apply_core.browser_workspace.LiveView.start"),
     ):
         await workspace.start()
+        first, second = await asyncio.gather(
+            workspace.open_run("run-1"), workspace.open_run("run-2")
+        )
 
-    anchor_page.goto.assert_awaited_once_with("about:blank", wait_until="commit", timeout=5_000)
-    anchor_page.close.assert_not_awaited()
-    restored_page.close.assert_awaited_once()
+    assert first.backend is backends[0] and second.backend is backends[1]
+    assert first.context is contexts[0] and second.context is contexts[1]
+    assert first.primary_tab is tabs[0] and second.primary_tab is tabs[1]
+    assert [call[0] for call in launcher_calls] == ["run-1", "run-2"]
+
+
+@pytest.mark.asyncio
+async def test_browser_workspace_close_run_releases_the_pool_lease() -> None:
+    workspace = BrowserWorkspace()
+    lease = SimpleNamespace(
+        closed=False,
+        close_pages=AsyncMock(),
+    )
+    workspace._leases["run-1"] = lease
+    release_calls: list[str] = []
+
+    async def fake_release(run_id: str, *, reason: str) -> None:
+        release_calls.append(run_id)
+
+    workspace._pool.release = fake_release  # type: ignore[method-assign]
+
+    with patch("z_apply_core.browser_workspace.VirtualDisplaySession.start"):
+        await workspace.close_run("run-1")
+
+    assert release_calls == ["run-1"]
+    lease.close_pages.assert_awaited_once()
 
 
 def test_framework_state_event_never_serializes_runtime_objects() -> None:

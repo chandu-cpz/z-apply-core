@@ -5,19 +5,18 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
-from playwright_python_mcp.mcp import create_connection
-
-from z_apply_core.browser_config import build_browser_config
-from z_apply_core.browser_session import ARTIFACT_ROOT, BrowserSession, BrowserToolExecutionError
+from z_apply_core.browser_pool import BrowserPool
+from z_apply_core.browser_session import BrowserSession, BrowserToolExecutionError
 from z_apply_core.live_view import LiveView
 from z_apply_core.virtual_display import VirtualDisplaySession
 
 logger = logging.getLogger(__name__)
 
 _RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS = 15.0
+
+DEFAULT_MAX_ACTIVE_RUNS = 3
 
 
 class BrowserControlGate:
@@ -69,7 +68,7 @@ class BrowserControlGate:
 
 
 class RunBrowserLease:
-    """Run-scoped browser capability over one keyed MCP backend."""
+    """Run-scoped browser capability over one dedicated per-run instance."""
 
     def __init__(
         self,
@@ -119,7 +118,7 @@ class RunBrowserLease:
                     # A page mid-navigation (hung network, stuck load) can make
                     # playwright's close() block forever, hanging the whole
                     # backend shutdown. Bound each close so teardown always
-                    # completes and the reloader can restart.
+                    # completes and the pool can reset the slot.
                     try:
                         await asyncio.wait_for(page.close(), timeout=5)
                     except TimeoutError:
@@ -136,15 +135,20 @@ class RunBrowserLease:
 
 
 class BrowserWorkspace:
-    """One persistent Camoufox workspace shared by all application runs."""
+    """Per-run dedicated Camoufox instances leased from the browser pool.
 
-    def __init__(self) -> None:
+    Replaces the old single shared browser (one process + one shared profile,
+    tabs per run): every run now leases a disjoint profile slot and the pool
+    launches a DEDICATED instance on it. A crash or hang on one run cannot
+    affect the others, and no two runs ever share a profile directory (the
+    Firefox single-writer lock that previously caused launch hangs).
+    """
+
+    def __init__(self, *, pool: BrowserPool | None = None) -> None:
         self.display = VirtualDisplaySession(enabled=True)
         self.live_view = LiveView()
         self.gate = BrowserControlGate()
-        self._server: Any | None = None
-        self._anchor_backend: Any | None = None
-        self._context: Any | None = None
+        self._pool = pool or BrowserPool(max_active=DEFAULT_MAX_ACTIVE_RUNS)
         self._leases: dict[str, RunBrowserLease] = {}
         self._start_lock = asyncio.Lock()
         self._creation_lock = asyncio.Lock()
@@ -159,55 +163,52 @@ class BrowserWorkspace:
             self.display.start()
             try:
                 self.live_view.start(self.display.display, enabled=live_view, open_client=False)
-                config = build_browser_config("workspace")
-                config["sharedBrowserContext"] = True
-                self._server = await create_connection(config)
-                self._anchor_backend = await self._server.backend_pool.backend_for(
-                    "__z_apply_workspace__"
-                )
-                self._context = await self._anchor_backend._ensure_context(
-                    cwd=Path.cwd(), roots=None
-                )
-                await self._normalize_restored_pages()
+                # Provision slots (mirror from the sealed master, reconcile
+                # orphaned leases, reap zombies) — no browser is launched until
+                # a run asks for one.
+                await self._pool.provision()
                 self._started = True
             except Exception:
-                self._server = None
-                self._anchor_backend = None
-                self._context = None
                 self.live_view.stop()
                 self.display.stop()
                 raise
 
     async def open_run(self, run_id: str) -> RunBrowserLease:
         await self.start()
-        assert self._server is not None
-        assert self._anchor_backend is not None
-        assert self._context is not None
+        assert self._started
         async with self._creation_lock:
             if run_id in self._leases:
                 raise RuntimeError(f"browser lease already exists for run {run_id}")
-            async with self.gate.mutation():
-                artifact_dir = (ARTIFACT_ROOT / run_id / "browser-artifacts").resolve()
-                artifact_dir.mkdir(parents=True, exist_ok=True)
-                backend = self._anchor_backend
-                context = self._context
-                tab = await context.new_tab()
-            session = BrowserSession.from_backend(
-                backend,
-                tools=tuple(self._server.backend_pool.tools),
-                run_id=run_id,
-                mutation_gate=self.gate,
-            )
-            lease = RunBrowserLease(
-                run_id=run_id,
-                backend=backend,
-                context=context,
-                primary_tab=tab,
-                session=session,
-            )
-            session.bind_lease(lease)
-            self._leases[run_id] = lease
-        return lease
+            # Leases a slot and launches a dedicated instance (admission
+            # control, bounded launch, health probe all live in the pool).
+            pool_lease = await self._pool.acquire(run_id)
+            try:
+                async with self.gate.mutation():
+                    context = pool_lease.context
+                    tabs = tuple(context.tabs())
+                    # The dedicated instance opens with one blank tab; reuse it
+                    # rather than stacking a second tab on top.
+                    tab = tabs[0] if tabs else await context.new_tab()
+                session = BrowserSession.from_backend(
+                    pool_lease.backend,
+                    tools=tuple(pool_lease.server.backend_pool.tools),
+                    run_id=run_id,
+                    mutation_gate=self.gate,
+                )
+                lease = RunBrowserLease(
+                    run_id=run_id,
+                    backend=pool_lease.backend,
+                    context=context,
+                    primary_tab=tab,
+                    session=session,
+                )
+                session.bind_lease(lease)
+                self._leases[run_id] = lease
+                return lease
+            except Exception:
+                # Never leak the pool lease if session construction fails.
+                await self._pool.release(run_id, reason="open_run_failed")
+                raise
 
     def lease(self, run_id: str) -> RunBrowserLease | None:
         return self._leases.get(run_id)
@@ -251,9 +252,12 @@ class BrowserWorkspace:
             return
         async with self.gate.mutation():
             await lease.close_pages()
+        # Close the dedicated instance (bounded) and reset the slot from the
+        # sealed master. No sync-back: the run's cookies/caches are discarded.
+        await self._pool.release(run_id, reason="run_complete")
 
     async def quiesce_run(self, run_id: str) -> None:
-        """Stop retained run pages from consuming shared browser resources."""
+        """Stop retained run pages from consuming browser resources."""
         lease = self._leases.get(run_id)
         if lease is None or lease.closed:
             return
@@ -263,11 +267,7 @@ class BrowserWorkspace:
     async def close(self) -> None:
         for run_id in tuple(self._leases):
             await self.close_run(run_id)
-        if self._server is not None:
-            await self._server.backend_pool.close_all()
-        self._server = None
-        self._anchor_backend = None
-        self._context = None
+        await self._pool.close()
         self._started = False
         self.live_view.stop()
         self.display.stop()
@@ -277,17 +277,3 @@ class BrowserWorkspace:
         if lease is None or lease.closed:
             raise BrowserToolExecutionError("The run's browser page is unavailable.")
         return lease
-
-    async def _normalize_restored_pages(self) -> None:
-        """Retain one blank Camoufox window and discard stale restored run pages."""
-        assert self._context is not None
-        tabs = tuple(self._context.tabs())
-        if not tabs:
-            return
-        anchor, *restored = tabs
-        with contextlib.suppress(Exception):
-            await anchor.page.goto("about:blank", wait_until="commit", timeout=5_000)
-        for tab in restored:
-            with contextlib.suppress(Exception):
-                if not tab.page.is_closed():
-                    await tab.page.close()
