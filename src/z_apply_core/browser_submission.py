@@ -23,6 +23,12 @@ class SubmissionGuard:
 
     def approve(self, approved: bool) -> None:
         self._approved = bool(approved)
+        if approved:
+            # A FRESH human approval re-arms the gate even after a previous
+            # submit click was consumed but the submission did not verifiably
+            # succeed (blocker/error). approve(False) (revoke) keeps the
+            # consumed state so the gate stays locked.
+            self._consumed = False
 
     def require_armed(self) -> None:
         if not self._approved or self._consumed:
@@ -35,6 +41,10 @@ class SubmissionGuard:
 
     def consume(self) -> None:
         self._consumed = True
+
+    def is_consumed(self) -> bool:
+        """True when an approved submit click already fired for this approval."""
+        return self._consumed
 
     def _clear(self) -> None:
         self._approved = False

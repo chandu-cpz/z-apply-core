@@ -331,3 +331,27 @@ class BrowserSubmissionGuardTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SubmissionGuardReArmTests(unittest.IsolatedAsyncioTestCase):
+    def test_fresh_approval_rearms_after_a_consumed_submit(self) -> None:
+        from z_apply_core.browser_submission import SubmissionGuard
+
+        guard = SubmissionGuard()
+        guard.approve(True)      # human approved
+        guard.require_armed()    # armed
+        guard.consume()          # submit clicked; approval consumed
+        with self.assertRaises(ValueError):
+            guard.require_armed()  # consumed -> locked
+        self.assertTrue(guard.is_consumed())
+        # A FRESH human approval (e.g. after a failed submission) re-arms.
+        guard.approve(True)
+        self.assertFalse(guard.is_consumed())
+        guard.require_armed()    # no longer locked
+        guard.consume()
+        with self.assertRaises(ValueError):
+            guard.require_armed()
+        # Revoking keeps it locked: approve(False) must not re-arm.
+        guard.approve(False)
+        with self.assertRaises(ValueError):
+            guard.require_armed()

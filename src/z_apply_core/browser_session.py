@@ -787,6 +787,16 @@ class BrowserSession:
         except ValueError as exc:
             raise BrowserToolExecutionError(str(exc)) from exc
 
+    def submission_consumed(self) -> bool:
+        """True when an approved submit click already fired for this approval.
+
+        Lets the orchestrator detect that the previous submission was attempted
+        (and therefore did not verifiably succeed, since approval is being
+        requested again) so it can require fresh human consent instead of
+        silently re-approving.
+        """
+        return self._submission.is_consumed()
+
     async def resolve_submit_control_target(self) -> str:
         """Resolve the current enabled form submit control to a snapshot ref.
 

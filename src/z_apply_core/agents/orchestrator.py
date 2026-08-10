@@ -185,10 +185,15 @@ async def run_orchestrator(
             review_context: str,
         ) -> dict[str, object]:
             if approval is True:
-                # Approval sticks for this application: the human already
-                # approved once, so a transient submit failure must never
-                # prompt them again.
-                return {"approved": True}
+                # Approval sticks only for a submission that verifiably
+                # succeeded. If a submit click already consumed the approval
+                # (guard consumed) and we are being asked again, the previous
+                # submission did NOT go through — revoke and require FRESH
+                # human consent instead of silently re-approving.
+                if active_browser is not None and active_browser.submission_consumed():
+                    record_approval(False)
+                else:
+                    return {"approved": True}
             approved = await human_channel.confirm(
                 question="Submit this application?",
                 context=review_context,
