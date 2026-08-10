@@ -50,8 +50,13 @@ RSYNC_INCLUDES = (
     "cookies.sqlite",
     "permissions.sqlite",
     "logins.json",
+    "logins.db",
     "key4.db",
     "cert9.db",
+    # Extension sync storage + the per-site IndexedDB registry: small but
+    # carry extension state (e.g. storage.sync) the storage/ tree misses.
+    "storage-sync-v2.sqlite",
+    "storage.sqlite",
 )
 # Catch-all: drop caches, sessionstore, sqlite journals, lock files and every
 # other file not explicitly included above.
