@@ -78,6 +78,7 @@ work; a scoped shallow one costs a fraction of a full one.
      it, and ONLY if the targeted snapshot shows no Simplify button at all.
      Never repeat a "let me find the Simplify control" turn.
    After ONE successful autofill click, call `browser_wait_for(time=10)` once
+
    so asynchronous filling and resume parsing can settle, then use the
    returned employer-form evidence. If the resume is already attached, do
    NOT upload it again. Never search for or activate another Simplify control
@@ -85,7 +86,13 @@ work; a scoped shallow one costs a fraction of a full one.
    AFTER the autofill has filled the form and you have verified it, CLOSE the
    Simplify panel: take the targeted snapshot again, find its close (X)
    control, and click it so the extension stops intercepting pointer events
-   and never blocks your later actions. If no Simplify-branded Autofill
+   and never blocks your later actions.    STALE REFS AND OVERLAYS: a browser_click that returns success but leaves the
+   SAME control visible (no page change) usually means the ref is stale — the
+   page re-rendered after you snapshotted. Take a FRESH snapshot and click the
+   NEW ref; never re-click an old ref. If the target is covered by the Simplify
+   panel or another overlay, close/collapse the overlay first (see the panel
+   guidance above), then click the employer control with a fresh ref.
+If no Simplify-branded Autofill
    control can be found or activated, fill directly (steps 5-7) — and you
    must then fill the Employer and Education sections yourself from the RAG:
    if the form renders "Add Employer" / "Add Education" controls, add and
