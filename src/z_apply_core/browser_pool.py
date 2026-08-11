@@ -56,7 +56,7 @@ DEFAULT_PROBE_TIMEOUT_SECONDS = 5.0
 DEFAULT_CLOSE_TIMEOUT_SECONDS = 15.0
 LAUNCH_ATTEMPTS = 3
 
-Launcher = Callable[[str, Path], Awaitable[tuple[Any, Any, Any]]]
+Launcher = Callable[[str, Path, str | None], Awaitable[tuple[Any, Any, Any]]]
 
 
 class PoolCapacityError(RuntimeError):
@@ -202,8 +202,13 @@ class BrowserPool:
 
     # -- acquire / release ---------------------------------------------------
 
-    async def acquire(self, run_id: str) -> BrowserLease:
+    async def acquire(
+        self, run_id: str, *, display: str | None = None
+    ) -> BrowserLease:
         """Lease a slot and launch a dedicated instance for ``run_id``.
+
+        ``display`` (optional) is the run's own X display; it is passed per-
+        launch via env so concurrent runs each render on their own screen.
 
         Raises ``PoolCapacityError`` when at capacity, ``BrowserLeaseError``
         when the browser could not be launched/verified after retries, and
@@ -232,7 +237,7 @@ class BrowserPool:
                 # behind; never let it poison the retry with a stale lock.
                 await asyncio.to_thread(_clean_launch_artifacts, slot.dir)
             try:
-                lease = await self._launch_with_timeout(run_id, slot)
+                lease = await self._launch_with_timeout(run_id, slot, display)
                 break
             except Exception as exc:  # noqa: BLE001 - retry any launch failure
                 last_error = exc
@@ -282,10 +287,12 @@ class BrowserPool:
 
     # -- internals -----------------------------------------------------------
 
-    async def _launch_with_timeout(self, run_id: str, slot: ProfileSlot) -> BrowserLease:
+    async def _launch_with_timeout(
+        self, run_id: str, slot: ProfileSlot, display: str | None
+    ) -> BrowserLease:
         started = time.monotonic()
         server, backend, context = await asyncio.wait_for(
-            self._launcher(run_id, slot.dir), timeout=self._launch_timeout
+            self._launcher(run_id, slot.dir, display), timeout=self._launch_timeout
         )
         # Protocol-level health probe: process alive != protocol responsive.
         # Reaching this point means the browser launched; a dead pipe surfaces
@@ -335,11 +342,13 @@ class BrowserPool:
             # by the next provision() via _kill_processes_on_profile.
 
     @staticmethod
-    async def _default_launcher(run_id: str, profile_dir: Path) -> tuple[Any, Any, Any]:
+    async def _default_launcher(
+        run_id: str, profile_dir: Path, display: str | None = None
+    ) -> tuple[Any, Any, Any]:
         from playwright_python_mcp.mcp import create_connection  # local import
 
         server = await create_connection(
-            build_browser_config(run_id, profile_dir=profile_dir)
+            build_browser_config(run_id, profile_dir=profile_dir, display=display)
         )
         backend = await server.backend_pool.backend_for(run_id)
         context = await backend._ensure_context(cwd=Path.cwd(), roots=None)

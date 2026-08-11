@@ -419,11 +419,17 @@ class ZApplyCore:
         return run.view
 
     async def live_view(self) -> CoreLiveView:
-        if self._workspace.live_view.port is not None:
+        # The focused run owns the VNC the frontend shows: each run has its
+        # own display + live view, so the panel follows the run the user is
+        # looking at instead of one shared screen.
+        focused = None
+        if self._focused_run_id is not None:
+            focused = self._workspace.lease(self._focused_run_id)
+        if focused is not None and focused.live_view is not None and focused.live_view.port is not None:
             return CoreLiveView(
                 True,
                 "127.0.0.1",
-                self._workspace.live_view.port,
+                focused.live_view.port,
                 BrowserControlMode.HUMAN_CONTROL
                 if self._control_run_id is not None
                 else BrowserControlMode.AGENT_CONTROL,
@@ -538,8 +544,8 @@ class ZApplyCore:
                 telegram=self._telegram,
             )
             runtime = RunRuntime(
-                display=self._workspace.display,
-                live_view=self._workspace.live_view,
+                display=lease.display,
+                live_view=lease.live_view,
                 browser=lease.session,
                 human_channel=BrokeredHumanChannel(run.human_broker, url=run.request.job_url),
                 candidate_memory=self._candidate_memory,

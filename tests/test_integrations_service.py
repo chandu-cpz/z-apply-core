@@ -152,7 +152,11 @@ async def test_service_limits_concurrent_runs_without_serializing_the_queue(
             del name, arguments
             return "navigated"
 
-        return SimpleNamespace(session=SimpleNamespace(call_tool=call_tool))
+        return SimpleNamespace(
+            session=SimpleNamespace(call_tool=call_tool),
+            display=None,
+            live_view=None,
+        )
 
     async def fake_close_run(run_id: str) -> None:
         del run_id

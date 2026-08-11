@@ -65,7 +65,7 @@ class RecordingLauncher:
         self._failures: dict[str, int] = {}
         self.hang = False
 
-    async def __call__(self, run_id: str, profile_dir: Path) -> tuple[FakeServer, object, FakeContext]:
+    async def __call__(self, run_id: str, profile_dir: Path, display: str | None = None) -> tuple[FakeServer, object, FakeContext]:
         if self.hang:
             await asyncio.sleep(60)
         if self._failures.get(run_id, 0) < self.fail_times.get(run_id, 0):

@@ -23,8 +23,8 @@ class RunResources:
 
 @dataclass(slots=True)
 class RunRuntime:
-    display: VirtualDisplaySession
-    live_view: LiveView
+    display: VirtualDisplaySession | None
+    live_view: LiveView | None
     browser: BrowserSession
     human_channel: HumanChannel | None = None
     candidate_memory: CandidateMemory | None = None
@@ -46,5 +46,7 @@ class RunRuntime:
                 self.candidate_memory.close()
         with contextlib.suppress(Exception):
             await self.browser.close()
-        self.live_view.stop()
-        self.display.stop()
+        if self.live_view is not None:
+            self.live_view.stop()
+        if self.display is not None:
+            self.display.stop()

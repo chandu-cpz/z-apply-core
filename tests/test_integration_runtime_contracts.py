@@ -160,12 +160,11 @@ async def test_browser_workspace_initializes_once_for_concurrent_runs() -> None:
     workspace._pool = SimpleNamespace(provision=AsyncMock())  # type: ignore[method-assign]
 
     with (
-        patch("z_apply_core.browser_workspace.VirtualDisplaySession.start") as display_start,
+        patch("z_apply_core.browser_workspace.VirtualDisplaySession.start"),
         patch("z_apply_core.browser_workspace.LiveView.start"),
     ):
         await asyncio.gather(workspace.start(), workspace.start(), workspace.start())
 
-    display_start.assert_called_once()
     assert workspace._started
 
 
@@ -185,7 +184,7 @@ async def test_browser_workspace_opens_per_run_instances_from_the_pool(tmp_path:
     ]
     launcher_calls = []
 
-    async def fake_launcher(run_id: str, profile_dir: Path) -> tuple[Any, Any, Any]:
+    async def fake_launcher(run_id: str, profile_dir: Path, display: str | None = None) -> tuple[Any, Any, Any]:
         launcher_calls.append((run_id, profile_dir))
         idx = len(launcher_calls) - 1
         return servers[idx], backends[idx], contexts[idx]
@@ -229,6 +228,8 @@ async def test_browser_workspace_close_run_releases_the_pool_lease() -> None:
     lease = SimpleNamespace(
         closed=False,
         close_pages=AsyncMock(),
+        live_view=None,
+        display=None,
     )
     workspace._leases["run-1"] = lease
     release_calls: list[str] = []

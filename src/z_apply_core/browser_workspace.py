@@ -68,7 +68,12 @@ class BrowserControlGate:
 
 
 class RunBrowserLease:
-    """Run-scoped browser capability over one dedicated per-run instance."""
+    """Run-scoped browser capability over one dedicated per-run instance.
+
+    Carries the run's own display + live view (each run renders on its own
+    Xvfb and exposes its own VNC port, so the frontend can follow the focused
+    run instead of one shared screen).
+    """
 
     def __init__(
         self,
@@ -78,12 +83,16 @@ class RunBrowserLease:
         context: Any,
         primary_tab: Any,
         session: BrowserSession,
+        display: VirtualDisplaySession | None = None,
+        live_view: LiveView | None = None,
     ) -> None:
         self.run_id = run_id
         self.backend = backend
         self.context = context
         self.primary_tab = primary_tab
         self.session = session
+        self.display = display
+        self.live_view = live_view
         self.owned_pages: set[Any] = {primary_tab.page}
         self.closed = False
 
@@ -145,8 +154,6 @@ class BrowserWorkspace:
     """
 
     def __init__(self, *, pool: BrowserPool | None = None) -> None:
-        self.display = VirtualDisplaySession(enabled=True)
-        self.live_view = LiveView()
         self.gate = BrowserControlGate()
         self._pool = pool or BrowserPool(max_active=DEFAULT_MAX_ACTIVE_RUNS)
         self._leases: dict[str, RunBrowserLease] = {}
@@ -155,23 +162,18 @@ class BrowserWorkspace:
         self._started = False
 
     async def start(self, *, live_view: bool = True) -> None:
+        del live_view  # per-run live views are created in open_run
         if self._started:
             return
         async with self._start_lock:
             if self._started:
                 return
-            self.display.start()
-            try:
-                self.live_view.start(self.display.display, enabled=live_view, open_client=False)
-                # Provision slots (mirror from the sealed master, reconcile
-                # orphaned leases, reap zombies) — no browser is launched until
-                # a run asks for one.
-                await self._pool.provision()
-                self._started = True
-            except Exception:
-                self.live_view.stop()
-                self.display.stop()
-                raise
+            # Provision slots (mirror from the sealed master, reconcile
+            # orphaned leases, reap zombies) — no browser is launched until
+            # a run asks for one. Each run gets its OWN display + live view
+            # in open_run.
+            await self._pool.provision()
+            self._started = True
 
     async def open_run(self, run_id: str) -> RunBrowserLease:
         await self.start()
@@ -179,9 +181,22 @@ class BrowserWorkspace:
         async with self._creation_lock:
             if run_id in self._leases:
                 raise RuntimeError(f"browser lease already exists for run {run_id}")
-            # Leases a slot and launches a dedicated instance (admission
-            # control, bounded launch, health probe all live in the pool).
-            pool_lease = await self._pool.acquire(run_id)
+            # Each run renders on its OWN virtual display with its OWN VNC
+            # live view, so concurrent runs never share a screen and the
+            # frontend can follow the focused run.
+            run_display = VirtualDisplaySession(enabled=True)
+            run_live_view = LiveView()
+            run_display.start()
+            try:
+                run_live_view.start(run_display.display, enabled=True, open_client=False)
+                # Leases a slot and launches a dedicated instance on the run's
+                # display (admission control, bounded launch, health probe all
+                # live in the pool).
+                pool_lease = await self._pool.acquire(run_id, display=run_display.display)
+            except Exception:
+                run_live_view.stop()
+                run_display.stop()
+                raise
             try:
                 async with self.gate.mutation():
                     context = pool_lease.context
@@ -201,6 +216,8 @@ class BrowserWorkspace:
                     context=context,
                     primary_tab=tab,
                     session=session,
+                    display=run_display,
+                    live_view=run_live_view,
                 )
                 session.bind_lease(lease)
                 self._leases[run_id] = lease
@@ -208,6 +225,8 @@ class BrowserWorkspace:
             except Exception:
                 # Never leak the pool lease if session construction fails.
                 await self._pool.release(run_id, reason="open_run_failed")
+                run_live_view.stop()
+                run_display.stop()
                 raise
 
     def lease(self, run_id: str) -> RunBrowserLease | None:
@@ -255,6 +274,10 @@ class BrowserWorkspace:
         # Close the dedicated instance (bounded) and reset the slot from the
         # sealed master. No sync-back: the run's cookies/caches are discarded.
         await self._pool.release(run_id, reason="run_complete")
+        if lease.live_view is not None:
+            lease.live_view.stop()
+        if lease.display is not None:
+            lease.display.stop()
 
     async def quiesce_run(self, run_id: str) -> None:
         """Stop retained run pages from consuming browser resources."""
@@ -269,8 +292,6 @@ class BrowserWorkspace:
             await self.close_run(run_id)
         await self._pool.close()
         self._started = False
-        self.live_view.stop()
-        self.display.stop()
 
     def _require_lease(self, run_id: str) -> RunBrowserLease:
         lease = self._leases.get(run_id)
