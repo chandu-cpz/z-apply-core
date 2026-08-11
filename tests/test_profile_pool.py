@@ -75,6 +75,27 @@ class ProfileSlotPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((slot.dir / "stale.txt").exists())
         self.assertEqual((slot.dir / "cookies.sqlite").read_bytes(), b"cookies")
 
+    async def test_slots_are_writable_even_when_master_is_sealed_read_only(self) -> None:
+        """Firefox must be able to write the slot profile (prefs, cookies,
+        locks); a slot that inherits the master's read-only seal makes the
+        browser exit cleanly at launch (the retry-then-dialog failure)."""
+        # Seal the synthetic master read-only like the real sealed master.
+        import stat
+
+        for path in self.master.rglob("*"):
+            if path.is_file():
+                path.chmod(path.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+        self.master.chmod(self.master.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+
+        await self.pool.provision()
+        slot = self.pool.slots[0]
+        for path in slot.dir.rglob("*"):
+            self.assertTrue(
+                (path.is_dir() and (path.stat().st_mode & 0o200))
+                or (path.is_file() and (path.stat().st_mode & 0o200)),
+                f"{path} is not writable: {oct(path.stat().st_mode & 0o777)}",
+            )
+
     async def test_prepare_cleans_sessionstore_and_locks(self) -> None:
         await self.pool.provision()
         slot = self.pool.slots[0]

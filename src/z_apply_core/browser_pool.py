@@ -45,6 +45,7 @@ from z_apply_core.profile_pool import (
     PROFILES_ROOT,
     ProfileSlot,
     ProfileSlotPool,
+    _clean_launch_artifacts,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,6 +228,9 @@ class BrowserPool:
             if attempt:
                 self._stats.launch_retries += 1
                 await asyncio.sleep(self._retry_backoff_base * attempt)
+                # A failed attempt can leave profile locks / sessionstore
+                # behind; never let it poison the retry with a stale lock.
+                await asyncio.to_thread(_clean_launch_artifacts, slot.dir)
             try:
                 lease = await self._launch_with_timeout(run_id, slot)
                 break

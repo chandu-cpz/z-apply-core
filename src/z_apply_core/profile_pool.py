@@ -98,6 +98,10 @@ def _rsync_mirror(master: Path, slot: Path) -> None:
         "-a",
         "--delete",
         "--delete-excluded",
+        # The master is sealed read-only (444/555); the slot is a WORKING
+        # copy that Firefox must be able to write (prefs, cookies, locks).
+        # Restore writable perms so a slot is never read-only.
+        "--chmod=u+rw,go-w",
         *[f"--include={pattern}" for pattern in RSYNC_INCLUDES],
         *[f"--exclude={pattern}" for pattern in RSYNC_EXCLUDES],
         f"{master}/",
