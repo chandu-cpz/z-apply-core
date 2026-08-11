@@ -69,6 +69,11 @@ DEFAULT_TASK = (
     "verify the review, and require human approval before final submission."
 )
 
+# Terminal runs retain their browser so the human can inspect the final page;
+# after this window the browser is auto-released (slot reset) so the pool
+# capacity recycles instead of filling with retained browsers forever.
+RETAINED_BROWSER_TTL_SECONDS = 600
+
 _LIVE_ONLY_EVENTS = frozenset({"agent.message.delta", "model.tool_call.delta", "stream.metrics"})
 
 
@@ -99,6 +104,7 @@ class _Run:
             finished_at=None,
         )
         self.task: asyncio.Task[None] | None = None
+        self.retention_release: asyncio.Task[None] | None = None
         self.done: asyncio.Future[CoreRunResult] | None = None
         self.human_requests: dict[str, CoreHumanRequest] = {}
         self.artifacts: list[CoreArtifact] = []
@@ -364,11 +370,15 @@ class ZApplyCore:
 
     async def focus_run(self, run_id: str) -> CoreRunView:
         run = self._require_run(run_id)
-        if run.view.browser_tab_state is not BrowserTabState.OPEN:
+        # Focusing a run whose browser is still opening is fine: the live view
+        # resolves to its VNC once the browser is up. Only runs that will never
+        # have a browser (closed/terminal-without-browser) are rejected.
+        if run.view.browser_tab_state not in (BrowserTabState.OPEN, BrowserTabState.PENDING):
             raise BrowserUnavailable()
-        async with self._browser_lock:
-            await self._workspace.focus(run_id)
-            self._focused_run_id = run_id
+        if run.view.browser_tab_state is BrowserTabState.OPEN:
+            async with self._browser_lock:
+                await self._workspace.focus(run_id)
+        self._focused_run_id = run_id
         await self._emit(run, "browser.page_focused", {})
         return run.view
 
@@ -413,6 +423,9 @@ class ZApplyCore:
         run = self._require_run(run_id)
         if run.view.status is not RunStatus.TERMINAL:
             raise InvalidRunTransition("only retained terminal run pages may be closed")
+        if run.retention_release is not None:
+            run.retention_release.cancel()
+            run.retention_release = None
         await self._workspace.close_run(run_id)
         run.view = replace(run.view, browser_tab_state=BrowserTabState.CLOSED)
         await self._emit(run, "browser.page_closed", {})
@@ -650,12 +663,54 @@ class ZApplyCore:
             {"outcome": outcome, "summary": summary, **(payload or {})},
             level="error" if outcome is RunOutcome.FAILED else "info",
         )
+        await self._schedule_retained_browser_release(run, outcome)
         if run.done is not None and not run.done.done():
             run.done.set_result(
                 CoreRunResult(
                     run.run_id, outcome, summary, run.view.finished_at or utc_now(), run.sequence
                 )
             )
+
+    async def _schedule_retained_browser_release(self, run: _Run, outcome: RunOutcome) -> None:
+        """Release a terminal run's retained browser so pool capacity recycles.
+
+        Runs that close their browser on their own (submitted, cancelled) need
+        nothing. Other terminal outcomes retain the browser for inspection
+        (the frontend shows the final page), but only for a bounded window —
+        after ``RETAINED_BROWSER_TTL_SECONDS`` the slot is released instead of
+        holding pool capacity forever.
+        """
+        if outcome in (RunOutcome.SUBMITTED_VERIFIED, RunOutcome.CANCELLED):
+            return
+        if run.view.browser_tab_state is not BrowserTabState.OPEN:
+            return
+
+        async def auto_release() -> None:
+            try:
+                await asyncio.sleep(RETAINED_BROWSER_TTL_SECONDS)
+                view = run.view
+                if (
+                    view.status is RunStatus.TERMINAL
+                    and view.browser_tab_state is BrowserTabState.OPEN
+                ):
+                    await self._workspace.close_run(run.run_id)
+                    run.view = replace(
+                        run.view, browser_tab_state=BrowserTabState.CLOSED
+                    )
+                    logger.info(
+                        "auto-released retained browser for run %s after TTL",
+                        run.run_id,
+                    )
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.warning(
+                    "retained browser auto-release failed for %s",
+                    run.run_id,
+                    exc_info=True,
+                )
+
+        run.retention_release = asyncio.create_task(auto_release())
 
     async def _emit_run_ledger(self, run: _Run, *, status: str) -> None:
         """Persist the run's LLM call ledger.
