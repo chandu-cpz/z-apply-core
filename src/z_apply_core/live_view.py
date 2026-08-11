@@ -41,7 +41,7 @@ class LiveView:
         if not enabled:
             logger.info("Live view disabled")
             return
-        self._cleanup_prior_state()
+        self._cleanup_prior_state(display)
         self.stop()
         if not display or not display.startswith(":"):
             logger.warning("Live view skipped: no virtual X display is available")
@@ -131,12 +131,21 @@ class LiveView:
         with contextlib.suppress(Exception):
             self.state_path.write_text(json.dumps(data), encoding="utf-8")
 
-    def _cleanup_prior_state(self) -> None:
+    def _cleanup_prior_state(self, display: str | None) -> None:
+        """Reap a stale live view left by a PREVIOUS process on THIS display.
+
+        The state file is shared across concurrent runs (each run owns a
+        different display), so a recorded entry is only cleaned when it belongs
+        to the same display — killing another run's live x11vnc would silently
+        disconnect its VNC.
+        """
         try:
             data = json.loads(self.state_path.read_text(encoding="utf-8"))
         except Exception:
             return
         if not isinstance(data, dict):
+            return
+        if data.get("display") != display:
             return
         _terminate_pid(_int_or_zero(data.get("remmina_pid")), "remmina", "remmina")
         _terminate_pid(_int_or_zero(data.get("x11vnc_pid")), "x11vnc", "x11vnc")
