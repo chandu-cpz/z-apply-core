@@ -27,15 +27,7 @@ def test_no_progress_recoveries_accumulate_on_frozen_evidence() -> None:
         observation_signature=signature,
         previous_signature=signature,
     )
-    assert (count, terminate) == (2, False)
-
-    count, terminate = decide_goal_stall(
-        NoProgressCircuitOpen("no progress"),
-        count,
-        observation_signature=signature,
-        previous_signature=signature,
-    )
-    assert (count, terminate) == (3, True)
+    assert (count, terminate) == (2, True)
 
 
 def test_advanced_evidence_between_recoveries_resets_the_counter() -> None:

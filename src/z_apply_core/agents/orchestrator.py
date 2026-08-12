@@ -65,7 +65,7 @@ from z_apply_core.stream_events import (
 
 logger = logging.getLogger(__name__)
 
-GOAL_STALL_LIMIT = 3
+GOAL_STALL_LIMIT = 2
 
 
 def decide_goal_stall(
@@ -610,9 +610,11 @@ def build_orchestrator_middleware(
         NoProgressGuardMiddleware(
             browser=active_browser,
             on_no_progress=router_middleware.reject_active_response,
-            max_stagnant_tool_calls=30,
+            max_stagnant_tool_calls=12,
             max_identical_denials=3,
-            max_non_progress=8,
+            max_non_progress=6,
+            window_size=6,
+            repetition_threshold=3,
         ),
         SerializeBrowserMutationsMiddleware(sink=event_sink, lock=mutation_lock),
         SubagentDispatchMiddleware(

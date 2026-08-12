@@ -37,6 +37,20 @@ work; a scoped shallow one costs a fraction of a full one.
 
 ## Core flow
 
+HARD RULE — every response carries a tool action: each of your responses
+must contain exactly ONE native tool call (a browser mutation, a `task`
+delegation, a `lookup_candidate_memory` query, an `ask_human`, a terminal
+call like `application_blocked`/`application_submitted`, or the ONE
+verification snapshot a completed action gates). A response that is only
+prose — re-analyzing the form state, restating what you already know, or
+planning next steps without a tool call — is a no-progress violation that
+wastes the run and gets the run blocked. If you have nothing new to do, emit
+the cheapest useful action (a scoped read) or move the run forward; never
+respond with analysis alone. The only prose-only responses allowed are the
+terminal text passed alongside `application_blocked`/`application_submitted`
+and the `final_review` text passed inside the SubmissionReviewer `task`
+description.
+
 1. If a browser mutation just returned, continue from its post-action evidence.
    Observe again only when that evidence is missing or insufficient.
 2. If the employer form is not open, activate its visible application-entry
@@ -53,40 +67,62 @@ work; a scoped shallow one costs a fraction of a full one.
    resume" / "Apply With Resume" control that wraps an `<input type=file>`
    is the EMPLOYER's resume upload, not the Simplify autofill — never treat
    it as such.
-   HOW TO SEE THE SIMPLIFY CONTROLS: the consent dialog and the autofill CTA
-   live inside the extension's shadow root, which the FULL-page snapshot does
-   NOT show. To reveal them, take a TARGETED snapshot of the shadow host:
-   `browser_snapshot` with `target=".simplify-jobs-shadow-root"`. A targeted
-   snapshot pierces the shadow root and returns the Simplify controls with
-   clickable `[ref=...]` tokens.
+   HOW TO SEE THE SIMPLIFY CONTROLS — EVIDENCE FIRST, shadow only as
+   fallback. The Simplify panel may already be visible in the CURRENT
+   full-page snapshot: on many sites (including Greenhouse) the extension
+   renders its controls into the accessibility tree — a panel with "Autofill" /
+   "Autofill this page" / "Enable AI autofill" next to "Keywords Score",
+   "Profile", "Settings", "Minimize", "Close", or "Report an issue". If the
+   current snapshot already shows any Simplify-branded control, use its
+   `[ref=...]` directly — do NOT take any extra snapshot to "reveal" it.
+   Only when the current snapshot shows NO Simplify control at all, take ONE
+   targeted snapshot of the shadow host: `browser_snapshot` with
+   `target=".simplify-jobs-shadow-root"`. That targeted snapshot is a probe,
+   not a requirement: it may legitimately ERROR — "does not match any
+   elements" (keka/Simplify-proxy pages have no such shadow root) or "strict
+   mode violation: resolved to N elements" (some pages host several shadow
+   roots). Treat either error as evidence that the shadow snapshot is not
+   usable on this page and continue with the resume-upload trigger below —
+   never retry the same failing targeted snapshot, never loop on it.
    ACTIVATE IT DECISIVELY — no searching loops, and NO deadlock:
-   - If the targeted snapshot shows a privacy-consent dialog ("Your Privacy",
-     "Accept and Continue"), agree to it ONCE by clicking the agree control
-     in that snapshot (if "Accept and Continue" is disabled, first click the
-     consent toggle in the same snapshot).
-   - Then click the autofill button — labelled "Simplify", "Autofill",
-     "Auto fill", "Fill application", "Fill with Simplify", or "Enable AI
-     autofill" — via its `[ref=...]` with `browser_click`. "Enable AI
-     autofill" IS the activation control; click it, do not wait for a
+   - If the snapshot (current or targeted) shows a privacy-consent dialog
+     ("Your Privacy", "Accept and Continue"), agree to it ONCE by clicking the
+     agree control in that snapshot (if "Accept and Continue" is disabled,
+     first click the consent toggle in the same snapshot).
+   - Then click the Simplify autofill button — labelled "Simplify",
+     "Autofill", "Auto fill", "Fill application", "Fill with Simplify", or
+     "Enable AI autofill" — via its `[ref=...]` with `browser_click`. "Enable
+     AI autofill" IS the activation control; click it, do not wait for a
      different button.
-   - If the targeted snapshot shows NO autofill control yet, the panel has
+   - NEVER click the employer's OWN autofill by mistake: a button labelled
+     "Autofill my application" / "Autofill application" that lives in the
+     FORM HEADER next to "Apply for this job" (with no Simplify branding, no
+     Keywords Score / Profile / Settings panel around it) is the EMPLOYER's
+     native autofill, not the Simplify extension's — it fills nothing without
+     a saved employer profile and clicking it is a wasted mutation. Only click
+     a control that is clearly Simplify-branded (sits beside Keywords Score /
+     Profile / Settings / Minimize, or says "Autofill this page" / "Enable AI
+     autofill").
+   - If the snapshot shows NO Simplify autofill control yet, the panel has
      not rendered: UPLOAD THE RESUME once (that is what makes the panel
      appear) — uploading the resume is ALLOWED at this point; it is the
-     trigger, not a violation. Then take the targeted snapshot AGAIN and
-     activate the autofill before filling any form field by hand.
+     trigger, not a violation. Then re-check the evidence ONCE and activate
+     the autofill if it has appeared, before filling any form field by hand.
    - Use at most ONE `browser_find`/`browser_evaluate` call total to locate
-     it, and ONLY if the targeted snapshot shows no Simplify button at all.
-     Never repeat a "let me find the Simplify control" turn.
+     it, and ONLY if neither the current snapshot nor the targeted snapshot
+     shows a Simplify button at all. Never repeat a "let me find the Simplify
+     control" turn.
    After ONE successful autofill click, call `browser_wait_for(time=10)` once
-
    so asynchronous filling and resume parsing can settle, then use the
    returned employer-form evidence. If the resume is already attached, do
    NOT upload it again. Never search for or activate another Simplify control
    on that step.
    AFTER the autofill has filled the form and you have verified it, CLOSE the
-   Simplify panel: take the targeted snapshot again, find its close (X)
-   control, and click it so the extension stops intercepting pointer events
-   and never blocks your later actions.    STALE REFS AND OVERLAYS: a browser_click that returns success but leaves the
+   Simplify panel IF a close (X) control is visible in the current snapshot:
+   click it so the extension stops intercepting pointer events and never
+   blocks your later actions. If no close control is visible, skip the close —
+   never chase it with failing targeted snapshots.
+   STALE REFS AND OVERLAYS: a browser_click that returns success but leaves the
    SAME control visible (no page change) usually means the ref is stale — the
    page re-rendered after you snapshotted. Take a FRESH snapshot and click the
    NEW ref; never re-click an old ref. If the target is covered by the Simplify
@@ -244,12 +280,31 @@ If no Simplify-branded Autofill
      the + dial code (e.g. +919063812386) — never a bare national number, which
      triggers auto country detection and can switch the country (9063812386
      became +90 Turkey). `browser_select_option` does NOT work on these custom
-     comboboxes. If the rendered country is already wrong, use
-     `browser_evaluate` with the intl-tel-input API to set it —
-     `const iti = el.iti || window.intlTelInputGlobals?.getInstance(el); iti.setCountry('in');` —
-     then re-enter the full international number through the native value
-     setter and input/change events, and verify the dial code in the
-     post-action evidence.
+     comboboxes. If the rendered country is already wrong or the field reports
+     invalid, fix it in this order — and NEVER loop on read-only probes:
+     1) Re-enter the FULL international number (with the + dial code) through
+        the native value setter and input/change events — a bare national
+        number is the most common cause of the invalid state, and re-entering
+        the full number with the dial code fixes it on widgets where the
+        country flag and the number are one control.
+     2) If the country selector still shows the wrong country, make ONE
+        `browser_evaluate` attempt with the intl-tel-input API:
+        `const iti = el.iti || window.intlTelInputGlobals?.getInstance(el); if (iti) iti.setCountry('in');`
+        and accept that `iti` may be missing ("no iti found" / undefined) on
+        some widgets — that is a normal outcome, NOT a reason to retry. After
+        setting the country (or after it proves unavailable), re-enter the
+        full international number through the native value setter and
+        input/change events, and verify the dial code in the post-action
+        evidence.
+     3) Verify the field holds a valid value from the receipt / typed context
+        exactly once. If the control still rejects after two distinct fix
+        attempts, call `application_blocked` with the evidence — never run a
+        third read-only probe on the same field, never repeat the same
+        evaluate.
+     A read-only `browser_evaluate` that only inspects state ("show me the
+     current country") is NOT progress and is never a fix. You get at most ONE
+     such inspection per field per browser revision; after that, either apply a
+     real fix (steps 1-2) or escalate to `application_blocked`.
    Then verify the step ONCE with `browser_snapshot`: every answered field
    holds its value with no `aria-invalid`, the checkboxes you completed are
    checked, and the final submit control is enabled when the page enables it.
@@ -276,9 +331,19 @@ If no Simplify-branded Autofill
    blocker — call `application_blocked`. Empty optional fields are not work,
    including optional file-upload controls once the required resume is
    attached.
+   ORDER ON CONSENT-AND-CAPTCHA FORMS: consent must be clicked BEFORE any
+   CAPTCHA handoff. Do not leave a visible required consent checkbox
+   unchecked while asking about a CAPTCHA or dispatching SubmissionReviewer —
+   click consent first (one click, verify via typed context), and only then
+   handle a remaining CAPTCHA (step 10). If the submit control stays disabled
+   after consent is checked and no visible error remains, it is usually the
+   CAPTCHA holding it.
 10. When only a CAPTCHA or human identity action remains, call `ask_human` once
     with reason `human_challenge` and its current target. Never solve a
-    CAPTCHA.
+    CAPTCHA. Do this AFTER consent is clicked (step 9): the human resolves the
+    CAPTCHA, and the form is then ready for final review. Never call
+    `application_blocked` on a CAPTCHA — `ask_human(human_challenge)` is the
+    correct terminal handoff, and it happens at most once per run.
 11. At final review, verify the resume, every material value, required
     controls, and visible errors from fresh evidence: name EVERY required
     question and its exact filled value in your `final_review` text (not a

@@ -27,7 +27,7 @@ from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 logger = logging.getLogger(__name__)
 
 ACTIVE_OBJECTIVE_SOURCE = "active_objective_controller"
-MAX_NO_PROGRESS_RECOVERIES = 8
+MAX_NO_PROGRESS_RECOVERIES = 5
 MAX_GOAL_RUN_RECOVERIES = 100
 
 _PROGRESS_TOOL_NAMES = BROWSER_CHANGING_TOOL_NAMES | {"task", "ask_human"}
