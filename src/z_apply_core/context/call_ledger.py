@@ -35,8 +35,10 @@ class RunCallLedger:
     estimate otherwise.
     """
 
-    def __init__(self, *, job_url: str = "") -> None:
+    def __init__(self, *, job_url: str = "", prompt_variant: str | None = None, prompt_sha: str | None = None) -> None:
         self._job_url = job_url
+        self._prompt_variant = prompt_variant
+        self._prompt_sha = prompt_sha
         self._entries: list[LedgerEntry] = []
         self._total_input = 0
         self._total_output = 0
@@ -45,6 +47,11 @@ class RunCallLedger:
     @property
     def job_url(self) -> str:
         return self._job_url
+
+    def set_prompt_identity(self, variant: str, sha: str) -> None:
+        """Record which orchestrator prompt variant this run executed."""
+        self._prompt_variant = variant
+        self._prompt_sha = sha
 
     @property
     def entries(self) -> tuple[LedgerEntry, ...]:
@@ -65,6 +72,10 @@ class RunCallLedger:
     @property
     def total_cost_usd(self) -> float:
         return self._total_cost
+
+    @property
+    def total_sha(self) -> str:
+        return self._prompt_sha or ""
 
     def record(
         self,
@@ -119,6 +130,8 @@ class RunCallLedger:
         return {
             "run_id": run_id,
             "job_url": self._job_url,
+            "prompt_variant": getattr(self, "_prompt_variant", None),
+            "prompt_sha": getattr(self, "_prompt_sha", None),
             "status": status,
             "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "calls": [

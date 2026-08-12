@@ -52,6 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--task", default=DEFAULT_RUN_TASK)
     run.add_argument("--provider", choices=[p.name for p in list_providers()])
     run.add_argument("--no-vnc", action="store_true")
+    run.add_argument("--prompt-variant", default=None, help="orchestrator prompt variant filename (e.g. orchestrator-v2.md)")
     run.set_defaults(handler=run_command)
 
     providers = subcommands.add_parser(
@@ -72,7 +73,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_command(args: argparse.Namespace) -> int:
-    ledger = RunCallLedger(job_url=args.job_url)
+    from z_apply_core.agents.prompts import prompt_sha, resolve_orchestrator_prompt
+
+    variant = resolve_orchestrator_prompt(args.prompt_variant)
+    ledger = RunCallLedger(job_url=args.job_url, prompt_variant=variant, prompt_sha=prompt_sha(variant))
     renderer = RichStreamRenderer(ledger=ledger)
     configure_logging(renderer.console)
     state: RunState | None = None
@@ -83,6 +87,8 @@ def run_command(args: argparse.Namespace) -> int:
                 args.job_url,
                 task=args.task,
                 live_view=not args.no_vnc,
+                prompt_variant=variant,
+                prompt_sha=ledger.total_sha,
                 sink=renderer,
                 provider_name=args.provider,
                 call_ledger=ledger,

@@ -14,6 +14,8 @@ class RunState(TypedDict, total=False):
     task: str
     live_view: bool
     snapshot: str
+    prompt_variant: str
+    prompt_sha: str
     auth_status: str
     auth_summary: str
     auth_model_id: str
@@ -24,12 +26,21 @@ class RunState(TypedDict, total=False):
     browser_tools: Sequence[BaseTool]
 
 
-def initial_state(job_url: str, *, task: str, live_view: bool) -> RunState:
+def initial_state(
+    job_url: str,
+    *,
+    task: str,
+    live_view: bool,
+    prompt_variant: str | None = None,
+    prompt_sha: str | None = None,
+) -> RunState:
     return {
         "job_url": job_url,
         "task": task,
         "live_view": live_view,
         "snapshot": "",
+        "prompt_variant": prompt_variant or "",
+        "prompt_sha": prompt_sha or "",
         "auth_status": "",
         "auth_summary": "",
         "auth_model_id": "",
