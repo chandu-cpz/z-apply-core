@@ -75,6 +75,7 @@ class PoolStats:
     launch_failures: int = 0
     launch_retries: int = 0
     capacity_rejections: int = 0
+    capacity_waits: int = 0
     closes: int = 0
     close_failures: int = 0
     quarantine_count: int = 0
@@ -175,6 +176,7 @@ class BrowserPool:
         self._retry_backoff_base = retry_backoff_base
         self._leases: dict[str, BrowserLease] = {}
         self._lock = asyncio.Lock()
+        self._release_event = asyncio.Event()
         self._stats = PoolStats()
 
     # -- lifecycle -----------------------------------------------------------
@@ -203,28 +205,46 @@ class BrowserPool:
     # -- acquire / release ---------------------------------------------------
 
     async def acquire(
-        self, run_id: str, *, display: str | None = None
+        self, run_id: str, *, display: str | None = None, wait_timeout: float = 660.0
     ) -> BrowserLease:
         """Lease a slot and launch a dedicated instance for ``run_id``.
 
         ``display`` (optional) is the run's own X display; it is passed per-
         launch via env so concurrent runs each render on their own screen.
+        ``wait_timeout`` bounds how long an at-capacity run waits for a slot
+        before raising ``PoolCapacityError``; it defaults to slightly more
+        than the backend's retained-browser TTL (``RETAINED_BROWSER_TTL_SECONDS``
+        = 600s) so a run waiting on a retained browser acquires it when the
+        TTL releases the slot instead of failing and being re-queued (which
+        would just wait again).
 
-        Raises ``PoolCapacityError`` when at capacity, ``BrowserLeaseError``
-        when the browser could not be launched/verified after retries, and
-        ``ProfileSlotError`` when no slot is available or reset fails.
+        Raises ``PoolCapacityError`` when still at capacity after the wait,
+        ``BrowserLeaseError`` when the browser could not be launched/verified
+        after retries, and ``ProfileSlotError`` when no slot is available or
+        reset fails.
         """
-        self._stats.max_active_seen = max(self._stats.max_active_seen, self.active_count)
-        async with self._lock:
-            if run_id in self._leases:
-                raise BrowserLeaseError(f"browser lease already exists for run {run_id}")
-            if self.active_count >= self._max_active:
+        deadline = time.monotonic() + wait_timeout
+        while True:
+            self._stats.max_active_seen = max(self._stats.max_active_seen, self.active_count)
+            async with self._lock:
+                if run_id in self._leases:
+                    raise BrowserLeaseError(f"browser lease already exists for run {run_id}")
+                if self.active_count < self._max_active:
+                    slot = await self._slots.acquire(run_id)
+                    break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 self._stats.capacity_rejections += 1
                 raise PoolCapacityError(
-                    f"pool at capacity ({self.active_count}/{self._max_active}); "
-                    f"cannot launch a browser for run {run_id}"
+                    f"pool at capacity ({self.active_count}/{self._max_active}) after "
+                    f"{wait_timeout:.0f}s wait; cannot launch a browser for run {run_id}"
                 )
-            slot = await self._slots.acquire(run_id)
+            # A slot is held by a retained/terminal browser: wait for a release
+            # signal (bounded, so a stuck pool still surfaces as capacity error).
+            self._stats.capacity_waits += 1
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._release_event.wait(), timeout=min(remaining, 20.0))
+            self._release_event.clear()
         # Launch outside the lock: serialization covers selection, not the
         # (possibly slow) launch. Retry transient launch failures.
         lease: BrowserLease | None = None
@@ -278,6 +298,8 @@ class BrowserPool:
         self._stats.retire_reasons[reason] = self._stats.retire_reasons.get(reason, 0) + 1
         await self._close_bounded(lease)
         await self._release_slot(run_id, lease.slot, reason=reason)
+        # Wake any waiter blocked in acquire() so it can grab the freed slot.
+        self._release_event.set()
 
     async def close(self) -> None:
         """Close every lease and reset all slots."""

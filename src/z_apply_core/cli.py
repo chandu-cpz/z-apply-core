@@ -104,6 +104,12 @@ def run_command(args: argparse.Namespace) -> int:
         # the only record of what the run spent.
         renderer.print_call_ledger()
         status = "interrupted" if interrupted else _run_status(state)
+        if state is not None:
+            ledger.set_terminal_reason(str(state.get("orchestrator_summary", "") or ""))
+        elif not interrupted:
+            # The run crashed before any state was produced; keep the record
+            # queryable with an explicit sentinel instead of an empty string.
+            ledger.set_terminal_reason("unavailable: no run state produced")
         _persist_call_ledger(ledger, state, status)
     if interrupted:
         return 130

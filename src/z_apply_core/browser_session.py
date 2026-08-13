@@ -472,8 +472,9 @@ class BrowserSession:
                         "input exactly"
                         if len(names) == 1
                         else (
-                            "Pass one of the input name attributes to browser_click_upload "
-                            f"to target it exactly: {names}"
+                            "Pass one of the input name/id attributes to "
+                            "browser_click_upload to target it exactly: "
+                            f"{names}"
                         )
                     )
                     raise BrowserToolExecutionError(
@@ -566,7 +567,9 @@ class BrowserSession:
         empty_inputs = await self._empty_file_inputs(tab.page)
         if name:
             for control in empty_inputs:
-                if await control.get_attribute("name") == name:
+                attr_name = await control.get_attribute("name") or ""
+                attr_id = await control.get_attribute("id") or ""
+                if attr_name == name or attr_id == name:
                     return control
         if len(empty_inputs) == 1:
             return empty_inputs[0]
@@ -591,13 +594,19 @@ class BrowserSession:
 
     @staticmethod
     async def _file_input_names(page: Any) -> list[str]:
-        """Name attributes of every empty file input, for disambiguation hints."""
+        """``name``/``id`` attributes of every empty file input, for disambiguation hints.
+
+        Boards differ: Greenhouse names its inputs ``resume``/``cover_letter``
+        via ``id`` with an empty ``name``, while easy-resume and others set
+        ``name``. Either attribute identifies the control to
+        ``browser_click_upload``.
+        """
         controls = page.locator('input[type="file"]')
         names: list[str] = []
         for index in range(await controls.count()):
             control = controls.nth(index)
             if await control.is_enabled() and not await control.input_value():
-                attr = await control.get_attribute("name")
+                attr = await control.get_attribute("name") or await control.get_attribute("id")
                 if attr:
                     names.append(attr)
         return names

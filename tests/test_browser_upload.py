@@ -90,6 +90,54 @@ class BrowserUploadTests(unittest.TestCase):
         self.assertEqual(session.pending_atomic_upload_target, "")
         self.assertIn("Files attached directly", result)
 
+    def test_upload_resolves_ambiguous_empty_inputs_by_id_when_name_is_empty(self) -> None:
+        """Greenhouse-style inputs have an empty name and an id — match by id."""
+        session, _resolver = self._session()
+
+        def control(identifier: str) -> MagicMock:
+            ctrl = MagicMock()
+            ctrl.get_attribute = AsyncMock(
+                side_effect=lambda attr: {"name": "", "id": identifier}.get(attr)
+            )
+            return ctrl
+
+        resume, cover_letter = control("resume"), control("cover_letter")
+        tab = MagicMock()
+        tab.resolve_target = AsyncMock(return_value=None)
+        tab.page = MagicMock()
+
+        with patch(
+            "z_apply_core.browser_session.BrowserSession._empty_file_inputs",
+            new=AsyncMock(return_value=[resume, cover_letter]),
+        ):
+            resolved = asyncio.run(
+                session._resolve_upload_file_input(tab, "e366", name="resume")
+            )
+
+        self.assertIs(resolved, resume)
+
+    def test_upload_name_match_still_wins_over_other_id(self) -> None:
+        """An input whose name matches is selected even when ids differ."""
+        session, _resolver = self._session()
+
+        named = MagicMock()
+        named.get_attribute = AsyncMock(
+            side_effect=lambda attr: {"name": "cv", "id": "other"}.get(attr)
+        )
+        tab = MagicMock()
+        tab.resolve_target = AsyncMock(return_value=None)
+        tab.page = MagicMock()
+
+        with patch(
+            "z_apply_core.browser_session.BrowserSession._empty_file_inputs",
+            new=AsyncMock(return_value=[named]),
+        ):
+            resolved = asyncio.run(
+                session._resolve_upload_file_input(tab, "e366", name="cv")
+            )
+
+        self.assertIs(resolved, named)
+
     def test_upload_drains_layer_chooser_then_attaches_directly(self) -> None:
         session, resolver = self._session()
         layer_calls = 0

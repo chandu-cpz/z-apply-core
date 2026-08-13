@@ -11,7 +11,6 @@ import contextlib
 import hashlib
 import logging
 import mimetypes
-import os
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
@@ -280,8 +279,12 @@ class CoreRunHandle:
 
 class ZApplyCore:
     def __init__(self, config: CoreIntegrationConfig | None = None) -> None:
-        configured_limit = int(os.getenv("Z_APPLY_MAX_ACTIVE_RUNS", "3"))
-        self._config = config or CoreIntegrationConfig(max_active_runs=configured_limit)
+        # Concurrency is decided by ONE clamped reader
+        # (browser_workspace._configured_max_active_runs reads
+        # Z_APPLY_MAX_ACTIVE_RUNS, clamped 1..8) and threaded here by app
+        # wiring; a raw env read here would be a second, unclamped authority
+        # that app.py's explicit config already shadows.
+        self._config = config or CoreIntegrationConfig()
         self._runs: dict[str, _Run] = {}
         self._provider: ModelProvider | None = None
         self._started = False
@@ -621,6 +624,8 @@ class ZApplyCore:
             )
             if outcome is RunOutcome.SUBMITTED_VERIFIED:
                 await self._workspace.close_run(run.run_id)
+            if run.call_ledger is not None:
+                run.call_ledger.set_terminal_reason(summary)
             await self._emit_run_ledger(run, status=str(status))
             await self._emit(run, "run.terminal", {"outcome": outcome, "summary": summary})
             assert run.done is not None
@@ -664,6 +669,8 @@ class ZApplyCore:
             summary=summary,
             finished_at=utc_now(),
         )
+        if run.call_ledger is not None:
+            run.call_ledger.set_terminal_reason(summary)
         await self._emit_run_ledger(run, status=outcome.value)
         await self._emit(
             run,
@@ -688,7 +695,15 @@ class ZApplyCore:
         after ``RETAINED_BROWSER_TTL_SECONDS`` the slot is released instead of
         holding pool capacity forever.
         """
-        if outcome in (RunOutcome.SUBMITTED_VERIFIED, RunOutcome.CANCELLED):
+        if outcome is RunOutcome.CANCELLED:
+            # A cancelled run must release its browser immediately: it is not
+            # retained for inspection (unlike blocked/failed), so without this
+            # the slot leaks forever and starves the pool.
+            if run.view.browser_tab_state is BrowserTabState.OPEN:
+                await self._workspace.close_run(run.run_id)
+                run.view = replace(run.view, browser_tab_state=BrowserTabState.CLOSED)
+            return
+        if outcome in (RunOutcome.SUBMITTED_VERIFIED,):
             return
         if run.view.browser_tab_state is not BrowserTabState.OPEN:
             return

@@ -138,6 +138,32 @@ class LedgerPersistenceTests(unittest.TestCase):
             self.assertEqual(record["totals"]["input_tokens"], 1000)
             self.assertAlmostEqual(record["totals"]["cost_usd"], 0.0000994, places=6)
 
+    def test_terminal_reason_flows_into_record(self) -> None:
+        import json
+        from tempfile import TemporaryDirectory
+
+        with TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            ledger = RunCallLedger(job_url="https://example.test/job")
+            ledger.record(
+                agent="orchestrator",
+                model_id="deepseek-v4-flash",
+                provider="opencodego",
+                input_tokens=100,
+                output_tokens=10,
+            )
+            ledger.set_terminal_reason(
+                "stuck_loop: the application loop repeatedly made no progress"
+            )
+            history, _run_copy = ledger.write_history(base, run_id="run-1", status="blocked")
+
+            record = json.loads(history.read_text(encoding="utf-8").strip().splitlines()[-1])
+            self.assertEqual(record["status"], "blocked")
+            self.assertEqual(
+                record["terminal_reason"],
+                "stuck_loop: the application loop repeatedly made no progress",
+            )
+
     def test_gateway_cost_wins_over_estimate(self) -> None:
         ledger = RunCallLedger()
 

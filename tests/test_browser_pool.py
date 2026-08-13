@@ -118,12 +118,29 @@ class BrowserPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(lease.slot.state, "pristine")
 
     async def test_capacity_rejects_over_max_active(self) -> None:
+        # wait_timeout=0: capacity must reject immediately, not wait for a slot.
         await self.pool.provision()
-        await self.pool.acquire("run-1")
-        await self.pool.acquire("run-2")
+        await self.pool.acquire("run-1", wait_timeout=0)
+        await self.pool.acquire("run-2", wait_timeout=0)
         with self.assertRaises(PoolCapacityError):
-            await self.pool.acquire("run-3")
+            await self.pool.acquire("run-3", wait_timeout=0)
         self.assertEqual(self.pool.stats.capacity_rejections, 1)
+
+    async def test_acquire_waits_for_a_freed_slot_then_succeeds(self) -> None:
+        """Positive coverage of the bounded wait: a waiter acquires once a slot frees."""
+        await self.pool.provision()
+        await self.pool.acquire("run-1", wait_timeout=0)
+        await self.pool.acquire("run-2", wait_timeout=0)
+
+        async def release_after_delay() -> None:
+            await asyncio.sleep(0.2)
+            await self.pool.release("run-1")
+
+        release_task = asyncio.create_task(release_after_delay())
+        lease = await self.pool.acquire("run-3", wait_timeout=5)
+        await release_task
+        self.assertIsNotNone(lease)
+        self.assertEqual(self.pool.active_count, 2)
 
     async def test_duplicate_run_id_is_rejected(self) -> None:
         await self.pool.provision()

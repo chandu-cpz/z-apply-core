@@ -39,6 +39,7 @@ class RunCallLedger:
         self._job_url = job_url
         self._prompt_variant = prompt_variant
         self._prompt_sha = prompt_sha
+        self._terminal_reason: str = ""
         self._entries: list[LedgerEntry] = []
         self._total_input = 0
         self._total_output = 0
@@ -52,6 +53,15 @@ class RunCallLedger:
         """Record which orchestrator prompt variant this run executed."""
         self._prompt_variant = variant
         self._prompt_sha = sha
+
+    def set_terminal_reason(self, reason: str) -> None:
+        """Record the terminal reason (block reason or submit confirmation).
+
+        Called after the run ends so each ledger record carries *why* the run
+        stopped — the raw material for comparing prompt variants and mining
+        failure modes without digging through observation files.
+        """
+        self._terminal_reason = reason
 
     @property
     def entries(self) -> tuple[LedgerEntry, ...]:
@@ -133,6 +143,7 @@ class RunCallLedger:
             "prompt_variant": getattr(self, "_prompt_variant", None),
             "prompt_sha": getattr(self, "_prompt_sha", None),
             "status": status,
+            "terminal_reason": getattr(self, "_terminal_reason", ""),
             "ended_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
             "calls": [
                 {

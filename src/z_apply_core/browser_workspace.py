@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -15,8 +16,23 @@ from z_apply_core.virtual_display import VirtualDisplaySession
 logger = logging.getLogger(__name__)
 
 _RETURN_CONTROL_SNAPSHOT_TIMEOUT_SECONDS = 15.0
+_CLOSE_GATE_TIMEOUT_SECONDS = 10.0
 
 DEFAULT_MAX_ACTIVE_RUNS = 3
+
+
+def _configured_max_active_runs() -> int:
+    """Concurrency knob shared with the backend scheduler.
+
+    ``Z_APPLY_MAX_ACTIVE_RUNS`` bounds simultaneous browser instances: the
+    backend scheduler, the browser pool, and the profile-slot count all read
+    it, so one env var scales the whole fleet. Clamped to the scheduler's own
+    1..8 validation range.
+    """
+    try:
+        return max(1, min(8, int(os.getenv("Z_APPLY_MAX_ACTIVE_RUNS", "3"))))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_ACTIVE_RUNS
 
 
 class BrowserControlGate:
@@ -155,7 +171,8 @@ class BrowserWorkspace:
 
     def __init__(self, *, pool: BrowserPool | None = None) -> None:
         self.gate = BrowserControlGate()
-        self._pool = pool or BrowserPool(max_active=DEFAULT_MAX_ACTIVE_RUNS)
+        max_active = _configured_max_active_runs()
+        self._pool = pool or BrowserPool(max_active=max_active, slot_count=max_active)
         self._leases: dict[str, RunBrowserLease] = {}
         self._start_lock = asyncio.Lock()
         self._creation_lock = asyncio.Lock()
@@ -269,8 +286,20 @@ class BrowserWorkspace:
         lease = self._leases.pop(run_id, None)
         if lease is None:
             return
-        async with self.gate.mutation():
-            await lease.close_pages()
+        # Bound the gate wait: if a human holds workspace control, a cancel
+        # must not block indefinitely (the pool slot would leak). After the
+        # timeout, close the instance anyway — pages are closed outside the
+        # gate below.
+        try:
+            async with asyncio.timeout(_CLOSE_GATE_TIMEOUT_SECONDS):
+                async with self.gate.mutation():
+                    await lease.close_pages()
+        except TimeoutError:
+            logger.warning(
+                "close_run(%s): human holds the workspace gate; closing instance "
+                "without page teardown",
+                run_id,
+            )
         # Close the dedicated instance (bounded) and reset the slot from the
         # sealed master. No sync-back: the run's cookies/caches are discarded.
         await self._pool.release(run_id, reason="run_complete")

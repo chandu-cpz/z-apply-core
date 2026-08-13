@@ -76,7 +76,34 @@ _AGENT_TOOL_DESCRIPTIONS["browser_evaluate"] = (
     "and never counts as a write. "
     "If the evaluate receipt reports `changed: false`, the framework ignored the "
     "write - do not repeat it. Never use evaluation to bypass validation, "
-    "fabricate a candidate value, or solve a CAPTCHA."
+    "fabricate a candidate value, or solve a CAPTCHA. "
+    "For a stubborn SELECT/COMBOBOX the recipes are: native `<select>` - assign "
+    "through the native setter and fire change: `const s = "
+    "Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; "
+    "s.call(el, 'VALUE'); el.dispatchEvent(new Event('change', {bubbles: true}));` "
+    "(a plain `el.value = ...` is ignored by React). Custom combobox with an "
+    "OPEN menu - click the option by exact text: `const opt = "
+    "[...document.querySelectorAll('[role=\"option\"]')].find(o => "
+    "o.textContent.trim() === 'VALUE'); if (!opt) return false; "
+    "opt.dispatchEvent(new MouseEvent('mousedown', {bubbles: true})); opt.click(); "
+    "return true;` (react-select selects on mousedown). Searchable combobox - set "
+    "the input through the native setter, dispatch a bubbling `input`, and in the "
+    "same evaluate click the option only if it is already in the DOM; otherwise "
+    "return a follow-up signal so the next turn re-snapshots and clicks the "
+    "filtered option."
+)
+
+_AGENT_TOOL_DESCRIPTIONS["browser_snapshot"] = (
+    "Capture an accessibility snapshot of the current page (ARIA tree with "
+    "refs). This is the full-evidence tool: use it whenever you actually need "
+    "page structure, option lists, or field values - browser_observe is only a "
+    "cheap change probe and returns no page evidence. Prefer mutation receipts "
+    "and the injected post-action context first; they already carry a bounded "
+    "view. SCOPE IT TO STAY CHEAP: pass `target=<ref>` to snapshot only that "
+    "subtree (e.g. the form container's ref, or a specific section) instead of "
+    "the whole page, and pass a `depth` (e.g. depth=2) for a shallow tree when "
+    "you only need a section or a few controls. Omit both only when you need "
+    "the complete page tree."
 )
 
 INITIAL_AGENT_BROWSER_TOOLS = (
@@ -276,10 +303,11 @@ def make_click_upload_tool(
     ) -> str | ToolMessage:
         """Attach the configured resume directly to a file control without a native chooser.
 
-        ``name`` targets a specific hidden file input by its ``name`` attribute
-        when the page has several empty upload controls (e.g. an easy-resume
-        field plus the form's own resume field). Discover names via
-        browser_evaluate on ``input[type=file]``.
+        ``name`` targets a specific hidden file input by its ``name`` OR ``id``
+        attribute when the page has several empty upload controls (e.g. an
+        easy-resume field plus the form's own resume field). Discover the
+        attributes via browser_evaluate on ``input[type=file]``; pass whichever
+        identifier the page exposes (Greenhouse inputs are often id-only).
         """
         resolved_paths = paths or configured_paths
         fallback_note = ""
@@ -331,37 +359,27 @@ def make_click_upload_tool(
     return browser_click_upload
 
 
-def make_observe_tool(
-    observer: BrowserObserver,
-    revision_provider: Callable[[], int | None] | None = None,
-) -> BaseTool:
-    """Build the Core-only revisioned browser observation operation.
+def make_observe_tool(observer: BrowserObserver) -> BaseTool:
+    """Build the Core-only cheap browser state probe for the model.
 
-    When a revision provider is given, the result carries the typed
-    ``browser_revision`` in the tool message's ``additional_kwargs`` so context
-    budgeting can reference the evidence store without re-parsing rendered text.
+    The tool returns only a compact state signal (revision, change status, URL,
+    title) - never the full evidence tree - so casual state checks stop dumping
+    the whole page into the conversation history. It deliberately does NOT stamp
+    ``browser_revision`` as evidence-carrying: the capability context then
+    re-injects the bounded evidence on the next turn instead of skipping it.
     """
 
     @tool
-    async def browser_observe(
-        tool_call_id: Annotated[str, InjectedToolCallId],
-    ) -> str | ToolMessage:
-        """Inspect the current page and return revisioned accessibility evidence.
+    async def browser_observe() -> str:
+        """Return a compact browser state probe: revision, change status, URL, title.
 
-        Prefer this for normal current-state inspection. Use browser_snapshot only
-        when the observation is insufficient for an ambiguous DOM or shadow-DOM task.
+        This is a cheap probe, NOT an evidence tool: it returns no page evidence,
+        only whether the page changed since the last observation and whether your
+        current refs are still valid. For the full accessibility tree (option
+        lists, field-by-field verification, ambiguous or shadow DOM), call
+        browser_snapshot instead.
         """
-        text = await observer()
-        revision = revision_provider() if revision_provider is not None else None
-        if revision is None:
-            return text
-        message = ToolMessage(
-            content=text,
-            tool_call_id=tool_call_id,
-            name="browser_observe",
-            additional_kwargs={"browser_revision": revision},
-        )
-        return cast("str | ToolMessage", message)
+        return await observer()
 
     browser_observe.handle_tool_error = True
     return browser_observe
@@ -501,6 +519,15 @@ class BrowserToolRegistry:
                     return result
             if spec.name not in EVIDENCE_RESULT_TOOL_NAMES | RECEIPT_RESULT_TOOL_NAMES:
                 return result
+            if spec.name == "browser_snapshot":
+                target = str(arguments.get("target") or "").strip().casefold()
+                if target and target != "html":
+                    # A scoped subtree snapshot (target=<ref>) is a view the
+                    # model asked for, not full-page evidence. Leave it
+                    # unstamped so the capability context still injects the
+                    # bounded full-page view on the next turn instead of
+                    # skipping it.
+                    return result
             return ToolMessage(
                 content=result,
                 tool_call_id=tool_call_id,
