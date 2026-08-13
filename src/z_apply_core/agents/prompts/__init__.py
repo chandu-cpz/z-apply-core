@@ -11,12 +11,27 @@ def _load_tool_call_rules() -> str:
 
 
 @lru_cache
-def load_prompt(name: str) -> str:
+def load_prompt(name: str, *, with_rules: bool = True) -> str:
+    """Load a prompt body, optionally prepending the shared tool-call rules.
+
+    ``with_rules=False`` is for specialists whose prompt and tool descriptions
+    already cover their own loop/browser discipline (AnswerWriter, Vision) and
+    that have no form-mutation tools — prepending the generic browser rules
+    only adds tokens and irrelevant conditionals for small/flash models.
+    """
     body = resources.files(__name__).joinpath(name).read_text(encoding="utf-8")
+    if not with_rules:
+        return body
     return f"{_load_tool_call_rules()}\n\n{body}"
 
 
 DEFAULT_ORCHESTRATOR_PROMPT = "orchestrator.md"
+
+# Preserved pre-rewrite artifact, kept on disk for explicit A/B via the eval
+# harness (--variants orchestrator-legacy.md) but not offered as a live
+# cockpit/eval default: it is 3.5x the size of the compact default and is not
+# a production variant.
+_ARTIFACT_VARIANTS = frozenset({"orchestrator-legacy.md"})
 
 
 @lru_cache
@@ -27,7 +42,7 @@ def list_prompt_variants() -> tuple[str, ...]:
         for path in resources.files(__name__).iterdir()
         if path.name.startswith("orchestrator") and path.name.endswith(".md")
     )
-    variants = sorted(names)
+    variants = sorted(name for name in names if name not in _ARTIFACT_VARIANTS)
     if DEFAULT_ORCHESTRATOR_PROMPT not in variants:
         variants = [DEFAULT_ORCHESTRATOR_PROMPT, *variants]
     return tuple(variants)

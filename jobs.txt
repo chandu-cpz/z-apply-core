@@ -1,0 +1,9 @@
+# Jobs for the continuous application runner (scripts/continuous_apply.py).
+# One job per line. Optional: "URL | task text" to override the objective.
+# Lines starting with # are ignored. The runner skips jobs it already attempted.
+
+https://job-boards.greenhouse.io/insurityindia/jobs/4354932009
+https://toprankers.keka.com/careers/jobdetails/155148?source=linkedin
+https://intugine.freshteam.com/jobs/8R8WVtlUHOKe/Python%20AI
+https://dth.avature.net/en_US/careers/JobDetail?jobId=27564&src=LinkedIn
+https://jobs.ecolab.com/global/en/apply?jobSeqNo=EIYEIEUSR00300453EXTERNALENGLOBAL&step=1&stepname=p
