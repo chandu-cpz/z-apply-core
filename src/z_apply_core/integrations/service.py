@@ -22,7 +22,7 @@ from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.browser_session import ARTIFACT_ROOT
 from z_apply_core.browser_workspace import BrowserWorkspace
 from z_apply_core.context.call_ledger import RunCallLedger
-from z_apply_core.graph import make_router, run_job
+from z_apply_core.graph import run_job
 from z_apply_core.human.broker import (
     BrokeredHumanChannel,
     BrokerRequest,
@@ -307,7 +307,7 @@ class ZApplyCore:
             return
         if self._closing:
             raise CoreShuttingDown()
-        self._provider = get_provider(make_router())
+        self._provider = get_provider()
         self._candidate_memory = CandidateMemory()
         self._telegram = make_configured_human_channel()
         self._started = True

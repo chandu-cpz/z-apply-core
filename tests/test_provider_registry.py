@@ -93,12 +93,6 @@ class ProviderSelectionTests(unittest.TestCase):
 
         self.assertIsInstance(provider, AgnesProvider)
 
-    def test_nim_requires_router(self) -> None:
-        with self.patch_settings(), self.assertRaises(ValueError):
-            get_provider(provider_name="nim")
-        with self.patch_settings(MODEL_PROVIDER="nim"), self.assertRaises(ValueError):
-            get_provider()
-
     def test_no_provider_configured_raises(self) -> None:
         with self.patch_settings(), self.assertRaises(ValueError) as ctx:
             get_provider()
@@ -110,7 +104,7 @@ class ProviderSelectionTests(unittest.TestCase):
 
         self.assertEqual(
             names,
-            ["opengateway", "groq", "agnes", "inferx", "opencodego", "nim"],
+            ["opengateway", "groq", "agnes", "inferx", "opencodego"],
         )
 
     def test_default_provider_name_reflects_env(self) -> None:

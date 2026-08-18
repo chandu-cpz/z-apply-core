@@ -11,7 +11,6 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
-from nim_router import NimRouter
 
 from z_apply_core.agents.authentication import captcha_artifact_path
 from z_apply_core.agents.browser_mutation_serializer import SerializeBrowserMutationsMiddleware
@@ -35,7 +34,6 @@ from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import (
-    ORCHESTRATOR_EXCLUDED_MODEL_IDS,
     ModelRouter,
     build_router_middleware,
 )
@@ -108,7 +106,6 @@ async def run_orchestrator(
     authentication_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
     provider: ModelProvider | None = None,
-    router: NimRouter | None = None,
     resume_path: str = "",
     candidate_memory: CandidateMemory | None = None,
     run_id: str = "",
@@ -125,22 +122,16 @@ async def run_orchestrator(
     configure_z_apply_harness_profile()
 
     if provider is None:
-        if router is None:
-            return OrchestratorRun(
-                "Model routing failed: neither provider nor router was provided.",
-                "",
-                "failed",
-            )
-        provider = get_provider(router)
-    elif router is None and isinstance(provider, NimRouter):
-        router = provider
+        try:
+            provider = get_provider()
+        except ValueError as exc:
+            return OrchestratorRun(f"Model routing failed: {exc}", "", "failed")
 
     try:
         selection = await provider.lease(
             tools=True,
             reasoning=True,
             priority="balanced",
-            excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )
     except (ImportError, ValueError) as exc:
         return OrchestratorRun(f"Model selection failed: {exc}", "", "failed")

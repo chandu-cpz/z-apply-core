@@ -16,7 +16,6 @@ _DEFAULT_RATES: dict[str, tuple[float, float, float | None]] = {
     "agnes": (0.15, 0.40, None),
     "inferx": (0.14, 0.28, 0.0028),  # deepseek-v4-flash-0731
     "opengateway": (0.15, 0.40, None),
-    "nim": (0.15, 0.40, None),
 }
 
 

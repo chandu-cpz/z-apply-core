@@ -4,12 +4,12 @@ import asyncio
 import atexit
 import functools
 import logging
+import os
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Protocol, cast
 
-from langchain_nvidia_ai_endpoints import NVIDIAEmbeddings
 from qdrant_client import QdrantClient, models
 
 from z_apply_core.config import CORE_ROOT
@@ -121,6 +121,19 @@ class EmbeddingClient(Protocol):
     def embed_query(self, text: str) -> list[float]: ...
 
 
+def _default_embeddings() -> EmbeddingClient:
+    """Resolve the default OpenAI-compatible embedding client."""
+    from langchain_openai import OpenAIEmbeddings
+    from pydantic import SecretStr
+
+    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("EMBEDDINGS_API_KEY") or "local"
+    base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("EMBEDDINGS_BASE_URL")
+    kwargs: dict[str, Any] = {"api_key": SecretStr(api_key)}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return cast(EmbeddingClient, OpenAIEmbeddings(**kwargs))
+
+
 class CandidateMemory:
     """Local semantic memory of facts explicitly supplied by the candidate."""
 
@@ -132,7 +145,7 @@ class CandidateMemory:
         collection_name: str = MEMORY_COLLECTION,
     ) -> None:
         self._client = client or QdrantClient(path=str(MEMORY_PATH))
-        self._embeddings = embeddings or cast(EmbeddingClient, NVIDIAEmbeddings())
+        self._embeddings = embeddings or _default_embeddings()
         self._collection_name = collection_name
         self._lock = asyncio.Lock()
         self._closed = False

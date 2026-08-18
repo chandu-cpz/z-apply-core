@@ -137,7 +137,6 @@ async def test_service_limits_concurrent_runs_without_serializing_the_queue(
             event_count=4
         )
 
-    monkeypatch.setattr("z_apply_core.integrations.service.make_router", lambda: object())
     monkeypatch.setattr("z_apply_core.integrations.service.run_job", fake_run_job)
     monkeypatch.setattr(
         "z_apply_core.integrations.service.CandidateMemory",

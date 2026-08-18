@@ -29,10 +29,7 @@ from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import AuthStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
-from z_apply_core.agents.router_middleware import (
-    ORCHESTRATOR_EXCLUDED_MODEL_IDS,
-    build_router_middleware,
-)
+from z_apply_core.agents.router_middleware import build_router_middleware
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.browser_tools import (
     AUTHENTICATION_SPECIALIST_BROWSER_TOOLS,
@@ -216,7 +213,6 @@ async def run_authentication_agent(
             reasoning=True,
             reasoning_effort="low",
             priority="balanced",
-            excluded_model_ids=ORCHESTRATOR_EXCLUDED_MODEL_IDS,
         )
     except (ImportError, ValueError) as exc:
         return AuthenticationRun(f"Model selection failed: {exc}", "", "failed")

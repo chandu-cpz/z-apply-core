@@ -3,17 +3,9 @@ from __future__ import annotations
 from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
-from nim_router import NimRouter
-from nim_router.config import RouterConfig
 
 from z_apply_core.agents.context_inbox import ContextInbox
 from z_apply_core.agents.model_provider import ModelProvider, get_provider
-from z_apply_core.config import CORE_ROOT
-from z_apply_core.model_policy import (
-    BLOCKED_MODEL_IDS_BELOW_120B,
-    PROBED_TOOL_CAPABILITY_OVERRIDES,
-    VERIFIED_LARGE_TOOL_MODEL_IDS,
-)
 from z_apply_core.nodes import (
     auth_blocked,
     authenticate_default_account,
@@ -23,9 +15,6 @@ from z_apply_core.nodes import (
 from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.state import RunState, initial_state
 from z_apply_core.stream_events import FrameworkEventSink, V3RunResult, consume_v3_events
-
-ROUTER_STATS_PATH = CORE_ROOT / ".z-apply" / "nim-router-stats.json"
-MAX_EXPLORATION_INTERVAL_SECONDS = 300.0
 
 # Auth verdicts that terminate the run before any application work starts.
 # ``authenticated`` and ``not_verified`` proceed (the latter is ambiguous and
@@ -70,7 +59,6 @@ async def run_job(
     sink: FrameworkEventSink | None = None,
     provider: ModelProvider | None = None,
     provider_name: str | None = None,
-    router: NimRouter | None = None,
     resources: RunResources | None = None,
     cleanup_resources: bool = True,
     context_inbox: ContextInbox | None = None,
@@ -79,8 +67,7 @@ async def run_job(
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
     run_resources = resources or RunResources()
-    resolved_router = router or make_router()
-    resolved_provider = provider or get_provider(resolved_router, provider_name=provider_name)
+    resolved_provider = provider or get_provider(provider_name=provider_name)
     try:
         stream = graph.astream_events(
             initial_state(
@@ -94,7 +81,6 @@ async def run_job(
                 "configurable": {
                     "sink": sink,
                     "model_provider": resolved_provider,
-                    "nim_router": resolved_router,
                     "run_resources": run_resources,
                     "context_inbox": context_inbox,
                     "prepared_runtime": prepared_runtime,
@@ -108,23 +94,3 @@ async def run_job(
     finally:
         if cleanup_resources and run_resources.runtime is not None:
             await run_resources.runtime.close()
-
-
-def make_router() -> NimRouter:
-    """Create the production router configuration shared by a service or CLI run."""
-    router_config = RouterConfig.from_env()
-    router_config.excluded_models = list(
-        dict.fromkeys([*router_config.excluded_models, *BLOCKED_MODEL_IDS_BELOW_120B])
-    )
-    router_config.model_pool = list(VERIFIED_LARGE_TOOL_MODEL_IDS)
-    router_config.capabilities_overrides = {
-        **router_config.capabilities_overrides,
-        **PROBED_TOOL_CAPABILITY_OVERRIDES,
-    }
-    router_config.allow_undiscovered_models = True
-    router_config.stats_path = str(ROUTER_STATS_PATH)
-    router_config.exploration_interval_seconds = min(
-        router_config.exploration_interval_seconds,
-        MAX_EXPLORATION_INTERVAL_SECONDS,
-    )
-    return NimRouter(config=router_config)

@@ -298,7 +298,7 @@ async def test_stream_metrics_flows_through_live_only_route() -> None:
     assert "stream.metrics" in _LIVE_ONLY_EVENTS
     payload = {
         "role": "researcher",
-        "provider": "nim",
+        "provider": "opengateway",
         "model": "deepseek/v3",
         "ttft_ms": 180,
         "tok_per_second": 42.5,
@@ -315,7 +315,7 @@ def test_model_call_metrics_maps_to_durable_ledger_event() -> None:
     payload = {
         "role": "researcher",
         "model_id": "deepseek/v3",
-        "provider": "nim",
+        "provider": "opengateway",
         "input_tokens": 1200,
         "output_tokens": 340,
         "cache_read_tokens": 800,

@@ -4,9 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
-
-from nim_router import NimRouter
+from unittest.mock import MagicMock, patch
 
 from z_apply_core.agents.authentication import (
     AUTHENTICATION_BROWSER_TOOLS,
@@ -137,7 +135,7 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await authenticate_default_account(
                 {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
-                {"configurable": {"nim_router": NimRouter()}},
+                {"configurable": {"model_provider": MagicMock()}},
             )
 
         self.assertEqual(result["auth_status"], "authenticated")
@@ -208,7 +206,7 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await authenticate_default_account(
                 {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
-                {"configurable": {"nim_router": NimRouter()}},
+                {"configurable": {"model_provider": MagicMock()}},
             )
 
         # The auth verdict must not be turned into a failure just because the
@@ -248,7 +246,7 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await authenticate_default_account(
                 {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
-                {"configurable": {"nim_router": NimRouter()}},
+                {"configurable": {"model_provider": MagicMock()}},
             )
 
         self.assertEqual(result["auth_status"], "authenticated")
@@ -286,7 +284,7 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
         ):
             result = await authenticate_default_account(
                 {"runtime": runtime, "job_url": "https://jobs.example/job/1"},
-                {"configurable": {"nim_router": NimRouter()}},
+                {"configurable": {"model_provider": MagicMock()}},
             )
 
         self.assertEqual(result["auth_status"], "not_verified")

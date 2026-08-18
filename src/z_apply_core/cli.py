@@ -278,14 +278,9 @@ def providers_command(_args: argparse.Namespace) -> int:
     table.add_column("Configure via")
 
     for spec in list_providers():
-        model = spec.default_model or "router-managed"
-        configure_via = spec.env_key or "router instance"
-        if spec.env_attr:
-            status = "no key set"
-            if getattr(settings, spec.env_attr):
-                status = "key set"
-        else:
-            status = "needs router"
+        model = spec.default_model
+        configure_via = spec.env_key
+        status = "key set" if getattr(settings, spec.env_attr, False) else "no key set"
         if spec.name == default:
             status = "active default"
         table.add_row(spec.name, model, status, configure_via)

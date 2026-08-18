@@ -6,10 +6,32 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from nim_router import NimRouter
-from nim_router.schemas import ModelSelection
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+class ModelCapabilities(BaseModel):
+    tools: bool = False
+    structured: bool = False
+    vision: bool = False
+    reasoning: bool = False
+
+
+class ModelInfo(BaseModel):
+    id: str
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
+    quality_hint: float = 0.5
+    deprecated: bool = False
+    model_type: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+@dataclass
+class ModelSelection:
+    info: ModelInfo
+    llm: Any
+    callback: Any | None = None
 
 
 def _build_llm(
@@ -70,8 +92,6 @@ def _selection(
     reasoning: bool,
 ) -> ModelSelection:
     """Build the typed ModelSelection every provider lease returns."""
-    from nim_router.schemas import ModelCapabilities, ModelInfo
-
     info = ModelInfo(
         id=model_id,
         capabilities=ModelCapabilities(
@@ -798,46 +818,6 @@ class OpenCodeGoProvider:
         logger.debug("OpenCodeGoProvider: cooldown ignored for %s", model_id)
 
 
-class NIMProvider:
-    """Wraps existing NimRouter for NVIDIA NIM models."""
-
-    def __init__(self, router: NimRouter) -> None:
-        self._router = router
-
-    async def lease(
-        self,
-        *,
-        tools: bool = False,
-        structured: bool = False,
-        vision: bool = False,
-        reasoning: bool = False,
-        reasoning_effort: str | None = None,
-        priority: str = "balanced",
-        excluded_model_ids: frozenset[str] | None = None,
-    ) -> ModelSelection:
-        lease_kwargs: dict[str, Any] = {}
-        if excluded_model_ids:
-            lease_kwargs["excluded_model_ids"] = excluded_model_ids
-        selection = await self._router.lease(
-            tools=tools,
-            structured=structured,
-            vision=vision,
-            reasoning=reasoning,
-            priority=priority,
-            **lease_kwargs,
-        )
-        from z_apply_core.context.model_metrics import attach_first_token_callback
-
-        attach_first_token_callback(selection.llm)
-        return selection
-
-    def record_failure(self, model_id: str, **kwargs: Any) -> None:
-        self._router.record_failure(model_id, **kwargs)
-
-    def cooldown_model(self, model_id: str, seconds: float) -> None:
-        self._router.cooldown_model(model_id, seconds)
-
-
 @dataclass(frozen=True)
 class ProviderSpec:
     name: str
@@ -846,7 +826,7 @@ class ProviderSpec:
     env_attr: str
     default_model: str
     model_env: str
-    factory: Callable[[NimRouter | None], ModelProvider]
+    factory: Callable[[], ModelProvider]
 
 
 PROVIDERS: dict[str, ProviderSpec] = {}
@@ -879,7 +859,7 @@ def default_provider_name() -> str:
     return ""
 
 
-def _make_agnes(_router: NimRouter | None) -> ModelProvider:
+def _make_agnes() -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
@@ -890,7 +870,7 @@ def _make_agnes(_router: NimRouter | None) -> ModelProvider:
     )
 
 
-def _make_inferx(_router: NimRouter | None) -> ModelProvider:
+def _make_inferx() -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
@@ -902,7 +882,7 @@ def _make_inferx(_router: NimRouter | None) -> ModelProvider:
     )
 
 
-def _make_groq(_router: NimRouter | None) -> ModelProvider:
+def _make_groq() -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
@@ -913,7 +893,7 @@ def _make_groq(_router: NimRouter | None) -> ModelProvider:
     )
 
 
-def _make_opengateway(_router: NimRouter | None) -> ModelProvider:
+def _make_opengateway() -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
@@ -923,7 +903,7 @@ def _make_opengateway(_router: NimRouter | None) -> ModelProvider:
     )
 
 
-def _make_opencodego(_router: NimRouter | None) -> ModelProvider:
+def _make_opencodego() -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
@@ -931,12 +911,6 @@ def _make_opencodego(_router: NimRouter | None) -> ModelProvider:
         api_key=settings.opencodego_api_key,
         model=settings.opencodego_model,
     )
-
-
-def _make_nim(router: NimRouter | None) -> ModelProvider:
-    if router is None:
-        raise ValueError("NIM provider requires a NimRouter instance")
-    return NIMProvider(router)
 
 
 register_provider(
@@ -994,17 +968,6 @@ register_provider(
         factory=_make_opencodego,
     )
 )
-register_provider(
-    ProviderSpec(
-        name="nim",
-        description="NVIDIA NIM models via langchain-nim-router",
-        env_key="",
-        env_attr="",
-        default_model="",
-        model_env="",
-        factory=_make_nim,
-    )
-)
 
 
 def provider_from_config(config: Any) -> ModelProvider:
@@ -1017,14 +980,10 @@ def provider_from_config(config: Any) -> ModelProvider:
     provider = configurable.get("model_provider")
     if isinstance(provider, ModelProvider):
         return provider
-    router = configurable.get("nim_router")
-    if router is not None:
-        return get_provider(router)
-    raise ValueError("configurable['model_provider'] or 'nim_router' is required.")
+    return get_provider()
 
 
 def get_provider(
-    router: NimRouter | None = None,
     provider_name: str | None = None,
 ) -> ModelProvider:
     """Return the configured model provider.
@@ -1033,9 +992,8 @@ def get_provider(
     1. Explicit `provider_name` if given.
     2. MODEL_PROVIDER env (Settings.model_provider) if it names a registered provider.
     3. Auto-detect: first registered provider whose gating key is set
-       (registration order; NIM is skipped because it needs a router).
-    4. NIM if a router instance was passed.
-    5. Raise with the list of available providers.
+       (registration order).
+    4. Raise with the list of available providers.
     """
     from z_apply_core.config import load_settings
 
@@ -1052,7 +1010,7 @@ def get_provider(
             )
         else:
             try:
-                return spec.factory(router)
+                return spec.factory()
             except ValueError as exc:
                 logger.warning(
                     "Provider %r unavailable: %s; falling back to auto-detection",
@@ -1067,12 +1025,9 @@ def get_provider(
         if not getattr(settings, spec.env_attr):
             continue
         try:
-            return spec.factory(router)
+            return spec.factory()
         except ValueError as exc:
             logger.warning("Provider %r unavailable: %s", name, exc)
-
-    if router is not None:
-        return NIMProvider(router)
 
     raise ValueError(
         "No model provider configured. Set MODEL_PROVIDER to one of "
