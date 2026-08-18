@@ -138,6 +138,7 @@ class CoreRunView:
     summary: str | None
     current_agent: str | None
     current_model: str | None
+    current_provider: str | None
     browser_tab_state: BrowserTabState
     control_mode: BrowserControlMode
     # Oldest still-pending human request id for this run, or None when none are

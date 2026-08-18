@@ -119,6 +119,7 @@ class _Run:
             summary=None,
             current_agent=None,
             current_model=initial_model,
+            current_provider=initial_provider_name,
             browser_tab_state=BrowserTabState.PENDING,
             control_mode=BrowserControlMode.AGENT_CONTROL,
             pending_human_request_id=None,
@@ -177,7 +178,10 @@ class _GraphSink(FrameworkEventSink):
             self._run.view = replace(self._run.view, current_agent=name)
         model = payload.get("model_id") or payload.get("auth_model_id")
         if isinstance(model, str):
-            self._run.view = replace(self._run.view, current_model=model)
+            provider_name = self._run.provider.current_provider_name if self._run.provider else None
+            self._run.view = replace(
+                self._run.view, current_model=model, current_provider=provider_name
+            )
             if event_type == "model.selected":
                 self._model_by_agent[name] = model
         if event_type.startswith("tool."):
@@ -533,7 +537,7 @@ class ZApplyCore:
             )
         else:
             run.provider.switch(provider, model)
-        run.view = replace(run.view, current_model=resolved_model or None)
+        run.view = replace(run.view, current_model=resolved_model or None, current_provider=provider)
         await self._emit(
             run,
             "model.switched",
