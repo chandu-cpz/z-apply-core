@@ -102,7 +102,7 @@ class SerializeBrowserMutationsMiddleware(
                     "SKIPPED: an earlier browser mutation in this same response "
                     "failed, so this mutation was not executed. The page may have "
                     "re-rendered or navigated. Capture fresh browser evidence "
-                    "(browser_observe) before continuing."
+                    "(browser_snapshot) before continuing."
                 ),
                 tool_call_id=call_id,
                 name=name,

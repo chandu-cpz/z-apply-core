@@ -38,9 +38,9 @@ or an entry button is NOT the form.
   gate: upload the resume now via `browser_click_upload` — the form renders
   after the upload lands.
 - A Simplify panel on the job-description page ("Autofill this job
-  application!"): activate it once; if the form is still not open afterward,
-  click the employer's Apply control. NEVER click the employer's own
-  "Autofill my application" button — it is not the extension.
+  application!"): IGNORE it — Simplify autofill is disabled in this
+  configuration. Click the employer's Apply control yourself. NEVER click
+  the employer's own "Autofill my application" button either.
 - Never loop on page recognition. If the evidence shows form controls, treat
   it as the form and fill it.
 
@@ -85,27 +85,24 @@ login, OTP, or identity gate is visible, delegate ONE
 AuthenticationSpecialist `task` with the current URL and visible gate
 evidence, and continue only from fresh evidence after it returns.
 
-### AUTOFILL — exit: autofill attempted once, or determined unavailable
-If the current snapshot shows a Simplify privacy-consent dialog ("Your Privacy"
-/ "Accept and continue"), agree to it ONCE by clicking the agree control in
-that snapshot — if "Accept and continue" is disabled, FIRST click the consent
-toggle/checkbox in the same snapshot (the toggle enables the button), then
-click "Accept and continue". Never re-click the toggle (a second click
-un-checks it); if one click does not enable the button, click the actual
-checkbox input via `browser_evaluate` `el.click()`, then the accept button.
-If the current snapshot shows a Simplify-branded autofill control (an
-extension panel with "Autofill" / "Autofill this page" / "Enable AI autofill"
-beside Keywords Score / Profile / Settings), click it once, wait with
-`browser_wait_for(time=10)`, then verify EVERY value it wrote against
-`lookup_candidate_memory`. The panel appears only after the form opens or the
-resume uploads — upload the resume as the trigger when needed. A targeted
-snapshot of `.simplify-jobs-shadow-root` is a ONE-SHOT probe; its "no match" /
-"strict mode violation" errors are normal and must never be retried. If no
-extension autofill exists, mark it unavailable and fill manually — autofill is
-optional, a correct form is not. Close the Simplify panel with a visible close
-(X) control after verifying, so it never blocks later clicks.
-On a single-page form, never revisit autofill later. On multi-step forms,
-re-check each newly rendered step.
+### AUTOFILL — DISABLED, fill manually (NO Simplify autofill)
+The Simplify extension autofill is NOT used in this configuration: it leaves
+material fields empty and produces unverified browser state. Never activate
+the Simplify autofill panel (no clicking "Autofill", "Autofill this page",
+"Enable AI autofill", or the "Autofill this job application!" CTA). If a
+Simplify privacy-consent dialog ("Your Privacy" / "Accept and continue")
+appears, dismiss it ONCE (toggle the consent checkbox once — a second click
+un-checks it — then "Accept and continue") so it stops blocking the page —
+never to trigger autofill.
+UPLOAD THE RESUME yourself: attach it to the resume control via
+`browser_click_upload` (name or id attribute, e.g. `name="resume"`), then
+fill every unresolved required/material field the typed context lists, plus
+any visible field whose label ends `*`, from `lookup_candidate_memory`, the
+resume context, and single-field AnswerWriter `task`s (see FILL). The
+Simplify panel may render after the upload; if it overlays the form, close it
+with its visible close (X) control once, then continue — otherwise ignore it.
+EXIT: form open, resume attached, any Simplify privacy dialog dismissed once;
+field-filling happens in FILL.
 
 ### FILL — exit: every required and material field holds a verified value
 For EACH unresolved required/material field, in this order:
@@ -122,11 +119,16 @@ For EACH unresolved required/material field, in this order:
 Apply at minimum cost:
 - Plain textboxes: fill them ALL in ONE batched `browser_fill_form` call
   (never put a combobox, checkbox, or upload in its `fields` list).
-- EMPLOYER/EDUCATION ROWS: when the form offers "Add Employer" / "Add
-  Education" controls, add and fill those rows from `lookup_candidate_memory`
-  (or AnswerWriter per row) BEFORE review, and verify a fresh snapshot shows
-  filled rows (not empty "Add" controls) when the form offers them. An empty
-  employment/education section on a form that offers it is a material gap.
+- EMPLOYER/EDUCATION ROWS: when the current snapshot shows a visible
+  "Add Employer" / "Add Education" button, click it ONCE by its ref, then
+  fill the rendered rows from `lookup_candidate_memory` (or AnswerWriter per
+  row) and verify a fresh snapshot shows filled rows. Never probe for the
+  button via `browser_evaluate` (onclick selectors are fragile and loop).
+  Treat the section as OPTIONAL only when a fresh snapshot shows no required
+  (`*`) labels for its rows AND the typed context reports
+  `unresolved_required_controls=0` without it — otherwise a failed Add is an
+  unresolved material gap: one structurally different action, then escalate
+  per the per-field budget. Never loop on optional rows.
 - Combobox/select: open a closed list as a STANDALONE click (the only
   mutation in that response), then click the option from a FRESH snapshot —
   a ref from before the list opened is stale. Native `<select>` uses

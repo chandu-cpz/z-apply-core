@@ -94,7 +94,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
                 "\nCURRENT BROWSER EVIDENCE\n"
                 f"No new browser evidence has been recorded since revision {revision}. "
                 "The latest tool result already carries the current post-action "
-                "evidence. Call browser_observe only when you need a different view.\n"
+                "evidence. Call browser_snapshot only when you need a different view.\n"
             )
         else:
             self._last_injected_revision = revision
@@ -199,8 +199,10 @@ def _last_tool_message_carries_revision(
     """Whether the most recent tool result embeds the current browser evidence.
 
     Evidence-carrying tool results carry the typed ``browser_revision`` they
-    observed in their ``additional_kwargs`` (receipts, bounded waits, snapshots,
-    and ``browser_observe``). Error results never carry evidence. A non-evidence
+    observed in their ``additional_kwargs`` (receipts, bounded waits, and
+    ``browser_snapshot`` results). ``browser_observe`` is a probe and carries no
+    evidence, so it never satisfies this check and the bounded view is re-injected
+    on the next turn. Error results never carry evidence. A non-evidence
     result (task, ask_human, denial) forces a fresh injection.
     """
     if revision is None:

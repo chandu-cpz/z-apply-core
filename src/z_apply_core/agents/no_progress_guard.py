@@ -20,6 +20,7 @@ from langgraph.types import Command
 
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.browser_tools import BROWSER_CHANGING_TOOL_NAMES
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 if TYPE_CHECKING:
     from z_apply_core.browser_session import BrowserSession
@@ -76,6 +77,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         repetition_threshold: int = 4,
         browser: BrowserSession | None = None,
         on_no_progress: Callable[[ToolProtocolViolation], None] | None = None,
+        sink: FrameworkEventSink | None = None,
     ) -> None:
         super().__init__()
         self._max_identical_denials = max_identical_denials
@@ -86,6 +88,7 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         self._window_size = max(1, window_size)
         self._repetition_threshold = max(2, repetition_threshold)
         self._browser = browser
+        self._sink = sink
         self._last_denial = ""
         self._same_denials = 0
         self._non_progress = 0
@@ -170,44 +173,35 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
         # different. A browser revision change (real progress) resets the
         # count via the embedded signature.
         if self._browser is not None and state_action in self._blocked_state_actions:
-            result = ToolMessage(
-                content=(
-                    "RUNTIME STATE-ACTION CIRCUIT: this exact action repeatedly failed "
-                    "against the current browser revision. It is unavailable until "
-                    "browser evidence changes. Choose a different action or inspect "
-                    "fresh evidence."
-                ),
-                name=str(request.tool_call.get("name", "runtime")),
-                tool_call_id=str(request.tool_call.get("id", "")),
-                status="error",
+            reason = (
+                "RUNTIME STATE-ACTION CIRCUIT: this exact action repeatedly failed "
+                "against the current browser revision. It is unavailable until "
+                "browser evidence changes. Choose a different action or inspect "
+                "fresh evidence."
             )
+            result = self._denied_tool_message(request, reason)
+            await self._emit_denial(request, "state_action_circuit", reason)
         elif identical_call_repeated:
-            result = ToolMessage(
-                content=(
-                    "RUNTIME IDENTICAL-CALL SLAP: this is the SECOND time you are "
-                    f"issuing this exact tool call ({str(request.tool_call.get('name', 'runtime'))}) "
-                    "with the exact same parameters against the same unchanged browser "
-                    "revision. THAT IS A NO-PROGRESS LOOP - you are wasting the turn "
-                    "repeating yourself. STOP repeating it. Do not call this exact "
-                    "tool with these exact same parameters again. Instead: inspect "
-                    "fresh browser evidence, then choose a DIFFERENT action - act on "
-                    "a different control, or proceed even if an open list stays open."
-                ),
-                name=str(request.tool_call.get("name", "runtime")),
-                tool_call_id=str(request.tool_call.get("id", "")),
-                status="error",
+            reason = (
+                "RUNTIME IDENTICAL-CALL SLAP: this is the SECOND time you are "
+                f"issuing this exact tool call ({str(request.tool_call.get('name', 'runtime'))}) "
+                "with the exact same parameters against the same unchanged browser "
+                "revision. THAT IS A NO-PROGRESS LOOP - you are wasting the turn "
+                "repeating yourself. STOP repeating it. Do not call this exact "
+                "tool with these exact same parameters again. Instead: inspect "
+                "fresh browser evidence, then choose a DIFFERENT action - act on "
+                "a different control, or proceed even if an open list stays open."
             )
+            result = self._denied_tool_message(request, reason)
+            await self._emit_denial(request, "identical_call", reason)
         elif read_signature is not None and read_signature == self._last_read_signature:
-            result = ToolMessage(
-                content=(
-                    "RUNTIME NO-PROGRESS: this exact read-only tool call already "
-                    "succeeded against unchanged state. Reuse its result and choose "
-                    "a different action."
-                ),
-                name=str(request.tool_call.get("name", "runtime")),
-                tool_call_id=str(request.tool_call.get("id", "")),
-                status="error",
+            reason = (
+                "RUNTIME NO-PROGRESS: this exact read-only tool call already "
+                "succeeded against unchanged state. Reuse its result and choose "
+                "a different action."
             )
+            result = self._denied_tool_message(request, reason)
+            await self._emit_denial(request, "read_repeat", reason)
         else:
             result = await handler(request)
 
@@ -335,6 +329,51 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 "recent window without advancing the application; ending this agent "
                 "turn for fresh-evidence recovery."
             )
+
+    def _denied_tool_message(self, request: ToolCallRequest, reason: str) -> ToolMessage:
+        return ToolMessage(
+            content=reason,
+            name=str(request.tool_call.get("name", "runtime")),
+            tool_call_id=str(request.tool_call.get("id", "")),
+            status="error",
+        )
+
+    async def _emit_denial(
+        self,
+        request: ToolCallRequest,
+        kind: str,
+        detail: str,
+    ) -> None:
+        """Publish a visible tool-denial trace so the UI shows why a call never ran.
+
+        Guard denials return a synthetic error ToolMessage without executing the
+        tool, so the executed-tool stream emits nothing and the frontend would
+        otherwise see only a silent gap between recovery rows. This event makes
+        each denial observable with the tool name, short kind, and reason.
+        """
+        if self._sink is None:
+            return
+        tool_name = str(request.tool_call.get("name", "runtime"))
+        args = request.tool_call.get("args", {})
+        await self._sink.accept(
+            FrameworkTraceEvent(
+                event="tool_denied",
+                name=tool_name,
+                data={
+                    "tool_name": tool_name,
+                    "tool_call_id": str(request.tool_call.get("id", "")),
+                    "kind": kind,
+                    "reason": {
+                        "state_action_circuit": "action blocked on this browser revision",
+                        "identical_call": "identical call on unchanged evidence",
+                        "read_repeat": "read-only call repeated on unchanged state",
+                    }.get(kind, kind),
+                    "detail": detail[:2000],
+                    "args": args,
+                },
+                raw={},
+            )
+        )
 
     def _is_repeatable_identical_call(
         self,

@@ -135,7 +135,10 @@ class BrowserConfigObservabilityDefaultsTests(unittest.TestCase):
         self.assertEqual(config["outputMode"], "stdout")
         self.assertEqual(config["imageResponses"], "omit")
         self.assertEqual(config["console"], {"level": "error"})
-        self.assertEqual(config["snapshot"], {"mode": "full"})
+        # Mutation tool responses must not re-ship the full ARIA tree; the
+        # runtime builds its own bounded post-action receipt (browser_snapshot
+        # uses mode "explicit" and is unaffected).
+        self.assertEqual(config["snapshot"], {"mode": "none"})
 
 
 if __name__ == "__main__":
