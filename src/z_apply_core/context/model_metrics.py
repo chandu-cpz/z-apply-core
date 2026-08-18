@@ -258,8 +258,9 @@ def extract_cost(result: Any) -> float | None:
 
     The OpenCode gateway returns a top-level ``cost`` field (string dollars,
     ``"0"`` for Go subscription requests). It may surface on the raw response
-    object, in ``model_extra``, or in a message's ``additional_kwargs``;
-    ``"0"``/``0`` means no per-request charge was reported and returns None.
+    object, in ``model_extra``, or in a message's ``additional_kwargs``.
+    A present ``"0"`` is authoritative (the request is subscription-covered or
+    free), so it returns ``0.0``; only an absent field returns ``None``.
     """
     candidates: list[Any] = list(_usage_candidates(result, None))
     payload = result
@@ -288,7 +289,7 @@ def extract_cost(result: Any) -> float | None:
             value = float(raw)
         except (TypeError, ValueError):
             continue
-        if value > 0:
+        if value >= 0:
             return value
     return None
 
@@ -383,7 +384,7 @@ class MetricStream:
                 parsed = float(self._cost)
             except (TypeError, ValueError):
                 parsed = 0.0
-            if parsed > 0:
+            if parsed >= 0:
                 cost_usd = parsed
         return CallMetrics(
             input_tokens=tokens[0] if tokens is not None else None,

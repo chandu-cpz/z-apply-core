@@ -181,7 +181,26 @@ class LedgerPersistenceTests(unittest.TestCase):
         self.assertAlmostEqual(entry.cost.usd, 0.1234, places=6)
         self.assertAlmostEqual(ledger.total_cost_usd, 0.1234, places=6)
 
-    def test_zero_gateway_cost_falls_back_to_estimate(self) -> None:
+    def test_zero_gateway_cost_is_authoritative(self) -> None:
+        ledger = RunCallLedger()
+
+        ledger.record(
+            agent="orchestrator",
+            model_id="mimo-v2.5",
+            provider="opencodego",
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            gateway_cost_usd=0.0,
+        )
+
+        # The OpenCode Go gateway reports cost "0" on subscription-covered
+        # requests; that is authoritative, not a signal to fall back to the
+        # rate-card estimate.
+        self.assertEqual(ledger.entries[0].gateway_cost_usd, 0.0)
+        self.assertEqual(ledger.entries[0].cost.usd, 0.0)
+        self.assertEqual(ledger.total_cost_usd, 0.0)
+
+    def test_missing_gateway_cost_falls_back_to_estimate(self) -> None:
         ledger = RunCallLedger()
 
         ledger.record(
@@ -190,7 +209,6 @@ class LedgerPersistenceTests(unittest.TestCase):
             provider="opencodego",
             input_tokens=1_000_000,
             output_tokens=1_000_000,
-            gateway_cost_usd=0.0,
         )
 
         self.assertAlmostEqual(ledger.entries[0].cost.usd, 0.42, places=4)

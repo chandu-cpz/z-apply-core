@@ -315,6 +315,14 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
         self._ledger = ledger
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": True})
         self._announced = False
+        # The provider epoch this router last leased at. Mid-run provider/model
+        # switches bump the switchable provider's epoch; when it no longer
+        # matches, the router re-leases on the next call so the switch actually
+        # lands (the graph's bound model is fixed at construction).
+        self._lease_epoch = getattr(provider, "epoch", 0)
+        # Once a live switch is observed, drive the request with the freshly
+        # leased model on every subsequent call (the graph model never updates).
+        self._override_model = False
         class_name = type(provider).__name__
         if class_name.endswith("Provider"):
             class_name = class_name[: -len("Provider")]
@@ -344,7 +352,9 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
         handler: Any,
     ) -> Any:
         selection = self._selection
-        if selection is None:
+        provider_epoch = getattr(self._provider, "epoch", 0)
+        epoch_moved = self._lease_epoch != provider_epoch
+        if selection is None or epoch_moved:
             selection = await self._provider.lease(
                 tools=bool(request.tools),
                 structured=request.response_format is not None,
@@ -357,6 +367,15 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
                 ),
             )
             self._selection = selection
+            self._lease_epoch = provider_epoch
+            if epoch_moved:
+                # A live provider/model switch happened since this router last
+                # leased (covers both a switch mid-run and a switch before this
+                # router's first call). Re-announce and drive the request with
+                # the freshly leased model from now on so the switch actually
+                # lands (the graph's bound model is fixed at construction).
+                self._override_model = True
+                self._announced = False
         if not self._announced:
             await self._emit(
                 "model_selected",
@@ -375,6 +394,10 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
 
         prompt_preview = _prompt_preview(request.messages)
         call_request = request
+        if self._override_model:
+            # The graph's bound model is fixed; hand the freshly leased model to
+            # the downstream handler so the mid-run switch actually drives calls.
+            call_request = request.override(model=selection.llm)
         input_tokens_estimate = estimate_messages_tokens(call_request.messages)
         await self._emit(
             "model_call_start",

@@ -150,6 +150,9 @@ class CoreRunView:
     finished_at: datetime | None
     prompt_variant: str | None = None
     prompt_sha: str | None = None
+    # Runtime reasoning override: "auto"/"off"/"on" plus an optional effort.
+    current_reasoning: str = "auto"
+    current_reasoning_effort: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

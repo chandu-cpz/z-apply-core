@@ -302,6 +302,13 @@ class CoreRunHandle:
     async def switch_model(self, provider: str, model: str | None = None) -> CoreRunView:
         return await self._service.switch_run_model(self._run_id, provider, model)
 
+    async def set_reasoning(
+        self, reasoning: str, reasoning_effort: str | None = None
+    ) -> CoreRunView:
+        return await self._service.set_run_reasoning(
+            self._run_id, reasoning, reasoning_effort
+        )
+
 
 class ZApplyCore:
     def __init__(self, config: CoreIntegrationConfig | None = None) -> None:
@@ -531,6 +538,43 @@ class ZApplyCore:
             run,
             "model.switched",
             {"provider": provider, "model": resolved_model},
+            source={"component": "core"},
+        )
+        return run.view
+
+    async def set_run_reasoning(
+        self,
+        run_id: str,
+        reasoning: str,
+        reasoning_effort: str | None = None,
+    ) -> CoreRunView:
+        """Set the runtime reasoning override for a live run."""
+        from z_apply_core.agents.model_provider import REASONING_EFFORTS, REASONING_MODES
+
+        run = self._require_run(run_id)
+        if run.view.status is RunStatus.TERMINAL:
+            raise InvalidRunTransition("terminal runs cannot change reasoning")
+        if reasoning not in REASONING_MODES:
+            raise ValueError(
+                f"unknown reasoning mode {reasoning!r}; expected one of {REASONING_MODES}"
+            )
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(
+                f"unknown reasoning effort {reasoning_effort!r}; expected one of "
+                f"{REASONING_EFFORTS} or None"
+            )
+        if run.provider is None:
+            raise ValueError("run has no model provider configured")
+        run.provider.set_reasoning(reasoning, reasoning_effort)
+        run.view = replace(
+            run.view,
+            current_reasoning=reasoning,
+            current_reasoning_effort=reasoning_effort,
+        )
+        await self._emit(
+            run,
+            "reasoning.updated",
+            {"reasoning": reasoning, "reasoning_effort": reasoning_effort},
             source={"component": "core"},
         )
         return run.view

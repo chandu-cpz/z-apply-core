@@ -13,10 +13,32 @@ from z_apply_core.context.model_metrics import (
     MetricStream,
     content_from_messages,
     extract_cache_read,
+    extract_cost,
     extract_usage_tokens,
     format_call_metrics,
     is_async_iterable,
 )
+
+
+def test_extract_cost_treats_reported_zero_as_authoritative() -> None:
+    response = ModelResponse(
+        result=[
+            SimpleNamespace(
+                additional_kwargs={
+                    "cost": "0",
+                }
+            )
+        ]
+    )
+    # The OpenCode Go gateway reports cost "0" on subscription-covered
+    # requests; a present zero is authoritative, not "no cost reported".
+    assert extract_cost(response) == 0.0
+
+
+def test_extract_cost_returns_none_when_field_absent() -> None:
+    response = ModelResponse(result=[SimpleNamespace(additional_kwargs={})])
+    assert extract_cost(response) is None
+
 
 
 def test_extract_usage_tokens_reads_chatopenai_keys() -> None:

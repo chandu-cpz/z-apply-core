@@ -51,7 +51,7 @@ class Settings(BaseSettings):
         alias="OGW_MODEL",
     )
     opencodego_api_key: str = Field(default="", alias="OPENCODEGO_API_KEY")
-    opencodego_model: str = Field(default="deepseek-v4-flash", alias="OPENCODEGO_MODEL")
+    opencodego_model: str = Field(default="mimo-v2.5", alias="OPENCODEGO_MODEL")
     orca_api_key: str = Field(default="", alias="ORCA_API_KEY")
     orca_model: str = Field(default="qwen/qwen3.8-27b-free", alias="ORCA_MODEL")
     orca_reasoning: bool = Field(default=True, alias="ORCA_REASONING")

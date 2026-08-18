@@ -102,8 +102,11 @@ class RunCallLedger:
     ) -> LedgerEntry:
         """Append one successful call and update the running totals.
 
-        A gateway-reported dollar cost wins over the rate-card estimate; the
-        estimate still fills the entry so totals stay meaningful.
+        A gateway-reported dollar cost wins over the rate-card estimate — even
+        ``0.0``, which is authoritative for subscription-covered/free requests
+        (the OpenCode Go gateway reports ``cost: "0"`` on every covered call).
+        The estimate only fills the entry when the gateway reports no cost, so
+        totals stay meaningful.
         """
         estimate = estimate_cost(
             provider,
@@ -113,7 +116,7 @@ class RunCallLedger:
         )
         cost = (
             CostEstimate(usd=round(gateway_cost_usd, 6))
-            if gateway_cost_usd is not None and gateway_cost_usd > 0
+            if gateway_cost_usd is not None
             else estimate
         )
         entry = LedgerEntry(

@@ -179,3 +179,81 @@ async def test_service_limits_concurrent_runs_without_serializing_the_queue(
         assert [result.outcome for result in results] == [RunOutcome.SUBMITTED_VERIFIED] * 3
     finally:
         await core.close()
+
+
+@pytest.mark.asyncio
+async def test_set_run_reasoning_updates_view_and_emits_event() -> None:
+    from z_apply_core.agents.model_provider import OpenCodeGoProvider, SwitchableModelProvider
+
+    core = ZApplyCore(CoreIntegrationConfig())
+    run = _Run(StartRunRequest(job_url="https://example.test/job"), "run-1")
+    core._runs["run-1"] = run
+    run.provider = SwitchableModelProvider(
+        OpenCodeGoProvider(api_key="sk-test"),
+        initial_name="opencodego",
+        initial_model="mimo-v2.5",
+    )
+
+    stream = core.subscribe(run_id="run-1")
+    iterator = stream.__aiter__()
+
+    view = await core.set_run_reasoning("run-1", "on", "medium")
+
+    assert view.current_reasoning == "on"
+    assert view.current_reasoning_effort == "medium"
+    assert run.provider.current_reasoning == "on"
+    assert run.provider.current_reasoning_effort == "medium"
+    assert run.provider._provider._reasoning_mode == "on"
+
+    event = await anext(iterator)
+    assert event.type == "reasoning.updated"
+    assert event.payload.get("reasoning") == "on"
+
+    await core.set_run_reasoning("run-1", "auto")
+    assert run.view.current_reasoning == "auto"
+    assert run.view.current_reasoning_effort is None
+
+
+@pytest.mark.asyncio
+async def test_set_run_reasoning_rejects_invalid_values() -> None:
+    from z_apply_core.agents.model_provider import OpenCodeGoProvider, SwitchableModelProvider
+
+    core = ZApplyCore(CoreIntegrationConfig())
+    run = _Run(StartRunRequest(job_url="https://example.test/job"), "run-1")
+    core._runs["run-1"] = run
+    run.provider = SwitchableModelProvider(
+        OpenCodeGoProvider(api_key="sk-test"),
+        initial_name="opencodego",
+        initial_model="mimo-v2.5",
+    )
+
+    with pytest.raises(ValueError):
+        await core.set_run_reasoning("run-1", "sometimes")
+    with pytest.raises(ValueError):
+        await core.set_run_reasoning("run-1", "on", "extreme")
+
+
+@pytest.mark.asyncio
+async def test_set_run_reasoning_requires_provider() -> None:
+    from unittest.mock import patch
+
+    from z_apply_core.config import Settings
+
+    with patch(
+        "z_apply_core.config.load_settings",
+        return_value=Settings(
+            MODEL_PROVIDER="",
+            OGW_API_KEY="",
+            GROQ_API_KEY="",
+            ORCA_API_KEY="",
+            AGNES_API_KEY="",
+            INFERX_API_KEY="",
+            OPENCODEGO_API_KEY="",
+        ),
+    ):
+        core = ZApplyCore(CoreIntegrationConfig())
+        run = _Run(StartRunRequest(job_url="https://example.test/job"), "run-1")
+        core._runs["run-1"] = run
+
+    with pytest.raises(ValueError):
+        await core.set_run_reasoning("run-1", "on")

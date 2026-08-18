@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
+
+from langchain_core.messages import HumanMessage
 
 from z_apply_core.agents.model_provider import (
     AgnesProvider,
@@ -17,6 +20,7 @@ from z_apply_core.agents.model_provider import (
     get_provider_catalog,
     list_providers,
 )
+from z_apply_core.agents.router_middleware import ModelRouter
 from z_apply_core.config import Settings
 
 
@@ -34,7 +38,7 @@ class ProviderSelectionTests(unittest.TestCase):
             "INFERX_API_KEY": "",
             "INFERX_MODEL": "deepseek-v4-flash-0731",
             "OPENCODEGO_API_KEY": "",
-            "OPENCODEGO_MODEL": "deepseek-v4-flash",
+            "OPENCODEGO_MODEL": "mimo-v2.5",
         }
         values.update(overrides)
         return patch(
@@ -151,7 +155,7 @@ class ProviderSelectionTests(unittest.TestCase):
     def test_opencodego_provider_default_model(self) -> None:
         provider = OpenCodeGoProvider(api_key="sk-test")
 
-        self.assertEqual(provider._model, "deepseek-v4-flash")
+        self.assertEqual(provider._model, "mimo-v2.5")
         self.assertEqual(provider.BASE_URL, "https://opencode.ai/zen/go/v1")
 
     def test_get_provider_catalog(self) -> None:
@@ -261,10 +265,258 @@ class OpenCodeGoThinkingTests(unittest.TestCase):
         self.assertEqual(extra.get("thinking"), {"type": "enabled"})
         self.assertEqual(extra.get("reasoning_effort"), "high")
 
+    def test_set_reasoning_off_forces_thinking_off(self) -> None:
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        provider.set_reasoning("off")
+        selection = asyncio.run(provider.lease(reasoning_effort="high"))
+        extra = dict(selection.llm.extra_body or {})
+        self.assertEqual(extra.get("thinking"), {"type": "disabled"})
+
+    def test_set_reasoning_on_enables_thinking_with_effort(self) -> None:
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        provider.set_reasoning("on", "medium")
+        selection = asyncio.run(provider.lease())
+        extra = dict(selection.llm.extra_body or {})
+        self.assertEqual(extra.get("thinking"), {"type": "enabled"})
+        self.assertEqual(extra.get("reasoning_effort"), "medium")
+
+    def test_set_reasoning_on_defaults_to_high_effort(self) -> None:
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        provider.set_reasoning("on")
+        selection = asyncio.run(provider.lease())
+        extra = dict(selection.llm.extra_body or {})
+        self.assertEqual(extra.get("reasoning_effort"), "high")
+
+    def test_set_reasoning_auto_restores_env_default(self) -> None:
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        provider.set_reasoning("on", "high")
+        provider.set_reasoning("auto")
+        with patch.dict("os.environ", {"OPENCODEGO_THINKING": "1"}, clear=False):
+            selection = asyncio.run(provider.lease())
+        extra = dict(selection.llm.extra_body or {})
+        self.assertEqual(extra.get("thinking"), {"type": "enabled"})
+
+    def test_reasoning_effort_param_still_wins_in_auto_mode(self) -> None:
+        provider = OpenCodeGoProvider(api_key="sk-test")
+        provider.set_reasoning("auto")
+        selection = asyncio.run(provider.lease(reasoning_effort="low"))
+        extra = dict(selection.llm.extra_body or {})
+        self.assertEqual(extra.get("thinking"), {"type": "enabled"})
+        self.assertEqual(extra.get("reasoning_effort"), "low")
+
     def test_cache_fields_survive_thinking_toggle(self) -> None:
         extra = self._extra_body({})
         self.assertEqual(extra.get("prompt_cache_key"), "z-apply")
         self.assertEqual(extra.get("prompt_cache_retention"), "24h")
+
+
+class SwitchableReasoningTests(unittest.TestCase):
+    """Runtime reasoning override on the switchable proxy."""
+
+    def test_set_reasoning_delegates_and_tracks_state(self) -> None:
+        switchable = SwitchableModelProvider(
+            OpenCodeGoProvider(api_key="sk-test"),
+            initial_name="opencodego",
+            initial_model="mimo-v2.5",
+        )
+        switchable.set_reasoning("on", "medium")
+        self.assertEqual(switchable.current_reasoning, "on")
+        self.assertEqual(switchable.current_reasoning_effort, "medium")
+        self.assertEqual(switchable._provider._reasoning_mode, "on")
+        self.assertEqual(switchable._provider._reasoning_effort_override, "medium")
+
+    def test_set_reasoning_auto(self) -> None:
+        switchable = SwitchableModelProvider(
+            OpenCodeGoProvider(api_key="sk-test"),
+            initial_name="opencodego",
+            initial_model="mimo-v2.5",
+        )
+        switchable.set_reasoning("auto")
+        self.assertEqual(switchable.current_reasoning, "auto")
+        self.assertEqual(switchable.current_reasoning_effort, None)
+
+    def test_set_reasoning_rejects_unknown_mode(self) -> None:
+        switchable = SwitchableModelProvider(
+            OpenCodeGoProvider(api_key="sk-test"),
+            initial_name="opencodego",
+            initial_model="mimo-v2.5",
+        )
+        with self.assertRaises(ValueError):
+            switchable.set_reasoning("sometimes")
+        with self.assertRaises(ValueError):
+            switchable.set_reasoning("on", "extreme")
+
+    def test_reasoning_override_survives_switch(self) -> None:
+        switchable = SwitchableModelProvider(
+            OpenCodeGoProvider(api_key="sk-test"),
+            initial_name="opencodego",
+            initial_model="mimo-v2.5",
+        )
+        switchable.set_reasoning("on", "high")
+        with patch.dict("os.environ", {"AGNES_API_KEY": "sk-agnes"}, clear=False):
+            switchable.switch("agnes")
+        self.assertEqual(switchable.current_reasoning, "on")
+        self.assertIsInstance(switchable._provider, AgnesProvider)
+        self.assertTrue(switchable._provider._reasoning)
+
+
+class SwitchableEpochTests(unittest.TestCase):
+    """Provider epoch bumps so routers can detect a live switch."""
+
+    def _switchable(self) -> SwitchableModelProvider:
+        return SwitchableModelProvider(
+            OpenCodeGoProvider(api_key="sk-test"),
+            initial_name="opencodego",
+            initial_model="mimo-v2.5",
+        )
+
+    def test_epoch_starts_zero(self) -> None:
+        self.assertEqual(self._switchable().epoch, 0)
+
+    def test_epoch_bumps_on_switch_and_set_reasoning(self) -> None:
+        switchable = self._switchable()
+        switchable.set_reasoning("on", "high")
+        self.assertEqual(switchable.epoch, 1)
+        with patch.dict("os.environ", {"AGNES_API_KEY": "sk-agnes"}, clear=False):
+            switchable.switch("agnes")
+        self.assertEqual(switchable.epoch, 2)
+
+
+class ModelRouterReleasesOnSwitchTests(unittest.TestCase):
+    """The router must re-lease and drive the request with the new model when
+    the switchable provider's epoch changes mid-run, and must NOT re-lease
+    otherwise (free-tier caching preserved)."""
+
+    class FakeProvider:
+        epoch = 0
+
+        def __init__(self) -> None:
+            self.leases = 0
+            self.models: list[str] = []
+
+        async def lease(self, **kwargs: object) -> object:
+            self.leases += 1
+            model_id = f"model-{self.leases}"
+            self.models.append(model_id)
+            return SimpleNamespace(
+                info=SimpleNamespace(id=model_id),
+                llm=SimpleNamespace(model=model_id),
+            )
+
+        def record_failure(self, model_id: str, **kwargs: object) -> None:
+            del model_id, kwargs
+
+        def cooldown_model(self, model_id: str, seconds: float) -> None:
+            del model_id, seconds
+
+    def _request(self) -> object:
+        from langchain.agents.middleware.types import ModelRequest
+
+        return ModelRequest(
+            model=SimpleNamespace(model="pinned"),
+            messages=[HumanMessage(content="hi")],
+            tools=[],
+            response_format=None,
+            state={},
+            runtime=None,
+            tool_choice=None,
+        )
+
+    def test_leases_once_without_switch(self) -> None:
+        from langchain.agents.middleware.types import ModelRequest
+
+        provider = self.FakeProvider()
+        router = ModelRouter(provider, role="test", selection=None)
+        seen: list[str] = []
+
+        async def handler(request: ModelRequest[object]) -> object:
+            seen.append(request.model.model)
+            return SimpleNamespace(result=["ok"])
+
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+
+        self.assertEqual(provider.leases, 1)
+        self.assertEqual(seen, ["pinned", "pinned"])
+
+    def test_releases_and_swaps_model_after_epoch_change(self) -> None:
+        from langchain.agents.middleware.types import ModelRequest
+
+        provider = self.FakeProvider()
+        router = ModelRouter(provider, role="test", selection=None)
+        seen: list[str] = []
+
+        async def handler(request: ModelRequest[object]) -> object:
+            seen.append(request.model.model)
+            return SimpleNamespace(result=["ok"])
+
+        # First call leases model-1 but leaves the pinned graph model untouched.
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        self.assertEqual(provider.leases, 1)
+        self.assertEqual(seen, ["pinned"])
+
+        # A mid-run switch bumps the epoch: next call re-leases and the freshly
+        # leased model drives the request from then on.
+        provider.epoch = 1
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        self.assertEqual(provider.leases, 2)
+        self.assertEqual(seen, ["pinned", "model-2"])
+
+        # No further switch: no re-lease, but the new model keeps driving calls.
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        self.assertEqual(provider.leases, 2)
+        self.assertEqual(seen, ["pinned", "model-2", "model-2"])
+
+    def test_switch_with_preselected_router_releases_on_epoch_change(self) -> None:
+        from langchain.agents.middleware.types import ModelRequest
+
+        provider = self.FakeProvider()
+        initial = SimpleNamespace(
+            info=SimpleNamespace(id="preselected"),
+            llm=SimpleNamespace(model="preselected"),
+        )
+        router = ModelRouter(provider, role="test", selection=initial)
+        seen: list[str] = []
+
+        async def handler(request: ModelRequest[object]) -> object:
+            seen.append(request.model.model)
+            return SimpleNamespace(result=["ok"])
+
+        # Preselected router: the passed selection is reused for telemetry, no
+        # lease happens, and the request still uses the graph's pinned model.
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        self.assertEqual(provider.leases, 0)
+        self.assertEqual(seen, ["pinned"])
+
+        # After a switch the router re-leases and overrides the request model.
+        provider.epoch = 1
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        self.assertEqual(provider.leases, 1)
+        self.assertEqual(seen, ["pinned", "model-1"])
+
+    def test_switch_before_first_call_drives_new_model(self) -> None:
+        from langchain.agents.middleware.types import ModelRequest
+
+        # Specialist-style router (no preselected selection) where the provider
+        # is switched AFTER the router is constructed but BEFORE its first call:
+        # the epoch moves relative to the construction snapshot, so the first
+        # lease must override the graph-bound model.
+        provider = self.FakeProvider()
+        router = ModelRouter(provider, role="test", selection=None)
+        provider.epoch = 1
+        seen: list[str] = []
+
+        async def handler(request: ModelRequest[object]) -> object:
+            seen.append(request.model.model)
+            return SimpleNamespace(result=["ok"])
+
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        self.assertEqual(provider.leases, 1)
+        self.assertEqual(seen, ["model-1"])
+
+        asyncio.run(router.awrap_model_call(self._request(), handler))
+        self.assertEqual(provider.leases, 1)
+        self.assertEqual(seen, ["model-1", "model-1"])
 
 
 class OpenCodeGoPayloadCacheTests(unittest.TestCase):

@@ -106,6 +106,14 @@ def _selection(
     return ModelSelection(info=info, llm=llm, callback=None)
 
 
+# Runtime reasoning control. ``auto`` keeps the provider's configured/env
+# behavior (and per-role reasoning_effort); ``off`` / ``on`` force thinking
+# regardless of role policy. ``reasoning_effort`` is only meaningful with
+# ``on`` and only for providers whose gateway accepts an effort level.
+REASONING_MODES: tuple[str, ...] = ("auto", "off", "on")
+REASONING_EFFORTS: tuple[str, ...] = ("low", "medium", "high", "max")
+
+
 @runtime_checkable
 class ModelProvider(Protocol):
     async def lease(
@@ -123,6 +131,8 @@ class ModelProvider(Protocol):
     def record_failure(self, model_id: str, **kwargs: Any) -> None: ...
 
     def cooldown_model(self, model_id: str, seconds: float) -> None: ...
+
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None: ...
 
 
 class AgnesProvider:
@@ -144,6 +154,7 @@ class AgnesProvider:
                 "Get a key at https://platform.agnes-ai.com/"
             )
         self._reasoning = reasoning
+        self._default_reasoning = reasoning
         self._model = model or os.environ.get("AGNES_MODEL", "") or self.DEFAULT_MODEL
 
     async def lease(
@@ -193,6 +204,15 @@ class AgnesProvider:
     def cooldown_model(self, model_id: str, seconds: float) -> None:
         logger.debug("AgnesProvider: cooldown ignored for %s", model_id)
 
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None:
+        """Update thinking state at runtime; Agnes only supports on/off."""
+        if reasoning == "off":
+            self._reasoning = False
+        elif reasoning == "on":
+            self._reasoning = True
+        else:
+            self._reasoning = self._default_reasoning
+
 
 class InferXProvider:
     """OpenAI-compatible provider for InferX hosted endpoints (model.inferx.net)."""
@@ -216,6 +236,8 @@ class InferXProvider:
         self._model = model or os.environ.get("INFERX_MODEL", "") or self.DEFAULT_MODEL
         self._reasoning = reasoning
         self._reasoning_effort = reasoning_effort
+        self._default_reasoning = reasoning
+        self._default_reasoning_effort = reasoning_effort
 
     async def lease(
         self,
@@ -267,6 +289,16 @@ class InferXProvider:
     def cooldown_model(self, model_id: str, seconds: float) -> None:
         logger.debug("InferXProvider: cooldown ignored for %s", model_id)
 
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None:
+        """Update thinking state at runtime; InferX accepts only high/max effort."""
+        self._reasoning = reasoning != "off"
+        if reasoning == "auto":
+            self._reasoning_effort = self._default_reasoning_effort
+        elif reasoning_effort in {"high", "max"}:
+            self._reasoning_effort = reasoning_effort
+        else:
+            self._reasoning_effort = self._default_reasoning_effort
+
 
 class GroqProvider:
     """Groq hosted endpoints (api.groq.com) via the official langchain-groq package.
@@ -295,15 +327,23 @@ class GroqProvider:
             )
         self._model = model or os.environ.get("GROQ_MODEL", "") or self.DEFAULT_MODEL
         self._reasoning = reasoning
+        self._default_reasoning = reasoning
+        self._reasoning_effort: str | None = None
 
     def _groq_chat_kwargs(self) -> dict[str, Any]:
         if self._model.startswith("llama-"):
             return {}
+        if self._reasoning_effort in {"low", "medium", "high"}:
+            reasoning_effort: str = self._reasoning_effort
+        elif self._reasoning:
+            reasoning_effort = "medium" if "gpt-oss" in self._model else "default"
+        else:
+            reasoning_effort = "none"
         if "gpt-oss" in self._model:
-            return {"reasoning_effort": "medium" if self._reasoning else "none"}
+            return {"reasoning_effort": reasoning_effort}
         return {
             "reasoning_format": "parsed",
-            "reasoning_effort": "default" if self._reasoning else "none",
+            "reasoning_effort": reasoning_effort,
         }
 
     async def lease(
@@ -352,6 +392,14 @@ class GroqProvider:
 
     def cooldown_model(self, model_id: str, seconds: float) -> None:
         logger.debug("GroqProvider: cooldown ignored for %s", model_id)
+
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None:
+        """Update thinking state at runtime; Groq accepts low/medium/high."""
+        self._reasoning = reasoning != "off"
+        if reasoning == "auto":
+            self._reasoning_effort = None
+        else:
+            self._reasoning_effort = reasoning_effort
 
 
 class OpenGatewayProvider:
@@ -422,6 +470,11 @@ class OpenGatewayProvider:
     def cooldown_model(self, model_id: str, seconds: float) -> None:
         logger.debug("OpenGatewayProvider: cooldown ignored for %s", model_id)
 
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None:
+        logger.debug(
+            "OpenGatewayProvider: reasoning toggle ignored (no thinking control on this gateway)"
+        )
+
 
 class OrcaProvider:
     """OpenAI-compatible provider for OrcaRouter (api.orcarouter.ai).
@@ -447,6 +500,7 @@ class OrcaProvider:
             )
         self._model = model or os.environ.get("ORCA_MODEL", "") or self.DEFAULT_MODEL
         self._reasoning = reasoning
+        self._default_reasoning = reasoning
 
     async def lease(
         self,
@@ -493,6 +547,15 @@ class OrcaProvider:
 
     def cooldown_model(self, model_id: str, seconds: float) -> None:
         logger.debug("OrcaProvider: cooldown ignored for %s", model_id)
+
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None:
+        """Update reasoning state at runtime; Orca only adjusts temperature."""
+        if reasoning == "off":
+            self._reasoning = False
+        elif reasoning == "on":
+            self._reasoning = True
+        else:
+            self._reasoning = self._default_reasoning
 
 
 # OpenCode Go prefix-cache breakpoint markers. The gateway
@@ -595,8 +658,8 @@ def _stamp_gateway_cache_breakpoints(payload: dict[str, Any]) -> None:
 class OpenCodeGoProvider:
     """OpenAI-compatible provider for the opencode Zen gateway.
 
-    Serves a single model, DeepSeek V4 Flash, via the gateway's
-    ``/zen/go/v1`` chat-completions endpoint. Thinking maps to the gateway's
+    Serves MiMo V2.5 (default, free tier) or DeepSeek V4 Flash
+    via the gateway's ``/zen/go/v1`` chat-completions endpoint. Thinking maps to the gateway's
     DeepSeek-style ``thinking``/``reasoning_effort`` body fields, but it is
     DISABLED by default: on orchestrator-sized prompts the V4 thinking blocks
     consume the entire output budget (measured: 21.5s stream with zero
@@ -612,7 +675,7 @@ class OpenCodeGoProvider:
     """
 
     BASE_URL = "https://opencode.ai/zen/go/v1"
-    DEFAULT_MODEL = "deepseek-v4-flash"
+    DEFAULT_MODEL = "mimo-v2.5"
     DEFAULT_CACHE_KEY = "z-apply"
     DEFAULT_SESSION_ID = "z-apply"
 
@@ -636,6 +699,11 @@ class OpenCodeGoProvider:
         self._session_id = (
             session_id or os.environ.get("OPENCODEGO_SESSION", "") or self.DEFAULT_SESSION_ID
         )
+        # Runtime reasoning override: "auto" keeps the env/role default (thinking
+        # off unless OPENCODEGO_THINKING is set or a role passes an effort);
+        # "off"/"on" force it, with an optional effort level.
+        self._reasoning_mode: str = "auto"
+        self._reasoning_effort_override: str | None = None
 
     async def lease(
         self,
@@ -837,13 +905,22 @@ class OpenCodeGoProvider:
             "prompt_cache_retention": "24h",
         }
         requested_effort = (reasoning_effort or "").strip().lower()
-        if requested_effort in {"low", "medium", "high"}:
+        if self._reasoning_mode == "off":
+            # Forced off: fast non-thinking mode regardless of role policy.
+            extra_body.update({"thinking": {"type": "disabled"}})
+        elif self._reasoning_mode == "on":
+            # Forced on: thinking at the requested (or default high) effort.
+            effort = self._reasoning_effort_override or "high"
+            extra_body.update({"thinking": {"type": "enabled"}, "reasoning_effort": effort})
+        elif requested_effort in {"low", "medium", "high", "max"}:
             # Explicit per-call reasoning effort turns thinking on for that
             # agent only (e.g. the authentication specialist at "low").
             # Everything else stays in fast non-thinking mode.
             extra_body.update(
                 {"thinking": {"type": "enabled"}, "reasoning_effort": requested_effort}
             )
+        elif requested_effort == "none":
+            extra_body.update({"thinking": {"type": "disabled"}})
         elif os.environ.get("OPENCODEGO_THINKING", "").strip().lower() in {
             "1",
             "true",
@@ -888,6 +965,11 @@ class OpenCodeGoProvider:
 
     def cooldown_model(self, model_id: str, seconds: float) -> None:
         logger.debug("OpenCodeGoProvider: cooldown ignored for %s", model_id)
+
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None:
+        """Force thinking on/off (or reset to ``auto``) at runtime."""
+        self._reasoning_mode = reasoning
+        self._reasoning_effort_override = reasoning_effort
 
 
 @dataclass(frozen=True)
@@ -957,12 +1039,21 @@ def get_provider_catalog() -> list[dict[str, Any]]:
 
 
 class SwitchableModelProvider:
-    """A proxy ModelProvider that supports live mid-run provider & model switching."""
+    """A proxy ModelProvider that supports live mid-run provider & model switching.
+
+    Reasoning is a runtime knob on top: ``auto`` (the default) keeps each
+    provider's configured behavior, while ``off``/``on`` force thinking on or
+    off across all roles. The override survives provider/model switches so the
+    user's intent carries over.
+    """
 
     def __init__(self, initial_provider: ModelProvider, initial_name: str = "", initial_model: str = "") -> None:
         self._provider = initial_provider
         self._provider_name = initial_name
         self._model = initial_model
+        self._reasoning_mode: str = "auto"
+        self._reasoning_effort: str | None = None
+        self._epoch = 0
 
     @property
     def current_provider_name(self) -> str:
@@ -972,11 +1063,54 @@ class SwitchableModelProvider:
     def current_model(self) -> str:
         return self._model
 
+    @property
+    def current_reasoning(self) -> str:
+        return self._reasoning_mode
+
+    @property
+    def current_reasoning_effort(self) -> str | None:
+        return self._reasoning_effort
+
+    @property
+    def epoch(self) -> int:
+        """Version counter bumped on every switch/reasoning change.
+
+        Model routers compare this against the epoch they last leased at so a
+        live mid-run switch re-leases on the next agent step instead of
+        continuing to call the model pinned at graph construction.
+        """
+        return self._epoch
+
     def switch(self, provider_name: str, model: str | None = None) -> None:
         new_provider = get_provider(provider_name=provider_name, model=model)
         self._provider = new_provider
         self._provider_name = provider_name
         self._model = model or (PROVIDERS[provider_name].default_model if provider_name in PROVIDERS else "")
+        self._epoch += 1
+        if self._reasoning_mode != "auto" and callable(getattr(self._provider, "set_reasoning", None)):
+            self._provider.set_reasoning(self._reasoning_mode, self._reasoning_effort)
+
+    def set_reasoning(self, reasoning: str, reasoning_effort: str | None = None) -> None:
+        """Set the runtime reasoning override for this run.
+
+        ``reasoning`` must be one of ``auto``/``off``/``on``; ``reasoning_effort``
+        (``low``/``medium``/``high``/``max``) is optional and only meaningful
+        with ``on``. Raises ``ValueError`` on unknown values.
+        """
+        if reasoning not in REASONING_MODES:
+            raise ValueError(
+                f"unknown reasoning mode {reasoning!r}; expected one of {REASONING_MODES}"
+            )
+        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(
+                f"unknown reasoning effort {reasoning_effort!r}; expected one of "
+                f"{REASONING_EFFORTS} or None"
+            )
+        self._reasoning_mode = reasoning
+        self._reasoning_effort = reasoning_effort
+        self._epoch += 1
+        if callable(getattr(self._provider, "set_reasoning", None)):
+            self._provider.set_reasoning(reasoning, reasoning_effort)
 
     async def lease(
         self,
@@ -1154,11 +1288,12 @@ register_provider(
 register_provider(
     ProviderSpec(
         name="opencodego",
-        description="opencode Zen gateway (opencode.ai/zen/go/v1); DeepSeek V4 Flash only",
+        description="opencode Zen gateway (opencode.ai/zen/go/v1); free MiMo V2.5 by default",
         env_key="OPENCODEGO_API_KEY",
         env_attr="opencodego_api_key",
         default_model=OpenCodeGoProvider.DEFAULT_MODEL,
         suggested_models=(
+            "mimo-v2.5",
             "deepseek-v4-flash",
         ),
         model_env="OPENCODEGO_MODEL",
