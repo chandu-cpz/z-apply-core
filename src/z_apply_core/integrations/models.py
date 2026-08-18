@@ -65,6 +65,8 @@ class StartRunRequest:
     live_view: bool = True
     prompt_variant: str | None = None
     prompt_sha: str | None = None
+    provider: str | None = None
+    model: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

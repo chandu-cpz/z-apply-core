@@ -423,6 +423,78 @@ class OpenGatewayProvider:
         logger.debug("OpenGatewayProvider: cooldown ignored for %s", model_id)
 
 
+class OrcaProvider:
+    """OpenAI-compatible provider for OrcaRouter (api.orcarouter.ai).
+
+    Default model is Qwen3.8-27B (free tier), served via OrcaRouter's
+    OpenAI-compatible /v1 endpoint.
+    """
+
+    BASE_URL = "https://api.orcarouter.ai/v1"
+    DEFAULT_MODEL = "qwen/qwen3.8-27b-free"
+
+    def __init__(
+        self,
+        api_key: str = "",
+        model: str = "",
+        reasoning: bool = True,
+    ) -> None:
+        self._api_key = api_key or os.environ.get("ORCA_API_KEY", "")
+        if not self._api_key:
+            raise ValueError(
+                "ORCA_API_KEY is required for OrcaProvider. "
+                "Get a key at https://orcarouter.ai/"
+            )
+        self._model = model or os.environ.get("ORCA_MODEL", "") or self.DEFAULT_MODEL
+        self._reasoning = reasoning
+
+    async def lease(
+        self,
+        *,
+        tools: bool = False,
+        structured: bool = False,
+        vision: bool = False,
+        reasoning: bool = False,
+        reasoning_effort: str | None = None,
+        priority: str = "balanced",
+        excluded_model_ids: frozenset[str] | None = None,
+    ) -> ModelSelection:
+        from langchain_openai import ChatOpenAI
+
+        llm = _build_llm(
+            ChatOpenAI,
+            model=self._model,
+            base_url=self.BASE_URL,
+            api_key=self._api_key,
+            temperature=0.6 if self._reasoning else 0.7,
+        )
+
+        logger.info(
+            "OrcaProvider: selected %s (tools=%s, vision=%s, reasoning=%s)",
+            self._model,
+            tools,
+            vision,
+            self._reasoning,
+        )
+        return _selection(
+            model_id=self._model,
+            provider="orca",
+            pricing="free" if "free" in self._model else "token",
+            quality_hint=0.85,
+            llm=llm,
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+        )
+
+    def record_failure(self, model_id: str, **kwargs: Any) -> None:
+        logger.debug("OrcaProvider: record_failure ignored for %s", model_id)
+
+    def cooldown_model(self, model_id: str, seconds: float) -> None:
+        logger.debug("OrcaProvider: cooldown ignored for %s", model_id)
+
+
 # OpenCode Go prefix-cache breakpoint markers. The gateway
 # (opencode.ai/zen/go) auto-caches request prefixes with only a ~5 minute TTL;
 # ``prompt_cache_key`` + ``prompt_cache_retention`` (set in the provider's
@@ -826,7 +898,8 @@ class ProviderSpec:
     env_attr: str
     default_model: str
     model_env: str
-    factory: Callable[[], ModelProvider]
+    suggested_models: tuple[str, ...]
+    factory: Callable[[str | None], ModelProvider]
 
 
 PROVIDERS: dict[str, ProviderSpec] = {}
@@ -859,67 +932,158 @@ def default_provider_name() -> str:
     return ""
 
 
-def _make_agnes() -> ModelProvider:
+def get_provider_catalog() -> list[dict[str, Any]]:
+    """Return the structured catalog of all registered providers with live configuration status."""
+    from z_apply_core.config import load_settings
+
+    settings = load_settings()
+    active_default = default_provider_name()
+    catalog: list[dict[str, Any]] = []
+    for name in DETECTION_ORDER:
+        spec = PROVIDERS[name]
+        has_key = bool(getattr(settings, spec.env_attr, "")) if spec.env_attr else False
+        catalog.append(
+            {
+                "name": spec.name,
+                "description": spec.description,
+                "default_model": spec.default_model,
+                "suggested_models": list(spec.suggested_models),
+                "env_key": spec.env_key,
+                "configured": has_key,
+                "is_default": (spec.name == active_default),
+            }
+        )
+    return catalog
+
+
+class SwitchableModelProvider:
+    """A proxy ModelProvider that supports live mid-run provider & model switching."""
+
+    def __init__(self, initial_provider: ModelProvider, initial_name: str = "", initial_model: str = "") -> None:
+        self._provider = initial_provider
+        self._provider_name = initial_name
+        self._model = initial_model
+
+    @property
+    def current_provider_name(self) -> str:
+        return self._provider_name
+
+    @property
+    def current_model(self) -> str:
+        return self._model
+
+    def switch(self, provider_name: str, model: str | None = None) -> None:
+        new_provider = get_provider(provider_name=provider_name, model=model)
+        self._provider = new_provider
+        self._provider_name = provider_name
+        self._model = model or (PROVIDERS[provider_name].default_model if provider_name in PROVIDERS else "")
+
+    async def lease(
+        self,
+        *,
+        tools: bool = False,
+        structured: bool = False,
+        vision: bool = False,
+        reasoning: bool = False,
+        reasoning_effort: str | None = None,
+        priority: str = "balanced",
+        excluded_model_ids: frozenset[str] | None = None,
+    ) -> ModelSelection:
+        return await self._provider.lease(
+            tools=tools,
+            structured=structured,
+            vision=vision,
+            reasoning=reasoning,
+            reasoning_effort=reasoning_effort,
+            priority=priority,
+            excluded_model_ids=excluded_model_ids,
+        )
+
+    def record_failure(self, model_id: str, **kwargs: Any) -> None:
+        self._provider.record_failure(model_id, **kwargs)
+
+    def cooldown_model(self, model_id: str, seconds: float) -> None:
+        self._provider.cooldown_model(model_id, seconds)
+
+
+def _make_agnes(model: str | None = None) -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
     return AgnesProvider(
         api_key=settings.agnes_api_key,
-        model=settings.agnes_model,
+        model=model or settings.agnes_model,
         reasoning=settings.agnes_reasoning,
     )
 
 
-def _make_inferx() -> ModelProvider:
+def _make_inferx(model: str | None = None) -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
     return InferXProvider(
         api_key=settings.inferx_api_key,
-        model=settings.inferx_model,
+        model=model or settings.inferx_model,
         reasoning=settings.inferx_reasoning,
         reasoning_effort=settings.inferx_reasoning_effort,
     )
 
 
-def _make_groq() -> ModelProvider:
+def _make_groq(model: str | None = None) -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
     return GroqProvider(
         api_key=settings.groq_api_key,
-        model=settings.groq_model,
+        model=model or settings.groq_model,
         reasoning=settings.groq_reasoning,
     )
 
 
-def _make_opengateway() -> ModelProvider:
+def _make_orca(model: str | None = None) -> ModelProvider:
+    from z_apply_core.config import load_settings
+
+    settings = load_settings()
+    return OrcaProvider(
+        api_key=settings.orca_api_key,
+        model=model or settings.orca_model,
+        reasoning=settings.orca_reasoning,
+    )
+
+
+def _make_opengateway(model: str | None = None) -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
     return OpenGatewayProvider(
         api_key=settings.ogw_api_key,
-        model=settings.ogw_model,
+        model=model or settings.ogw_model,
     )
 
 
-def _make_opencodego() -> ModelProvider:
+def _make_opencodego(model: str | None = None) -> ModelProvider:
     from z_apply_core.config import load_settings
 
     settings = load_settings()
     return OpenCodeGoProvider(
         api_key=settings.opencodego_api_key,
-        model=settings.opencodego_model,
+        model=model or settings.opencodego_model,
     )
 
 
 register_provider(
     ProviderSpec(
         name="opengateway",
-        description="OpenGateway (opengateway.gitlawb.com); free Nemotron 3 Ultra by default",
+        description="OpenGateway (opengateway.gitlawb.com); free Ling 3.0 Flash by default",
         env_key="OGW_API_KEY",
         env_attr="ogw_api_key",
         default_model=OpenGatewayProvider.DEFAULT_MODEL,
+        suggested_models=(
+            "inclusionai/ling-3.0-flash:free",
+            "nvidia/nemotron-3-ultra:free",
+            "deepseek/deepseek-r1:free",
+            "qwen/qwen-2.5-coder-32b-instruct",
+        ),
         model_env="OGW_MODEL",
         factory=_make_opengateway,
     )
@@ -927,12 +1091,34 @@ register_provider(
 register_provider(
     ProviderSpec(
         name="groq",
-        description="Groq hosted endpoints (api.groq.com); Qwen3.6-27B by default",
+        description="Groq hosted endpoints (api.groq.com); ultra-fast Qwen3.6-27B by default",
         env_key="GROQ_API_KEY",
         env_attr="groq_api_key",
         default_model=GroqProvider.DEFAULT_MODEL,
+        suggested_models=(
+            "qwen/qwen3.6-27b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-8b-instant",
+            "deepseek-r1-distill-llama-70b",
+        ),
         model_env="GROQ_MODEL",
         factory=_make_groq,
+    )
+)
+register_provider(
+    ProviderSpec(
+        name="orca",
+        description="OrcaRouter (api.orcarouter.ai); free Qwen3.8-27B by default",
+        env_key="ORCA_API_KEY",
+        env_attr="orca_api_key",
+        default_model=OrcaProvider.DEFAULT_MODEL,
+        suggested_models=(
+            "qwen/qwen3.8-27b-free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+            "deepseek/deepseek-r1:free",
+        ),
+        model_env="ORCA_MODEL",
+        factory=_make_orca,
     )
 )
 register_provider(
@@ -942,6 +1128,10 @@ register_provider(
         env_key="AGNES_API_KEY",
         env_attr="agnes_api_key",
         default_model=AgnesProvider.DEFAULT_MODEL,
+        suggested_models=(
+            "agnes-2.0-flash",
+            "agnes-2.0-pro",
+        ),
         model_env="AGNES_MODEL",
         factory=_make_agnes,
     )
@@ -953,6 +1143,10 @@ register_provider(
         env_key="INFERX_API_KEY",
         env_attr="inferx_api_key",
         default_model=InferXProvider.DEFAULT_MODEL,
+        suggested_models=(
+            "deepseek-v4-flash-0731",
+            "deepseek-v3",
+        ),
         model_env="INFERX_MODEL",
         factory=_make_inferx,
     )
@@ -964,6 +1158,9 @@ register_provider(
         env_key="OPENCODEGO_API_KEY",
         env_attr="opencodego_api_key",
         default_model=OpenCodeGoProvider.DEFAULT_MODEL,
+        suggested_models=(
+            "deepseek-v4-flash",
+        ),
         model_env="OPENCODEGO_MODEL",
         factory=_make_opencodego,
     )
@@ -985,6 +1182,7 @@ def provider_from_config(config: Any) -> ModelProvider:
 
 def get_provider(
     provider_name: str | None = None,
+    model: str | None = None,
 ) -> ModelProvider:
     """Return the configured model provider.
 
@@ -1010,7 +1208,7 @@ def get_provider(
             )
         else:
             try:
-                return spec.factory()
+                return spec.factory(model)
             except ValueError as exc:
                 logger.warning(
                     "Provider %r unavailable: %s; falling back to auto-detection",
@@ -1025,7 +1223,7 @@ def get_provider(
         if not getattr(settings, spec.env_attr):
             continue
         try:
-            return spec.factory()
+            return spec.factory(model)
         except ValueError as exc:
             logger.warning("Provider %r unavailable: %s", name, exc)
 

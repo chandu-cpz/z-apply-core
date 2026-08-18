@@ -10,8 +10,11 @@ from z_apply_core.agents.model_provider import (
     InferXProvider,
     OpenCodeGoProvider,
     OpenGatewayProvider,
+    OrcaProvider,
+    SwitchableModelProvider,
     default_provider_name,
     get_provider,
+    get_provider_catalog,
     list_providers,
 )
 from z_apply_core.config import Settings
@@ -25,6 +28,8 @@ class ProviderSelectionTests(unittest.TestCase):
             "OGW_MODEL": "inclusionai/ling-3.0-flash:free",
             "GROQ_API_KEY": "",
             "GROQ_MODEL": "qwen/qwen3.6-27b",
+            "ORCA_API_KEY": "",
+            "ORCA_MODEL": "qwen/qwen3.8-27b-free",
             "AGNES_API_KEY": "",
             "INFERX_API_KEY": "",
             "INFERX_MODEL": "deepseek-v4-flash-0731",
@@ -61,7 +66,13 @@ class ProviderSelectionTests(unittest.TestCase):
 
         self.assertIsInstance(provider, GroqProvider)
 
-    def test_auto_detect_falls_back_to_agnes_when_no_groq_key(self) -> None:
+    def test_auto_detect_falls_back_to_orca_when_no_groq_key(self) -> None:
+        with self.patch_settings(ORCA_API_KEY="sk-orca-test", AGNES_API_KEY="sk-test"):
+            provider = get_provider()
+
+        self.assertIsInstance(provider, OrcaProvider)
+
+    def test_auto_detect_falls_back_to_agnes_when_no_orca_key(self) -> None:
         with self.patch_settings(AGNES_API_KEY="sk-test", INFERX_API_KEY="ix-test"):
             provider = get_provider()
 
@@ -104,7 +115,7 @@ class ProviderSelectionTests(unittest.TestCase):
 
         self.assertEqual(
             names,
-            ["opengateway", "groq", "agnes", "inferx", "opencodego"],
+            ["opengateway", "groq", "orca", "agnes", "inferx", "opencodego"],
         )
 
     def test_default_provider_name_reflects_env(self) -> None:
@@ -112,6 +123,12 @@ class ProviderSelectionTests(unittest.TestCase):
             self.assertEqual(default_provider_name(), "inferx")
         with self.patch_settings(GROQ_API_KEY="gsk-test", AGNES_API_KEY="sk-test"):
             self.assertEqual(default_provider_name(), "groq")
+
+    def test_orca_provider_default_model(self) -> None:
+        provider = OrcaProvider(api_key="sk-orca-test")
+
+        self.assertEqual(provider._model, "qwen/qwen3.8-27b-free")
+        self.assertEqual(provider.BASE_URL, "https://api.orcarouter.ai/v1")
 
     def test_inferx_provider_default_model(self) -> None:
         provider = InferXProvider(api_key="ix-test")
@@ -136,6 +153,41 @@ class ProviderSelectionTests(unittest.TestCase):
 
         self.assertEqual(provider._model, "deepseek-v4-flash")
         self.assertEqual(provider.BASE_URL, "https://opencode.ai/zen/go/v1")
+
+    def test_get_provider_catalog(self) -> None:
+        with self.patch_settings(GROQ_API_KEY="gsk-test"):
+            catalog = get_provider_catalog()
+
+        self.assertEqual(len(catalog), 6)
+        groq_entry = next(item for item in catalog if item["name"] == "groq")
+        self.assertTrue(groq_entry["configured"])
+        self.assertTrue(groq_entry["is_default"])
+        self.assertEqual(groq_entry["default_model"], "qwen/qwen3.6-27b")
+        self.assertIn("llama-3.3-70b-versatile", groq_entry["suggested_models"])
+
+        opengateway_entry = next(item for item in catalog if item["name"] == "opengateway")
+        self.assertFalse(opengateway_entry["configured"])
+        self.assertFalse(opengateway_entry["is_default"])
+
+    def test_explicit_model_override(self) -> None:
+        with self.patch_settings(GROQ_API_KEY="gsk-test"):
+            provider = get_provider(provider_name="groq", model="llama-3.3-70b-versatile")
+
+        self.assertIsInstance(provider, GroqProvider)
+        self.assertEqual(provider._model, "llama-3.3-70b-versatile")
+
+    def test_switchable_model_provider(self) -> None:
+        with self.patch_settings(GROQ_API_KEY="gsk-test", AGNES_API_KEY="sk-agnes"):
+            groq_p = get_provider(provider_name="groq")
+            switchable = SwitchableModelProvider(groq_p, initial_name="groq", initial_model="qwen/qwen3.6-27b")
+            self.assertEqual(switchable.current_provider_name, "groq")
+            self.assertEqual(switchable.current_model, "qwen/qwen3.6-27b")
+
+            switchable.switch("agnes", model="agnes-2.0-pro")
+            self.assertEqual(switchable.current_provider_name, "agnes")
+            self.assertEqual(switchable.current_model, "agnes-2.0-pro")
+            self.assertIsInstance(switchable._provider, AgnesProvider)
+            self.assertEqual(switchable._provider._model, "agnes-2.0-pro")
 
 
 if __name__ == "__main__":

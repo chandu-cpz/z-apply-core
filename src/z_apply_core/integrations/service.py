@@ -18,7 +18,13 @@ from typing import Any
 from uuid import uuid4
 
 from z_apply_core.agents.context_inbox import ContextInbox, ContextMessage
-from z_apply_core.agents.model_provider import ModelProvider, get_provider
+from z_apply_core.agents.model_provider import (
+    PROVIDERS,
+    ModelProvider,
+    SwitchableModelProvider,
+    default_provider_name,
+    get_provider,
+)
 from z_apply_core.browser_session import ARTIFACT_ROOT
 from z_apply_core.browser_workspace import BrowserWorkspace
 from z_apply_core.context.call_ledger import RunCallLedger
@@ -82,6 +88,23 @@ class _Run:
         self.run_id = run_id
         self.resources = RunResources()
         self.sequence = 0
+        initial_provider_name = request.provider or default_provider_name()
+        initial_model = request.model or (
+            PROVIDERS[initial_provider_name].default_model if initial_provider_name in PROVIDERS else None
+        )
+        try:
+            initial_provider = get_provider(
+                provider_name=request.provider,
+                model=request.model,
+            )
+            self.provider: SwitchableModelProvider | None = SwitchableModelProvider(
+                initial_provider,
+                initial_name=initial_provider_name,
+                initial_model=initial_model or "",
+            )
+        except Exception:
+            self.provider = None
+
         self.view = CoreRunView(
             run_id=run_id,
             job_url=request.job_url,
@@ -95,7 +118,7 @@ class _Run:
             outcome=None,
             summary=None,
             current_agent=None,
-            current_model=None,
+            current_model=initial_model,
             browser_tab_state=BrowserTabState.PENDING,
             control_mode=BrowserControlMode.AGENT_CONTROL,
             pending_human_request_id=None,
@@ -275,6 +298,9 @@ class CoreRunHandle:
 
     async def send_context(self, content: str, *, source: str) -> CoreContextMessage:
         return await self._service.send_context(self._run_id, content, source=source)
+
+    async def switch_model(self, provider: str, model: str | None = None) -> CoreRunView:
+        return await self._service.switch_run_model(self._run_id, provider, model)
 
 
 class ZApplyCore:
@@ -482,6 +508,33 @@ class ZApplyCore:
         )
         return accepted
 
+    async def switch_run_model(
+        self, run_id: str, provider: str, model: str | None = None
+    ) -> CoreRunView:
+        run = self._require_run(run_id)
+        if run.view.status is RunStatus.TERMINAL:
+            raise InvalidRunTransition("terminal runs cannot switch model")
+        resolved_model = model or (
+            PROVIDERS[provider].default_model if provider in PROVIDERS else ""
+        )
+        if run.provider is None:
+            new_provider = get_provider(provider, model)
+            run.provider = SwitchableModelProvider(
+                new_provider,
+                initial_name=provider,
+                initial_model=resolved_model,
+            )
+        else:
+            run.provider.switch(provider, model)
+        run.view = replace(run.view, current_model=resolved_model or None)
+        await self._emit(
+            run,
+            "model.switched",
+            {"provider": provider, "model": resolved_model},
+            source={"component": "core"},
+        )
+        return run.view
+
     async def shutdown_browser_workspace(self, *, force: bool = False) -> None:
         active = self.active_run_ids()
         if active and not force:
@@ -586,6 +639,17 @@ class ZApplyCore:
                 prompt_variant=run.request.prompt_variant,
                 prompt_sha=run.request.prompt_sha,
             )
+            if run.provider is None:
+                initial_name = run.request.provider or default_provider_name()
+                initial_model = run.request.model or (
+                    PROVIDERS[initial_name].default_model if initial_name in PROVIDERS else ""
+                )
+                inst = get_provider(run.request.provider, run.request.model)
+                run.provider = SwitchableModelProvider(
+                    inst,
+                    initial_name=initial_name,
+                    initial_model=initial_model,
+                )
             state, result = await run_job(
                 run.request.job_url,
                 task=run.request.task or DEFAULT_TASK,
@@ -593,7 +657,7 @@ class ZApplyCore:
                 prompt_variant=run.request.prompt_variant,
                 prompt_sha=run.request.prompt_sha,
                 sink=_GraphSink(self, run),
-                provider=self._provider,
+                provider=run.provider,
                 resources=run.resources,
                 cleanup_resources=False,
                 context_inbox=run.context_inbox,
