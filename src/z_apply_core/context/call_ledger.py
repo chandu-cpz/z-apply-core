@@ -19,6 +19,7 @@ class LedgerEntry:
     input_tokens: int
     output_tokens: int
     cache_read_tokens: int = 0
+    new_input_tokens: int = 0
     ttft_ms: int | None = None
     duration_ms: int | None = None
     gateway_cost_usd: float | None = None
@@ -41,6 +42,8 @@ class RunCallLedger:
         self._entries: list[LedgerEntry] = []
         self._total_input = 0
         self._total_output = 0
+        self._total_cache_read = 0
+        self._total_new_input = 0
         self._total_cost = 0.0
 
     @property
@@ -73,6 +76,14 @@ class RunCallLedger:
         return self._total_output
 
     @property
+    def total_cache_read_tokens(self) -> int:
+        return self._total_cache_read
+
+    @property
+    def total_new_input_tokens(self) -> int:
+        return self._total_new_input
+
+    @property
     def total_cost_usd(self) -> float:
         return self._total_cost
 
@@ -90,6 +101,12 @@ class RunCallLedger:
         gateway_cost_usd: float | None = None,
     ) -> LedgerEntry:
         """Append one successful call and update the running totals.
+
+        ``input_tokens`` is the provider-reported prompt size, which for a
+        resuming thread re-sends the whole conversation; ``cache_read_tokens``
+        is the share served from the prefix cache. ``new_input_tokens`` is the
+        remainder (input minus cache), the tokens actually introduced by this
+        call, so run totals never recount the same context on every call.
 
         A gateway-reported dollar cost wins over the rate-card estimate — even
         ``0.0``, which is authoritative for subscription-covered/free requests
@@ -116,6 +133,7 @@ class RunCallLedger:
             input_tokens=max(0, input_tokens),
             output_tokens=max(0, output_tokens),
             cache_read_tokens=max(0, cache_read_tokens),
+            new_input_tokens=max(0, max(0, input_tokens) - max(0, cache_read_tokens)),
             ttft_ms=ttft_ms,
             duration_ms=duration_ms,
             gateway_cost_usd=(round(gateway_cost_usd, 6) if gateway_cost_usd is not None else None),
@@ -124,6 +142,8 @@ class RunCallLedger:
         self._entries.append(entry)
         self._total_input += entry.input_tokens
         self._total_output += entry.output_tokens
+        self._total_cache_read += entry.cache_read_tokens
+        self._total_new_input += entry.new_input_tokens
         self._total_cost += entry.cost.usd
         return entry
 
@@ -144,6 +164,7 @@ class RunCallLedger:
                     "input_tokens": entry.input_tokens,
                     "output_tokens": entry.output_tokens,
                     "cache_read_tokens": entry.cache_read_tokens,
+                    "new_input_tokens": entry.new_input_tokens,
                     "ttft_ms": entry.ttft_ms,
                     "duration_ms": entry.duration_ms,
                     "cost_usd": entry.cost.usd,
@@ -155,6 +176,8 @@ class RunCallLedger:
                 "calls": self.call_count,
                 "input_tokens": self.total_input_tokens,
                 "output_tokens": self.total_output_tokens,
+                "cache_read_tokens": self.total_cache_read_tokens,
+                "new_input_tokens": self.total_new_input_tokens,
                 "cost_usd": round(self.total_cost_usd, 6),
             },
         }
