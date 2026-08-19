@@ -5,7 +5,7 @@ import json
 import logging
 import re
 import shutil
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from enum import StrEnum
 from pathlib import Path
@@ -40,6 +40,7 @@ from z_apply_core.browser_targeting import (
 )
 from z_apply_core.browser_tools import (
     BROWSER_CHANGING_TOOL_NAMES,
+    MAX_BATCH_STEPS,
     REF_TAG_RE,
     BrowserToolRegistry,
     normalize_browser_arguments,
@@ -64,6 +65,21 @@ ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
 _CONTROL_LABEL_LINE_PATTERN = re.compile(
     r'^\s*(?:- )?(?:textbox|combobox|checkbox|radio|listbox) "([^"]+)"'
 )
+
+#: Batch step action to the backend tool that executes it. ``snapshot`` steps
+#: are allowed mid-script but only the final post-batch snapshot records an
+#: observation, so mid-script captures never corrupt the revision sequence.
+_BATCH_DISPATCH_TOOL_NAMES = {
+    "navigate": "browser_navigate",
+    "click": "browser_click",
+    "type": "browser_type",
+    "fill_form": "browser_fill_form",
+    "select_option": "browser_select_option",
+    "wait_for": "browser_wait_for",
+    "handle_dialog": "browser_handle_dialog",
+    "evaluate": "browser_evaluate",
+    "snapshot": "browser_snapshot",
+}
 
 
 def _control_label_from_line(line: str) -> str | None:
@@ -216,28 +232,41 @@ class BrowserSession:
                 "evidence actually shows."
             ) from exc
 
+    async def _guard_click_or_type(self, name: str, arguments: dict[str, Any]) -> bool:
+        """Apply the upload + submission guards shared by standalone calls and
+        batch steps; return whether a one-use submit approval must be consumed.
+
+        ``browser_click`` on a file input/upload trigger is rejected outright
+        (the file must be attached atomically via ``browser_click_upload``), and
+        a form-submit click or ``type submit=true`` requires the one-use human
+        approval. The caller consumes the approval only after the backend result
+        passes its error check, exactly like the standalone path.
+        """
+        guarded_submit = False
+        if name == "browser_click" and await self._is_file_upload_trigger(arguments):
+            self._pending_atomic_upload_target = str(arguments.get("target", ""))
+            raise BrowserToolExecutionError(
+                "Native file chooser click rejected. Attach the file atomically "
+                "with browser_click_upload; never click a file input or its "
+                "upload trigger."
+            )
+        if self._submission.active:
+            if name == "browser_click":
+                guarded_submit = (
+                    await self._classify_submit_control(arguments)
+                    is SubmitControlKind.FORM_SUBMIT
+                )
+            elif name == "browser_type" and arguments.get("submit") is True:
+                guarded_submit = True
+            if guarded_submit:
+                await self._require_submission_capability_locked(arguments)
+        return guarded_submit
+
     async def _call_tool_guarded(self, name: str, normalized: dict[str, Any]) -> str:
         page_url = ""
         page_title = ""
         async with self._operation_scope():
-            guarded_submit = False
-            if name == "browser_click" and await self._is_file_upload_trigger(normalized):
-                self._pending_atomic_upload_target = str(normalized.get("target", ""))
-                raise BrowserToolExecutionError(
-                    "Native file chooser click rejected. Attach the configured file "
-                    "atomically with browser_click_upload(target, paths); never click "
-                    "a file input or its upload trigger."
-                )
-            if self._submission.active:
-                if name == "browser_click":
-                    guarded_submit = (
-                        await self._classify_submit_control(normalized)
-                        is SubmitControlKind.FORM_SUBMIT
-                    )
-                elif name == "browser_type" and normalized.get("submit") is True:
-                    guarded_submit = True
-                if guarded_submit:
-                    await self._require_submission_capability_locked(normalized)
+            guarded_submit = await self._guard_click_or_type(name, normalized)
             result = await self._call_backend_tool(name, normalized)
             if name in BROWSER_CHANGING_TOOL_NAMES:
                 await self._discover_owned_popups()
@@ -440,6 +469,151 @@ class BrowserSession:
         if self.run_context is not None:
             self.run_context.action_log.record(receipt)
         return receipt.render()
+
+    async def run_action_batch(self, steps: list[dict[str, Any]]) -> str:
+        """Replay a validated script of browser actions and return one compact receipt.
+
+        Steps execute in order through the same guarded backend path as standalone
+        calls: file-upload clicks are rejected, submit-classified clicks require
+        the armed one-use human approval, and popup ownership is rediscovered
+        after every mutation. Execution stops at the first failing step. A single
+        full snapshot after the batch defines the post-batch observation and a
+        real ``ActionReceipt``, so platform playbook memory and the no-progress
+        guards keep working unchanged.
+        """
+        if not steps or len(steps) > MAX_BATCH_STEPS:
+            raise BrowserToolExecutionError(
+                f"browser_batched requires between 1 and {MAX_BATCH_STEPS} steps."
+            )
+        before = self._current_observation()
+        markers: list[str] = []
+        stopped: tuple[int, str] | None = None
+        async with self._operation_scope():
+            for index, raw_step in enumerate(steps):
+                if not isinstance(raw_step, Mapping):
+                    raise BrowserToolExecutionError(
+                        f"browser_batched step {index + 1} is not a mapping."
+                    )
+                action = str(raw_step.get("action", ""))
+                backend_name = _BATCH_DISPATCH_TOOL_NAMES.get(action)
+                if backend_name is None:
+                    raise BrowserToolExecutionError(
+                        f"Unknown browser_batched action {action!r} at step {index + 1}."
+                    )
+                arguments = {
+                    key: value
+                    for key, value in normalize_browser_arguments(raw_step).items()
+                    if key != "action"
+                }
+                label = _truncate(_batch_step_label(action, arguments))
+                try:
+                    result, guarded_submit = await self._run_batch_step(
+                        backend_name, action, arguments
+                    )
+                    _raise_for_tool_error(action, result)
+                    if guarded_submit:
+                        self._submission.consume()
+                    markers.append(f"- {index + 1} {label} ok")
+                except Exception as exc:  # noqa: BLE001 - contained per-step like a standalone call
+                    markers.append(
+                        f"- {index + 1} {label} failed: " f"{_truncate(str(exc))}"
+                    )
+                    stopped = (index, action)
+                    break
+            after, note = await self._batch_evidence(before, stopped)
+        changed = before.signature != after.signature
+        signature = json.dumps(
+            {"name": "browser_batched", "arguments": {"steps": steps}},
+            sort_keys=True,
+            default=str,
+        )
+        self._last_mutation_signature = signature
+        self._last_mutation_made_progress = changed
+        receipt = ActionReceipt(
+            tool="browser_batched",
+            arguments={"steps": steps},
+            before_revision=before.revision,
+            after=after,
+            changed=changed,
+            result="\n".join(markers),
+        )
+        self._last_action_receipt = receipt
+        if self.run_context is not None:
+            self.run_context.action_log.record(receipt)
+        evidence_store = getattr(self, "evidence_store", None)
+        if evidence_store is not None:
+            evidence = render_bounded(after, evidence_store)
+        else:
+            evidence = after.compact_render()
+        stopped_note = ""
+        if stopped is not None:
+            stopped_index, stopped_action = stopped
+            stopped_note = f", stopped_at: {stopped_index + 1} ({stopped_action})"
+        ok_count = sum(1 for marker in markers if marker.endswith(" ok"))
+        header = (
+            "BROWSER BATCH RECEIPT\n"
+            f"steps: {len(steps)} planned, {ok_count} ok{stopped_note}\n"
+            f"changed: {'true' if changed else 'false'}\n"
+            f"after_revision: {after.revision}\n"
+        )
+        rendered = f"{header}{''.join(marker + '\n' for marker in markers)}{evidence}{note}"
+        if stopped is not None:
+            # A stopped batch is a failed script: surface it as a contained tool
+            # error (no browser_revision stamp) so sibling mutations in the same
+            # response are skipped and bounded evidence re-injects next turn,
+            # matching how a failing standalone call behaves.
+            raise BrowserToolExecutionError(rendered)
+        return rendered
+
+    async def _run_batch_step(
+        self,
+        backend_name: str,
+        action: str,
+        arguments: dict[str, Any],
+    ) -> tuple[Any, bool]:
+        """Execute one batch step through the same guards as a standalone call.
+
+        Returns the raw backend result plus whether a one-use submit approval
+        was armed and must be consumed (only after the caller's error check).
+        ``snapshot`` steps never record an observation; only the final post-batch
+        snapshot does.
+        """
+        if action == "click":
+            guarded_submit = await self._guard_click_or_type("browser_click", arguments)
+            result = await self._call_backend_tool(backend_name, arguments)
+            return result, guarded_submit
+        if action == "type":
+            await self._pre_select_type_target(arguments)
+            guarded_submit = await self._guard_click_or_type("browser_type", arguments)
+            result = await self._call_backend_tool(backend_name, arguments)
+            return result, guarded_submit
+        if action == "wait_for":
+            arguments = validate_bounded_wait_arguments(arguments)
+        result = await self._call_backend_tool(backend_name, arguments)
+        if backend_name in BROWSER_CHANGING_TOOL_NAMES:
+            await self._discover_owned_popups()
+        return result, False
+
+    async def _batch_evidence(
+        self,
+        before: BrowserObservation,
+        stopped: tuple[int, str] | None,
+    ) -> tuple[BrowserObservation, str]:
+        """Capture one post-batch observation, or fall back to the pre-batch state.
+
+        The final snapshot can legitimately fail after a stopped batch (for
+        example when a native file chooser is pending and blocks every other
+        tool). In that case the pre-batch observation is the best known state and
+        the caller appends an evidence-unavailable note; no revision advances.
+        """
+        try:
+            evidence = await self._call_backend_tool("browser_snapshot", {"target": "html"})
+            _raise_for_tool_error("browser_snapshot", evidence)
+            page_url, page_title = await self._page_identity()
+            text = _text_content(evidence)
+            return self._record_observation(text, url=page_url, title=page_title), ""
+        except Exception as exc:  # noqa: BLE001 - post-action evidence is best-effort
+            return before, f"\nPost-action evidence unavailable: {_truncate(str(exc))}"
 
     async def upload_files(self, target: str, paths: list[str], name: str = "") -> str:
         """Resolve an upload trigger to its file input without opening a chooser.
@@ -1035,6 +1209,34 @@ class BrowserSession:
         lease = getattr(self, "_lease", None)
         if lease is not None:
             await lease.discover_owned_popups()
+
+
+def _batch_step_label(action: str, arguments: dict[str, Any]) -> str:
+    if action == "navigate":
+        url = arguments.get("url")
+        if isinstance(url, str) and url:
+            return f"navigate {url}"
+        return "navigate"
+    target = arguments.get("target")
+    if isinstance(target, str) and target:
+        return f"{action} {target}"
+    if action == "fill_form":
+        field_targets = [
+            target
+            for field in arguments.get("fields", [])
+            if isinstance(field, Mapping)
+            for target in [field.get("target")]
+            if isinstance(target, str) and target
+        ]
+        if field_targets:
+            return f"fill_form {', '.join(field_targets)}"
+    return action
+
+
+def _truncate(text: str, max_chars: int = 200) -> str:
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3]}..."
 
 
 def _text_content(result: Any) -> str:

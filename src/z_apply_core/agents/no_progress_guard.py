@@ -460,12 +460,30 @@ def _target_refs(args: Mapping[str, Any]) -> frozenset[str]:
     target = args.get("target")
     if isinstance(target, str) and target:
         refs.add(target)
-    fields = args.get("fields")
-    if isinstance(fields, list):
-        for field in fields:
-            if not isinstance(field, Mapping):
+    refs.update(_field_refs(args.get("fields")))
+    steps = args.get("steps")
+    if isinstance(steps, list):
+        # ``browser_batched`` targets live inside its step script: a batch that
+        # repeatedly targets the same refs is a repeat even though the step list
+        # is a single tool call.
+        for step in steps:
+            if not isinstance(step, Mapping):
                 continue
-            field_ref = field.get("target")
-            if isinstance(field_ref, str) and field_ref:
-                refs.add(field_ref)
+            step_target = step.get("target")
+            if isinstance(step_target, str) and step_target:
+                refs.add(step_target)
+            refs.update(_field_refs(step.get("fields")))
     return frozenset(refs)
+
+
+def _field_refs(fields: Any) -> set[str]:
+    refs: set[str] = set()
+    if not isinstance(fields, list):
+        return refs
+    for field in fields:
+        if not isinstance(field, Mapping):
+            continue
+        field_ref = field.get("target")
+        if isinstance(field_ref, str) and field_ref:
+            refs.add(field_ref)
+    return refs
