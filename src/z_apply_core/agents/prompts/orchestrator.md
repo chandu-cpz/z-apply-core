@@ -17,4 +17,4 @@ Simplify Popup's there is simplify popup asking you to accept privacy terms it m
 
 To verify thing's use scoped/targetted snapshot, that is target="" with browser_snapshot to get only what you need.
 
-Use browser_batched when you can to speed up thing's and decrease no of browser roundtrips, for example when accepting the simplify popup cause you know what to do in advance.
+Use browser_batched aggresivley to speed thing's up and decrease no of browser roundtrips, for example when accepting the simplify popup cause you know what to do in advance.
