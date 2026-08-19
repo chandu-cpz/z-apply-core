@@ -97,7 +97,61 @@ class CallLedgerTests(unittest.TestCase):
         )
 
         self.assertEqual(ledger.total_input_tokens, 1_000_000)
+        self.assertEqual(ledger.total_cache_read_tokens, 1_000_000)
+        self.assertEqual(ledger.total_new_input_tokens, 0)
         self.assertAlmostEqual(ledger.total_cost_usd, 0.2828, places=4)
+
+    def test_resuming_thread_input_totals_do_not_recount_context(self) -> None:
+        # A deep-agent thread re-sends its full conversation on every call;
+        # the provider serves the repeated prefix from cache. The raw input
+        # total sums the same context per call, so the non-recounted total
+        # must be input minus cache reads.
+        ledger = RunCallLedger()
+
+        ledger.record(
+            agent="orchestrator",
+            model_id="deepseek-v4-flash",
+            provider="opencodego",
+            input_tokens=10_000,
+            output_tokens=200,
+        )
+        ledger.record(
+            agent="orchestrator",
+            model_id="deepseek-v4-flash",
+            provider="opencodego",
+            input_tokens=15_000,
+            output_tokens=200,
+            cache_read_tokens=10_000,
+        )
+        ledger.record(
+            agent="orchestrator",
+            model_id="deepseek-v4-flash",
+            provider="opencodego",
+            input_tokens=20_000,
+            output_tokens=200,
+            cache_read_tokens=15_000,
+        )
+
+        self.assertEqual(ledger.total_input_tokens, 45_000)
+        self.assertEqual(ledger.total_cache_read_tokens, 25_000)
+        self.assertEqual(ledger.total_new_input_tokens, 20_000)
+        self.assertEqual([e.new_input_tokens for e in ledger.entries], [10_000, 5_000, 5_000])
+
+    def test_new_input_tokens_clamped_at_zero(self) -> None:
+        ledger = RunCallLedger()
+
+        ledger.record(
+            agent="orchestrator",
+            model_id="deepseek-v4-flash",
+            provider="opencodego",
+            input_tokens=100,
+            output_tokens=0,
+            cache_read_tokens=500,
+        )
+
+        self.assertEqual(ledger.entries[0].new_input_tokens, 0)
+        self.assertEqual(ledger.total_new_input_tokens, 0)
+        self.assertEqual(ledger.total_input_tokens, 100)
 
 
 if __name__ == "__main__":
@@ -136,6 +190,9 @@ class LedgerPersistenceTests(unittest.TestCase):
             self.assertEqual(record["status"], "completed")
             self.assertEqual(record["totals"]["calls"], 1)
             self.assertEqual(record["totals"]["input_tokens"], 1000)
+            self.assertEqual(record["totals"]["cache_read_tokens"], 500)
+            self.assertEqual(record["totals"]["new_input_tokens"], 500)
+            self.assertEqual(record["calls"][0]["new_input_tokens"], 500)
             self.assertAlmostEqual(record["totals"]["cost_usd"], 0.0000994, places=6)
 
     def test_terminal_reason_flows_into_record(self) -> None:

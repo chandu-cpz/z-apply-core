@@ -450,7 +450,9 @@ class RichStreamRenderer:
         table = Table(
             title=(
                 f"LLM calls this run: {len(entries)} calls \u00b7 "
-                f"in={ledger.total_input_tokens:,} out={ledger.total_output_tokens:,} \u00b7 "
+                f"in={ledger.total_new_input_tokens:,} new "
+                f"({ledger.total_input_tokens:,} gross) \u00b7 "
+                f"out={ledger.total_output_tokens:,} \u00b7 "
                 f"{self._ledger_cache_ratio()} \u00b7 "
                 f"{self._ledger_total_label()}"
             ),
@@ -484,9 +486,9 @@ class RichStreamRenderer:
             f"{ledger.call_count} calls",
             "",
             "",
-            f"{ledger.total_input_tokens:,}",
+            f"{ledger.total_new_input_tokens:,}",
             f"{ledger.total_output_tokens:,}",
-            self._ledger_cache_ratio(),
+            _humanize_cache(ledger.total_cache_read_tokens),
             self._ledger_total_label(),
             style="bold",
         )
