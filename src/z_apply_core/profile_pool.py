@@ -43,6 +43,8 @@ SlotState = Literal["pristine", "leased", "resetting", "quarantined"]
 RSYNC_INCLUDES = (
     "storage/",
     "storage/**",
+    "extensions/",
+    "extensions/**",
     "extensions.json",
     "extension-preferences.json",
     "extension-settings.json",
@@ -73,6 +75,29 @@ SESSIONSTORE_ARTIFACTS = (
 # Firefox profile lock files. A leftover lock after an unclean shutdown blocks
 # a relaunch on the same directory.
 LOCK_FILES = (".parentlock", "lock")
+
+# The Simplify addon ships to every slot as a real (app-profile sideload) install
+# so its moz-extension UUID is stable and its storage.local consent survives; a
+# slot without it would show the consent popup on every run.
+SIMPLIFY_ADDON_ID = "sabre@simplify.jobs"
+
+
+def _is_simplify_sideloaded(slot: Path) -> bool:
+    """True if extensions.json registers Simplify as an active app-profile sideload."""
+    try:
+        manifest = json.loads((slot / "extensions.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    for addon in manifest.get("addons", []):
+        if (
+            addon.get("id") == SIMPLIFY_ADDON_ID
+            and addon.get("active") is True
+            and addon.get("location") == "app-profile"
+            and (slot / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").is_file()
+        ):
+            return True
+    return False
+
 
 # Files that must exist in a slot before a browser may launch on it.
 REQUIRED_MANIFEST = ("extensions.json", "prefs.js", "cookies.sqlite", "storage")
@@ -117,13 +142,16 @@ def _rsync_mirror(master: Path, slot: Path) -> None:
 def verify_manifest(slot: Path, *, require_addon_storage: bool = True) -> None:
     """Fail-fast check that a slot is a complete, launchable profile copy.
 
-    Raises ``ProfileSlotError`` if any required file is missing, or — when
-    ``require_addon_storage`` is set — if no addon (moz-extension) storage
-    survived the copy. Never launch a partial profile.
+    Raises ``ProfileSlotError`` if any required file is missing, the Simplify
+    addon sideload did not survive the copy, or (when ``require_addon_storage``
+    is set) if no addon (moz-extension) storage survived. Never launch a
+    partial profile.
     """
     missing = [name for name in REQUIRED_MANIFEST if not (slot / name).exists()]
     if missing:
         raise ProfileSlotError(f"slot is missing required files: {missing}")
+    if not _is_simplify_sideloaded(slot):
+        raise ProfileSlotError("slot is missing the Simplify addon app-profile sideload")
     if require_addon_storage:
         storage_default = slot / "storage" / "default"
         if not storage_default.is_dir() or not any(

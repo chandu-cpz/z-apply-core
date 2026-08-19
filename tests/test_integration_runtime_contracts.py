@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -191,7 +192,11 @@ async def test_browser_workspace_opens_per_run_instances_from_the_pool(tmp_path:
 
     master = tmp_path / "master"
     (master / "storage" / "default" / "moz-extension+++addon-1").mkdir(parents=True)
-    (master / "extensions.json").write_text("{}")
+    (master / "extensions").mkdir()
+    (master / "extensions" / "sabre@simplify.jobs.xpi").write_bytes(b"xpi")
+    (master / "extensions.json").write_text(json.dumps({
+        "addons": [{"id": "sabre@simplify.jobs", "active": True, "location": "app-profile"}]
+    }))
     (master / "prefs.js").write_text("user_pref('x', true);")
     (master / "cookies.sqlite").write_bytes(b"cookies")
 

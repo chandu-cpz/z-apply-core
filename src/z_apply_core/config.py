@@ -31,6 +31,9 @@ class Settings(BaseSettings):
         default=DEFAULT_CAMOUFOX_BROWSER,
         alias="CAMOUFOX_BROWSER",
     )
+    # Path to the Simplify addon source directory. Used only when provisioning
+    # the master profile (scripts/provision_master.py bakes it into the profile
+    # as an app-profile sideload); runs themselves never install it.
     simplify_addon_path: Path = Field(
         default=DEFAULT_SIMPLIFY_ADDON_PATH,
         alias="SIMPLIFY_ADDON_PATH",

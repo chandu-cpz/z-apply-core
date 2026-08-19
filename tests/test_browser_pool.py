@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +13,7 @@ from z_apply_core.browser_pool import (
     BrowserPool,
     PoolCapacityError,
 )
-from z_apply_core.profile_pool import ProfileSlotError
+from z_apply_core.profile_pool import SIMPLIFY_ADDON_ID, ProfileSlotError
 
 
 def _make_master(root: Path) -> Path:
@@ -20,7 +21,16 @@ def _make_master(root: Path) -> Path:
     master = root / "master"
     (master / "storage" / "default" / "moz-extension+++addon-1").mkdir(parents=True)
     (master / "storage" / "default" / "https+++example.test").mkdir(parents=True)
-    (master / "extensions.json").write_text("{}")
+    (master / "extensions").mkdir()
+    (master / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").write_bytes(b"xpi")
+    (master / "extensions.json").write_text(json.dumps({
+        "addons": [{
+            "id": SIMPLIFY_ADDON_ID,
+            "active": True,
+            "location": "app-profile",
+            "version": "3.0.8",
+        }]
+    }))
     (master / "extension-preferences.json").write_text("{}")
     (master / "extension-settings.json").write_text("{}")
     (master / "prefs.js").write_text("user_pref('x', true);")

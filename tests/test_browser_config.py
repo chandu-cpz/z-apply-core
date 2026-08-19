@@ -57,23 +57,19 @@ class BrowserConfigTests(unittest.TestCase):
 
         self.assertNotIn("redact_values", config)
 
-    def test_simplify_addon_is_loaded_in_every_browser_session(self) -> None:
+    def test_simplify_addon_is_not_installed_per_session(self) -> None:
+        """Simplify ships in the profile as a baked sideload, never a temp install."""
         with tempfile.TemporaryDirectory() as directory:
-            addon = Path(directory) / "simplify"
-            addon.mkdir()
             settings = SimpleNamespace(
                 default_username="",
                 default_password="",
                 camoufox_browser="official/150.0.2-alpha.26",
-                simplify_addon_path=addon,
+                simplify_addon_path=Path(directory) / "simplify",
             )
             with patch("z_apply_core.browser_config.load_settings", return_value=settings):
                 config = build_browser_config()
 
-        self.assertEqual(
-            config["browser"]["camoufoxOptions"]["addons"],
-            [str(addon.resolve())],
-        )
+        self.assertNotIn("addons", config["browser"]["camoufoxOptions"])
         self.assertEqual(
             config["browser"]["camoufoxOptions"]["browser"],
             "official/150.0.2-alpha.26",

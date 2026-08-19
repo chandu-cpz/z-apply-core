@@ -1,14 +1,16 @@
-"""Phase 0: provision a fresh sealed master profile with Simplify + uBlock.
+"""Phase 0: provision a sealed master profile with Simplify + uBlock.
 
 Launches a headed Camoufox instance (on DISPLAY :0 when available) on a NEW
-profile directory with the Simplify addon, holds it open so a human can log
-into Simplify (email OTP) and accept the consent dialog, then — on the
-sentinel file — closes the browser, verifies the addon state landed, cleans
-non-essential site storage, and seals the profile read-only with a checksum
-manifest.
+profile directory with the Simplify addon installed as a real app-profile
+sideload, holds it open so a human can log into Simplify (email OTP) and
+accept the consent dialog if it appears, then — on the sentinel file — closes
+the browser, verifies the addon state landed, cleans non-essential site
+storage, and seals the profile read-only with a checksum manifest.
 
 The current master is never touched: this provisions ``<dir>.new`` and the
-swap to ``browser-profile`` happens only after verification.
+swap to ``browser-profile`` happens only after verification. Pass ``--from``
+to seed the new profile from an existing one (keeps the login session and any
+already-baked consent instead of re-entering them).
 
 Usage:
     uv run python scripts/provision_master.py \
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -28,10 +31,12 @@ import os
 import shutil
 import stat
 import sys
+import zipfile
 from pathlib import Path
 
 from z_apply_core.browser_config import build_browser_config
-from z_apply_core.config import CORE_ROOT
+from z_apply_core.config import CORE_ROOT, load_settings
+from z_apply_core.profile_pool import SIMPLIFY_ADDON_ID
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("provision-master")
@@ -66,6 +71,40 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _make_writable(profile_dir: Path) -> None:
+    """The master is sealed read-only; a provisioning copy must be writable."""
+    for path in profile_dir.rglob("*"):
+        with contextlib.suppress(OSError):
+            path.chmod(path.stat().st_mode | stat.S_IWUSR)
+    with contextlib.suppress(OSError):
+        profile_dir.chmod(profile_dir.stat().st_mode | stat.S_IWUSR)
+
+
+def _bake_simplify_xpi(profile_dir: Path, addon_dir: Path) -> Path:
+    """Install the Simplify addon as a real app-profile sideload.
+
+    The addon ships to every slot as ``<profile>/extensions/<id>.xpi`` so its
+    moz-extension UUID is stable across runs (Firefox persists it in the
+    ``extensions.webextensions.uuids`` pref) and its ``storage.local`` consent
+    survives; a temporary install churns the UUID on every launch and orphans
+    the consent.
+    """
+    addon_dir = addon_dir.expanduser().resolve()
+    if not addon_dir.is_dir():
+        raise ValueError(f"Configured Simplify addon directory does not exist: {addon_dir}")
+    extensions_dir = profile_dir / "extensions"
+    extensions_dir.mkdir(exist_ok=True)
+    xpi = extensions_dir / f"{SIMPLIFY_ADDON_ID}.xpi"
+    with zipfile.ZipFile(xpi, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(addon_dir.rglob("*")):
+            if path.is_file():
+                info = zipfile.ZipInfo(str(path.relative_to(addon_dir)), date_time=(2020, 1, 1, 0, 0, 0))
+                info.compress_type = zipfile.ZIP_DEFLATED
+                archive.writestr(info, path.read_bytes())
+    logger.info("baked Simplify sideload: %s", xpi)
+    return xpi
 
 
 def _seal(profile_dir: Path) -> dict[str, object]:
@@ -110,6 +149,21 @@ def _verify_addons(profile_dir: Path) -> list[str]:
     extensions = profile_dir / "extensions.json"
     if not extensions.exists():
         problems.append("extensions.json missing")
+    else:
+        try:
+            manifest = json.loads(extensions.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+        sideloaded = any(
+            a.get("id") == SIMPLIFY_ADDON_ID
+            and a.get("active") is True
+            and a.get("location") == "app-profile"
+            for a in manifest.get("addons", [])
+        )
+        if not sideloaded:
+            problems.append("Simplify addon is not an active app-profile sideload")
+        elif not (profile_dir / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").is_file():
+            problems.append("Simplify sideload xpi missing from extensions/")
     storage_default = profile_dir / "storage" / "default"
     if not storage_default.is_dir():
         problems.append("storage/default missing")
@@ -125,6 +179,8 @@ def _verify_addons(profile_dir: Path) -> list[str]:
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default=str(CORE_ROOT / ".z-apply" / "browser-profile.new"))
+    parser.add_argument("--from", dest="seed_from", default=None,
+                        help="existing profile to seed from (keeps login session + baked consent)")
     parser.add_argument("--wait-for", default="/tmp/z-apply-provision-done")
     parser.add_argument("--timeout", type=int, default=1800)
     args = parser.parse_args()
@@ -134,7 +190,18 @@ async def main() -> int:
     sentinel.unlink(missing_ok=True)
     if profile_dir.exists():
         shutil.rmtree(profile_dir, ignore_errors=True)
-    profile_dir.mkdir(parents=True)
+    if args.seed_from:
+        seed = Path(args.seed_from).resolve()
+        if not seed.is_dir():
+            logger.error("--from profile does not exist: %s", seed)
+            return 1
+        shutil.copytree(seed, profile_dir)
+        _make_writable(profile_dir)
+        logger.info("seeded new profile from %s", seed)
+    else:
+        profile_dir.mkdir(parents=True)
+
+    _bake_simplify_xpi(profile_dir, load_settings().simplify_addon_path)
 
     config = build_browser_config("provision-master", profile_dir=profile_dir)
     os.environ.setdefault("DISPLAY", ":0")
