@@ -62,6 +62,13 @@ VISUAL_EVIDENCE_UNAVAILABLE_NOTE = (
 )
 ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
 
+#: Per-step ceiling for a single ``browser_batched`` action. The backend's own
+#: ``action_timeout`` (default 5s) bounds each Playwright call, but target
+#: resolution and post-action settle waits are unbounded — a frozen renderer or
+#: a stuck ``locator.normalize()`` hangs the step *and* the batch's gate. This
+#: turns a hung step into a ``stopped_at`` error instead of a deadlock.
+_BATCH_STEP_TIMEOUT_SECONDS = 30
+
 _CONTROL_LABEL_LINE_PATTERN = re.compile(
     r'^\s*(?:- )?(?:textbox|combobox|checkbox|radio|listbox) "([^"]+)"'
 )
@@ -580,16 +587,19 @@ class BrowserSession:
         """
         if action == "click":
             guarded_submit = await self._guard_click_or_type("browser_click", arguments)
-            result = await self._call_backend_tool(backend_name, arguments)
+            async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
+                result = await self._call_backend_tool(backend_name, arguments)
             return result, guarded_submit
         if action == "type":
             await self._pre_select_type_target(arguments)
             guarded_submit = await self._guard_click_or_type("browser_type", arguments)
-            result = await self._call_backend_tool(backend_name, arguments)
+            async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
+                result = await self._call_backend_tool(backend_name, arguments)
             return result, guarded_submit
         if action == "wait_for":
             arguments = validate_bounded_wait_arguments(arguments)
-        result = await self._call_backend_tool(backend_name, arguments)
+        async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
+            result = await self._call_backend_tool(backend_name, arguments)
         if backend_name in BROWSER_CHANGING_TOOL_NAMES:
             await self._discover_owned_popups()
         return result, False

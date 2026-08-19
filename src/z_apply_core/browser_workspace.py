@@ -43,6 +43,8 @@ class BrowserControlGate:
         self._takeover_pending = False
         self._human_control = False
         self._operation_active = False
+        self._operation_owner: asyncio.Task[None] | None = None
+        self._operation_count = 0
 
     @property
     def human_control(self) -> bool:
@@ -50,21 +52,28 @@ class BrowserControlGate:
 
     @asynccontextmanager
     async def mutation(self) -> AsyncIterator[None]:
+        current = asyncio.current_task()
         async with self._condition:
             await self._condition.wait_for(
                 lambda: (
                     not self._human_control
                     and not self._takeover_pending
-                    and not self._operation_active
+                    and (not self._operation_active or self._operation_owner is current)
                 )
             )
             self._operation_active = True
+            self._operation_owner = current
+            self._operation_count += 1
         try:
             yield
         finally:
             async with self._condition:
-                self._operation_active = False
-                self._condition.notify_all()
+                self._operation_count -= 1
+                if self._operation_count <= 0:
+                    self._operation_active = False
+                    self._operation_owner = None
+                    self._operation_count = 0
+                    self._condition.notify_all()
 
     async def take(self) -> None:
         async with self._condition:
