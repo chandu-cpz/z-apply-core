@@ -77,7 +77,10 @@ _AGENT_TOOL_DESCRIPTIONS["browser_evaluate"] = (
     "If the evaluate receipt reports `changed: false`, the framework ignored the "
     "write - do not repeat it. Never use evaluation to bypass validation, "
     "fabricate a candidate value, or solve a CAPTCHA. "
-    "For a stubborn SELECT/COMBOBOX the recipes are: native `<select>` - assign "
+    "For a stubborn SELECT/COMBOBOX try the simpler tools first: a NATIVE "
+    "<select> is set with browser_select_option, and a custom combobox is "
+    "handled by clicking it open and clicking the option. Only when those "
+    "fail use these recipes: native `<select>` - assign "
     "through the native setter and fire change: `const s = "
     "Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; "
     "s.call(el, 'VALUE'); el.dispatchEvent(new Event('change', {bubbles: true}));` "
@@ -104,6 +107,17 @@ _AGENT_TOOL_DESCRIPTIONS["browser_snapshot"] = (
     "the whole page, and pass a `depth` (e.g. depth=2) for a shallow tree when "
     "you only need a section or a few controls. Omit both only when you need "
     "the complete page tree."
+)
+
+_AGENT_TOOL_DESCRIPTIONS["browser_select_option"] = (
+    "Select one or more values in a NATIVE <select> element (pass option "
+    "`value` attributes, or the visible label). This does NOT work on custom "
+    "comboboxes: role=combobox widgets (React Select, MUI, headlessui) are "
+    "built from divs/buttons/listbox and have no native option to select. For "
+    "a custom combobox: click it to open the menu, then click the option you "
+    "want; if it is searchable, type to filter, wait for the option to appear, "
+    "then click it. Only fall back to browser_evaluate when the option click "
+    "never registers or the option is not in the DOM."
 )
 
 INITIAL_AGENT_BROWSER_TOOLS = (
@@ -443,7 +457,8 @@ _BATCHED_TOOL_DESCRIPTION = (
     "- type: {target, text, submit=false} - type text, replacing existing text\n"
     "- fill_form: {fields: [{target, value, type?}]} - fill several controls at "
     "once\n"
-    "- select_option: {target, values} - select combobox values\n"
+    "- select_option: {target, values} - select values in a NATIVE <select> "
+    "(custom comboboxes need the combobox rule below)\n"
     "- wait_for: {time<=30 or text or textGone} - brief settle or visible-text wait\n"
     "- handle_dialog: {accept, promptText} - answer a native dialog\n"
     "- evaluate: {function, target=''} - run a JS function; last resort, recipes "
@@ -453,6 +468,13 @@ _BATCHED_TOOL_DESCRIPTION = (
     "Targets are element refs from the snapshot (e.g. e12). NEVER include a "
     "final submit click or an upload step: both are guarded and handled by "
     "dedicated tools.\n"
+    "Combobox rule: pick the step by control type. NATIVE <select> -> "
+    "select_option. CUSTOM combobox (role=combobox, React Select, MUI) -> "
+    "click the trigger, snapshot the open listbox, then click the option by "
+    "ref - a real click fires mousedown+mouseup, so React Select accepts it. "
+    "SEARCHABLE/ASYNC combobox -> type the filter, wait_for the option text, "
+    "then click the option. Escalate to evaluate only when the option click "
+    "never registers or the option is not in the DOM.\n"
     "evaluate recipes (only for a stubborn form control whose standard writes "
     "never land): when you pass a `target` ref, the resolved element is passed to "
     "your function as its FIRST argument - write `(el) => {...}` and use that "
