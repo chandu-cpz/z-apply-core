@@ -29,9 +29,6 @@ def build_browser_config(
     profile_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     settings = load_settings()
-    addon_path = Path(settings.simplify_addon_path).expanduser().resolve()
-    if not addon_path.is_dir():
-        raise ValueError(f"Configured Simplify addon directory does not exist: {addon_path}")
 
     config: dict[str, Any] = {
         "browser": {
@@ -41,7 +38,6 @@ def build_browser_config(
             "camoufoxOptions": {
                 "browser": settings.camoufox_browser,
                 "no_viewport": True,
-                "addons": [str(addon_path)],
             },
         },
         "timeouts": {"navigation": 120_000},

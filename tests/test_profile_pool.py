@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from z_apply_core import profile_pool
-from z_apply_core.profile_pool import LOCK_FILES, SESSIONSTORE_ARTIFACTS
+from z_apply_core.profile_pool import LOCK_FILES, SESSIONSTORE_ARTIFACTS, SIMPLIFY_ADDON_ID
 
 
 def _make_master(root: Path) -> Path:
@@ -14,7 +15,16 @@ def _make_master(root: Path) -> Path:
     master = root / "master"
     (master / "storage" / "default" / "moz-extension+++addon-1").mkdir(parents=True)
     (master / "storage" / "default" / "https+++example.test").mkdir(parents=True)
-    (master / "extensions.json").write_text("{}")
+    (master / "extensions").mkdir()
+    (master / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").write_bytes(b"xpi")
+    (master / "extensions.json").write_text(json.dumps({
+        "addons": [{
+            "id": SIMPLIFY_ADDON_ID,
+            "active": True,
+            "location": "app-profile",
+            "version": "3.0.8",
+        }]
+    }))
     (master / "extension-preferences.json").write_text("{}")
     (master / "extension-settings.json").write_text("{}")
     (master / "prefs.js").write_text("user_pref('x', true);")
@@ -56,10 +66,28 @@ class ProfileSlotPoolTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(slot.state, "pristine")
         self.assertTrue((slot.dir / "extensions.json").exists())
         self.assertTrue((slot.dir / "storage" / "default" / "moz-extension+++addon-1").is_dir())
+        # The Simplify sideload must survive the mirror.
+        self.assertTrue((slot.dir / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").is_file())
         # Disposable profile junk must not leak into slots.
         for name in ("cache2", "startupCache", "datareporting", "places.sqlite",
                      "favicons.sqlite", "sessionstore.jsonlz4", "cookies.sqlite-wal"):
             self.assertFalse((slot.dir / name).exists(), name)
+
+    async def test_verify_manifest_rejects_missing_simplify_sideload(self) -> None:
+        # A master without the Simplify sideload must never produce a launchable slot.
+        bare = self._root / "bare-master"
+        (bare / "storage" / "default" / "moz-extension+++addon-1").mkdir(parents=True)
+        (bare / "extensions.json").write_text(json.dumps({"addons": []}))
+        (bare / "extension-preferences.json").write_text("{}")
+        (bare / "extension-settings.json").write_text("{}")
+        (bare / "prefs.js").write_text("user_pref('x', true);")
+        (bare / "cookies.sqlite").write_bytes(b"cookies")
+        (bare / "permissions.sqlite").write_bytes(b"permissions")
+        (bare / "logins.json").write_text("{}")
+        (bare / "key4.db").write_bytes(b"key")
+        (bare / "cert9.db").write_bytes(b"cert")
+        with self.assertRaises(profile_pool.ProfileSlotError):
+            await asyncio.to_thread(profile_pool.verify_manifest, bare)
 
     async def test_reset_removes_stale_run_state(self) -> None:
         await self.pool.provision()
@@ -114,7 +142,15 @@ class ProfileSlotPoolTests(unittest.IsolatedAsyncioTestCase):
         (slot.dir / "extensions.json").unlink()
         with self.assertRaises(profile_pool.ProfileSlotError):
             await asyncio.to_thread(profile_pool.verify_manifest, slot.dir)
-        (slot.dir / "extensions.json").write_text("{}")
+        # Sideload present but its xpi removed -> rejected.
+        (slot.dir / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").unlink()
+        (slot.dir / "extensions.json").write_text(json.dumps({
+            "addons": [{"id": SIMPLIFY_ADDON_ID, "active": True, "location": "app-profile"}]
+        }))
+        with self.assertRaises(profile_pool.ProfileSlotError):
+            await asyncio.to_thread(profile_pool.verify_manifest, slot.dir)
+        # Storage wiped -> rejected even with a valid sideload.
+        (slot.dir / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").write_bytes(b"xpi")
         (slot.dir / "storage" / "default" / "moz-extension+++addon-1").rmdir()
         with self.assertRaises(profile_pool.ProfileSlotError):
             await asyncio.to_thread(profile_pool.verify_manifest, slot.dir)
