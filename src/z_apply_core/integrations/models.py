@@ -63,8 +63,6 @@ class StartRunRequest:
     task: str | None = None
     resume_path: Path | None = None
     live_view: bool = True
-    prompt_variant: str | None = None
-    prompt_sha: str | None = None
     provider: str | None = None
     model: str | None = None
 
@@ -138,6 +136,7 @@ class CoreRunView:
     summary: str | None
     current_agent: str | None
     current_model: str | None
+    current_provider: str | None
     browser_tab_state: BrowserTabState
     control_mode: BrowserControlMode
     # Oldest still-pending human request id for this run, or None when none are
@@ -148,8 +147,6 @@ class CoreRunView:
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
-    prompt_variant: str | None = None
-    prompt_sha: str | None = None
     # Runtime reasoning override: "auto"/"off"/"on" plus an optional effort.
     current_reasoning: str = "auto"
     current_reasoning_effort: str | None = None

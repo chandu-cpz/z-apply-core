@@ -54,8 +54,6 @@ async def run_job(
     *,
     task: str,
     live_view: bool = True,
-    prompt_variant: str | None = None,
-    prompt_sha: str | None = None,
     sink: FrameworkEventSink | None = None,
     provider: ModelProvider | None = None,
     provider_name: str | None = None,
@@ -74,8 +72,6 @@ async def run_job(
                 job_url,
                 task=task,
                 live_view=live_view,
-                prompt_variant=prompt_variant,
-                prompt_sha=prompt_sha,
             ),
             config={
                 "configurable": {

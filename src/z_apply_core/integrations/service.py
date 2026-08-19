@@ -111,14 +111,13 @@ class _Run:
             task=request.task or DEFAULT_TASK,
             company=None,
             role=None,
-            prompt_variant=request.prompt_variant,
-            prompt_sha=request.prompt_sha,
             status=RunStatus.QUEUED,
             phase=RunPhase.QUEUED,
             outcome=None,
             summary=None,
             current_agent=None,
             current_model=initial_model,
+            current_provider=initial_provider_name,
             browser_tab_state=BrowserTabState.PENDING,
             control_mode=BrowserControlMode.AGENT_CONTROL,
             pending_human_request_id=None,
@@ -177,7 +176,10 @@ class _GraphSink(FrameworkEventSink):
             self._run.view = replace(self._run.view, current_agent=name)
         model = payload.get("model_id") or payload.get("auth_model_id")
         if isinstance(model, str):
-            self._run.view = replace(self._run.view, current_model=model)
+            provider_name = self._run.provider.current_provider_name if self._run.provider else None
+            self._run.view = replace(
+                self._run.view, current_model=model, current_provider=provider_name
+            )
             if event_type == "model.selected":
                 self._model_by_agent[name] = model
         if event_type.startswith("tool."):
@@ -533,7 +535,7 @@ class ZApplyCore:
             )
         else:
             run.provider.switch(provider, model)
-        run.view = replace(run.view, current_model=resolved_model or None)
+        run.view = replace(run.view, current_model=resolved_model or None, current_provider=provider)
         await self._emit(
             run,
             "model.switched",
@@ -680,8 +682,6 @@ class ZApplyCore:
             await self._emit(run, "run.phase_changed", {"phase": RunPhase.AUTHENTICATION.value})
             run.call_ledger = RunCallLedger(
                 job_url=run.request.job_url,
-                prompt_variant=run.request.prompt_variant,
-                prompt_sha=run.request.prompt_sha,
             )
             if run.provider is None:
                 initial_name = run.request.provider or default_provider_name()
@@ -698,8 +698,6 @@ class ZApplyCore:
                 run.request.job_url,
                 task=run.request.task or DEFAULT_TASK,
                 live_view=run.request.live_view,
-                prompt_variant=run.request.prompt_variant,
-                prompt_sha=run.request.prompt_sha,
                 sink=_GraphSink(self, run),
                 provider=run.provider,
                 resources=run.resources,

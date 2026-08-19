@@ -36,8 +36,6 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         job_url=str(state["job_url"]),
         task=str(state["task"]),
         snapshot=initial_snapshot,
-        prompt_variant=str(state.get("prompt_variant", "") or ""),
-        prompt_sha_override=str(state.get("prompt_sha", "") or ""),
         browser_tools=state.get("browser_tools", ()),
         authentication_tools=authentication_tools,
         config=config,

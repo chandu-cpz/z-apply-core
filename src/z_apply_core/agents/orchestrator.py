@@ -29,7 +29,7 @@ from z_apply_core.agents.harness_profile import (
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen, NoProgressGuardMiddleware
-from z_apply_core.agents.prompts import load_prompt, prompt_sha, resolve_orchestrator_prompt
+from z_apply_core.agents.prompts import ORCHESTRATOR_PROMPT, load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
@@ -115,8 +115,6 @@ async def run_orchestrator(
     context_inbox: ContextInbox | None = None,
     browser: BrowserSession | None = None,
     call_ledger: RunCallLedger | None = None,
-    prompt_variant: str | None = None,
-    prompt_sha_override: str | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
     configure_z_apply_harness_profile()
@@ -354,10 +352,6 @@ async def run_orchestrator(
     # mutations never overlap even when a subagent and the orchestrator act in
     # the same response.
     mutation_lock = asyncio.Lock()
-    resolved_prompt = resolve_orchestrator_prompt(prompt_variant)
-    resolved_prompt_sha = prompt_sha_override or prompt_sha(resolved_prompt)
-    if call_ledger is not None:
-        call_ledger.set_prompt_identity(resolved_prompt, resolved_prompt_sha)
     agent = create_deep_agent(
         model=selection.llm,
         tools=[
@@ -368,7 +362,7 @@ async def run_orchestrator(
             application_blocked,
             application_submitted,
         ],
-        system_prompt=load_prompt(resolved_prompt),
+        system_prompt=load_prompt(ORCHESTRATOR_PROMPT),
         middleware=build_orchestrator_middleware(
             provider=provider,
             run_context=run_context,
