@@ -76,7 +76,7 @@ def build_answer_writer(
                 "one exact typed value per resolved field."
             ),
             "system_prompt": (
-                f"{load_prompt('answer_writer.md', with_rules=False)}\n\n"
+                f"{load_prompt('answer_writer.md')}\n\n"
                 "## Stored candidate facts\n\n"
                 f"{_stored_facts_block(candidate_facts)}\n\n"
                 "## Prepared candidate resume evidence\n\n"

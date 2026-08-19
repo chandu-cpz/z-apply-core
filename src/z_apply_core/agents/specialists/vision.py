@@ -19,7 +19,7 @@ def build_vision_specialist(browser_tools: Sequence[BaseTool]) -> SubAgent:
                 "Capture and interpret the current page when visual evidence is needed "
                 "and DOM or ARIA evidence cannot answer a specific question."
             ),
-            "system_prompt": load_prompt("vision_specialist.md", with_rules=False),
+            "system_prompt": load_prompt("vision_specialist.md"),
             "tools": screenshot_tools,
         },
     )

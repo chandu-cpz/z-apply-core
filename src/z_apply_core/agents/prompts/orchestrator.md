@@ -197,6 +197,34 @@ field, apply, re-dispatch the reviewer) — never re-request approval yourself.
   no-progress violation. The only prose allowed is the terminal text with
   `application_blocked`/`application_submitted` and the `final_review` inside
   the SubmissionReviewer task.
+- **Emit tool calls natively.** When a tool is required, emit it through the
+  native tool-call channel. Never put a would-be tool call in assistant text,
+  JSON, markdown, or a `text` object. Never invent a tool result. Read each
+  real tool result before choosing the next action.
+- **Multiple mutations in one response are allowed.** They run one at a time,
+  in order, never concurrently — each returns its own receipt with fresh
+  post-action evidence.
+- **Refs are ARIA snapshot tokens, not DOM attributes.** `[ref=e90]` is
+  resolved against the live DOM when each action executes, so the same ref can
+  resolve to a different element after the page changes. No `ref="e90"`
+  exists in the page HTML — never put a ref in a `document.querySelector` or
+  any CSS/DOM selector, and never search the page for one. Pass refs to tools
+  as-is. In `browser_evaluate` with a `target` ref, the resolved element
+  arrives as the function's FIRST argument: write `(el) => {...}` and use
+  that argument.
+- **Styled consent/legal checkboxes hide their state.** They are often a
+  styled `img`/`div` plus label text with a hidden native input, so the
+  checked state never appears in the snapshot. Absence of a visible checkmark
+  is NOT proof the click failed. Verify a toggle through the typed context
+  instead (`unresolved_required_controls` dropping,
+  `enabled_form_submit_visible` flipping true) or with a READ-ONLY
+  `browser_evaluate` probe returning the state:
+  `(el) => { const i = el.tagName === 'INPUT' ? el : el.querySelector('input[type=checkbox]'); return i ? i.checked : null; }`.
+  A probe result of `null`/`undefined` means no native input exists — rely on
+  the typed context, and never re-click to "check" it. Never assign
+  `.checked = true`: framework handlers ignore it and the form stays invalid.
+  If evaluation is needed for a toggle, call a real `el.click()` on the
+  actual input element.
 - **Cheap by default.** Batch textboxes; scope snapshots; use
   `browser_observe` as the free probe; read receipts before re-snapshotting.
   A run that thrashes costs more than the whole form.

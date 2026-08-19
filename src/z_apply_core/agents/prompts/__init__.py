@@ -6,23 +6,9 @@ from importlib import resources
 
 
 @lru_cache
-def _load_tool_call_rules() -> str:
-    return resources.files(__name__).joinpath("tool_call_rules.md").read_text(encoding="utf-8")
-
-
-@lru_cache
-def load_prompt(name: str, *, with_rules: bool = True) -> str:
-    """Load a prompt body, optionally prepending the shared tool-call rules.
-
-    ``with_rules=False`` is for specialists whose prompt and tool descriptions
-    already cover their own loop/browser discipline (AnswerWriter, Vision) and
-    that have no form-mutation tools — prepending the generic browser rules
-    only adds tokens and irrelevant conditionals for small/flash models.
-    """
-    body = resources.files(__name__).joinpath(name).read_text(encoding="utf-8")
-    if not with_rules:
-        return body
-    return f"{_load_tool_call_rules()}\n\n{body}"
+def load_prompt(name: str) -> str:
+    """Load a prompt body from the packaged prompts directory."""
+    return resources.files(__name__).joinpath(name).read_text(encoding="utf-8")
 
 
 DEFAULT_ORCHESTRATOR_PROMPT = "orchestrator.md"
