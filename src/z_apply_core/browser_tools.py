@@ -5,7 +5,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from inspect import Parameter
 from pathlib import Path
-from typing import Annotated, Any, Protocol, cast, get_origin
+from typing import Annotated, Any, Literal, Protocol, cast, get_origin
 
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import (
@@ -156,6 +156,7 @@ BROWSER_CHANGING_TOOL_NAMES = frozenset(
         "browser_evaluate",
         "browser_file_upload",
         "browser_handle_dialog",
+        "browser_batched",
     }
 )
 
@@ -280,6 +281,288 @@ def _provider_compatible_annotation(annotation: Any) -> Any:
     if get_origin(annotation) not in {list, dict}:
         return annotation
     return Annotated[annotation, BeforeValidator(_decode_json_container)]
+
+
+MAX_BATCH_STEPS = 20
+
+#: One model-facing scripted browser action. Each step is validated by pydantic
+#: (discriminated on ``action``, ``extra="forbid"``) before anything executes.
+BatchRunner = Callable[[list[dict[str, Any]]], Awaitable[str]]
+
+
+class _RefTolerantArguments(BaseModel):
+    """Tolerate stray ``ref`` keys produced from snapshot evidence tokens.
+
+    Models copy ``[ref=e12]`` tokens from the snapshot into tool arguments as a
+    ``ref`` key, even though the browser-layer tools declare ``target``. Before
+    the ``extra="forbid"`` validation runs, any ``ref`` is folded into
+    ``target`` when ``target`` is absent and otherwise dropped, so a call like
+    ``browser_click({"ref": "e12"})`` resolves instead of being rejected as an
+    unknown argument.
+    """
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fold_stray_ref_into_target(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        folded = dict(data)
+        if "ref" in folded:
+            target = folded.get("target")
+            if not target:
+                folded["target"] = folded["ref"]
+            folded.pop("ref", None)
+        fields = folded.get("fields")
+        if isinstance(fields, list):
+            folded_fields: list[Any] = []
+            for field in fields:
+                if not isinstance(field, dict):
+                    folded_fields.append(field)
+                    continue
+                entry = dict(field)
+                if "ref" in entry:
+                    if not entry.get("target"):
+                        entry["target"] = entry["ref"]
+                    entry.pop("ref", None)
+                folded_fields.append(entry)
+            folded["fields"] = folded_fields
+        return folded
+
+
+class _BatchStep(_RefTolerantArguments):
+    """Shared base: each step tolerates a stray ``ref`` key the model copies
+    from snapshot evidence and folds it into ``target`` before validation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NavigateStep(_BatchStep):
+    action: Literal["navigate"]
+    url: str
+
+
+class ClickStep(_BatchStep):
+    action: Literal["click"]
+    target: str
+    element: str = "control"
+    double: bool = False
+    modifiers: list[str] = []
+
+
+class TypeStep(_BatchStep):
+    action: Literal["type"]
+    target: str
+    text: str
+    submit: bool = False
+
+
+class FormFieldStep(_BatchStep):
+    """A single control in a ``fill_form`` step; matches the standalone
+    ``browser_fill_form`` field shape the backend consumes."""
+
+    target: str
+    name: str = ""
+    type: str = ""
+    value: str = ""
+
+
+class FillFormStep(_BatchStep):
+    action: Literal["fill_form"]
+    fields: list[FormFieldStep]
+
+
+class SelectOptionStep(_BatchStep):
+    action: Literal["select_option"]
+    target: str
+    values: list[str]
+    element: str = "combobox"
+
+
+class WaitForStep(_BatchStep):
+    action: Literal["wait_for"]
+    time: float = 0.0
+    text: str = ""
+    textGone: str = ""
+
+
+class HandleDialogStep(_BatchStep):
+    action: Literal["handle_dialog"]
+    accept: bool
+    promptText: str = ""
+
+
+class EvaluateStep(_BatchStep):
+    action: Literal["evaluate"]
+    function: str
+    target: str = ""
+
+
+class SnapshotStep(_BatchStep):
+    action: Literal["snapshot"]
+    target: str = ""
+    depth: int | None = None
+
+
+BatchStep = Annotated[
+    NavigateStep
+    | ClickStep
+    | TypeStep
+    | FillFormStep
+    | SelectOptionStep
+    | WaitForStep
+    | HandleDialogStep
+    | EvaluateStep
+    | SnapshotStep,
+    Field(discriminator="action"),
+]
+
+
+class BrowserBatchArgs(BaseModel):
+    """A flat, ordered script of up to ``MAX_BATCH_STEPS`` browser actions."""
+
+    model_config = ConfigDict(extra="forbid")
+    steps: Annotated[
+        list[BatchStep],
+        Field(
+            min_length=1,
+            max_length=MAX_BATCH_STEPS,
+            description="Ordered browser actions, each with an `action` field.",
+        ),
+    ]
+
+
+_BATCHED_TOOL_DESCRIPTION = (
+    "Execute a flat script of browser actions in ONE call: give up to 20 "
+    "sequential `steps`, each with an `action`. Steps run in order against the "
+    "current page and stop at the first failing step; the result is one line per "
+    "step plus fresh post-batch evidence. Prefer this over individual browser_* "
+    "calls whenever you can plan 2+ actions ahead. Actions:\n"
+    "- navigate: {url} - open a page\n"
+    "- click: {target, element='control'} - click a control; never a file input "
+    "(use browser_click_upload for uploads)\n"
+    "- type: {target, text, submit=false} - type text, replacing existing text\n"
+    "- fill_form: {fields: [{target, value, type?}]} - fill several controls at "
+    "once\n"
+    "- select_option: {target, values} - select combobox values\n"
+    "- wait_for: {time<=30 or text or textGone} - brief settle or visible-text wait\n"
+    "- handle_dialog: {accept, promptText} - answer a native dialog\n"
+    "- evaluate: {function, target=''} - run a JS function; last resort, recipes "
+    "below\n"
+    "- snapshot: {target='', depth} - capture evidence mid-script (the final "
+    "post-batch snapshot is automatic)\n"
+    "Targets are element refs from the snapshot (e.g. e12). NEVER include a "
+    "final submit click or an upload step: both are guarded and handled by "
+    "dedicated tools.\n"
+    "evaluate recipes (only for a stubborn form control whose standard writes "
+    "never land): when you pass a `target` ref, the resolved element is passed to "
+    "your function as its FIRST argument - write `(el) => {...}` and use that "
+    "argument. Element refs (e.g. e90) are browser-layer snapshot tokens, NOT "
+    "DOM attributes; never query `document.querySelector('[ref=...]')`. On a "
+    "React or other controlled input a plain `el.value = value` assignment is "
+    "ignored by the framework and leaves the page unchanged. Use the native "
+    "setter and matching events instead, e.g.:\n"
+    "`const s = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "
+    "'value').set; s.call(el, ''); s.call(el, value); "
+    "el.dispatchEvent(new Event('input', {bubbles: true})); "
+    "el.dispatchEvent(new Event('change', {bubbles: true}));`\n"
+    "Clear the field first through the same native setter, never by assigning "
+    "`.value` directly. State the exact target/ref and value you intend, run it, "
+    "then verify with fresh evidence that the control holds the value. "
+    "For an intl-tel-input phone field with a wrong country, set the country "
+    "through its API first: `const iti = el.iti || "
+    "window.intlTelInputGlobals?.getInstance(el); if (iti) iti.setCountry('in');` "
+    "then re-enter the full international number (e.g. +919063812386) through "
+    "the native setter and input/change events. "
+    "A checkbox/radio/switch is a TOGGLE: prefer a plain click step, and "
+    "never click it twice in a row (a second identical click un-checks it). If "
+    "you must use evaluation for a toggle, call a real `el.click()` on the "
+    "actual input element - never assign `.checked = true`, which framework "
+    "handlers ignore. To READ a control's state that the snapshot cannot show "
+    "(custom consent checkbox), use a read-only probe that returns a definitive "
+    "value: `(el) => { const i = el.tagName === 'INPUT' ? el : "
+    "el.querySelector('input[type=checkbox]'); return i ? i.checked : null; }`. "
+    "A result of `null`/`undefined` means there is no native input at all - rely "
+    "on the typed context and do not re-click to check. Reading never mutates "
+    "and never counts as a write. "
+    "If the evaluate receipt reports `changed: false`, the framework ignored the "
+    "write - do not repeat it. Never use evaluation to bypass validation, "
+    "fabricate a candidate value, or solve a CAPTCHA. "
+    "For a stubborn SELECT/COMBOBOX the recipes are: native `<select>` - assign "
+    "through the native setter and fire change: `const s = "
+    "Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set; "
+    "s.call(el, 'VALUE'); el.dispatchEvent(new Event('change', {bubbles: true}));` "
+    "(a plain `el.value = ...` is ignored by React). Custom combobox with an "
+    "OPEN menu - click the option by exact text: `const opt = "
+    "[...document.querySelectorAll('[role=\"option\"]')].find(o => "
+    "o.textContent.trim() === 'VALUE'); if (!opt) return false; "
+    "opt.dispatchEvent(new MouseEvent('mousedown', {bubbles: true})); opt.click(); "
+    "return true;` (react-select selects on mousedown). Searchable combobox - set "
+    "the input through the native setter, dispatch a bubbling `input`, and in the "
+    "same evaluate click the option only if it is already in the DOM; otherwise "
+    "return a follow-up signal so the next turn re-snapshots and clicks the "
+    "filtered option."
+)
+
+
+def make_batched_tool(
+    runner: BatchRunner,
+    *,
+    revision_provider: Callable[[], int | None] | None = None,
+) -> BaseTool:
+    """Build the Core-only scripted browser action tool for the main agent.
+
+    The pydantic ``args_schema`` validates the whole step list before anything
+    executes, so a malformed script is rejected in one round trip instead of
+    failing mid-way. On success the result is stamped with ``browser_revision``
+    so the capability context treats it as evidence-carrying; a stopped batch
+    raises a contained ``ToolException`` (error status, no stamp) so sibling
+    mutations in the same response are skipped and evidence re-injects.
+    """
+
+    async def _browser_batched(
+        steps: Any,
+        tool_call_id: Annotated[str, InjectedToolCallId] = "",
+    ) -> str | ToolMessage:
+        if not isinstance(steps, list):
+            raise ToolException("browser_batched requires a list of action steps.")
+        raw_steps = [
+            step.model_dump() if hasattr(step, "model_dump") else dict(step)
+            for step in steps
+        ]
+        try:
+            result = await runner(raw_steps)
+        except ToolException:
+            raise
+        except Exception as exc:
+            # A raw browser-layer failure (for example a label mistarget that the
+            # page rejects as invalid CSS) must stay a contained ToolException.
+            # The base tool error handler only converts ToolException; letting a
+            # raw exception escape would abort the whole parallel tool-response
+            # batch (including unrelated sibling calls).
+            raise ToolException(
+                "Browser batch failed against the current page. Inspect fresh "
+                "browser evidence and retry with a corrected step list."
+            ) from exc
+        revision = revision_provider() if revision_provider is not None else None
+        if revision is None:
+            return result
+        return ToolMessage(
+            content=result,
+            tool_call_id=tool_call_id,
+            name="browser_batched",
+            additional_kwargs={"browser_revision": revision},
+        )
+
+    _browser_batched.__name__ = "browser_batched"
+    return StructuredTool.from_function(
+        coroutine=_browser_batched,
+        name="browser_batched",
+        description=_BATCHED_TOOL_DESCRIPTION,
+        args_schema=BrowserBatchArgs,
+        infer_schema=False,
+        handle_tool_error=True,
+    )
+
 
 
 def make_click_upload_tool(
@@ -571,42 +854,3 @@ def _tool_model(spec: BrowserToolSpec) -> type[BaseModel]:
             **fields,
         ),
     )
-
-
-class _RefTolerantArguments(BaseModel):
-    """Tolerate stray ``ref`` keys produced from snapshot evidence tokens.
-
-    Models copy ``[ref=e12]`` tokens from the snapshot into tool arguments as a
-    ``ref`` key, even though the browser-layer tools declare ``target``. Before
-    the ``extra="forbid"`` validation runs, any ``ref`` is folded into
-    ``target`` when ``target`` is absent and otherwise dropped, so a call like
-    ``browser_click({"ref": "e12"})`` resolves instead of being rejected as an
-    unknown argument.
-    """
-
-    @model_validator(mode="before")
-    @classmethod
-    def _fold_stray_ref_into_target(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        folded = dict(data)
-        if "ref" in folded:
-            target = folded.get("target")
-            if not target:
-                folded["target"] = folded["ref"]
-            folded.pop("ref", None)
-        fields = folded.get("fields")
-        if isinstance(fields, list):
-            folded_fields: list[Any] = []
-            for field in fields:
-                if not isinstance(field, dict):
-                    folded_fields.append(field)
-                    continue
-                entry = dict(field)
-                if "ref" in entry:
-                    if not entry.get("target"):
-                        entry["target"] = entry["ref"]
-                    entry.pop("ref", None)
-                folded_fields.append(entry)
-            folded["fields"] = folded_fields
-        return folded

@@ -56,6 +56,7 @@ class Settings(BaseSettings):
     orca_model: str = Field(default="qwen/qwen3.8-27b-free", alias="ORCA_MODEL")
     orca_reasoning: bool = Field(default=True, alias="ORCA_REASONING")
     model_provider: str = Field(default="", alias="MODEL_PROVIDER")
+    browser_batch_tools: bool = Field(default=True, alias="BROWSER_BATCH_TOOLS")
 
     model_config = SettingsConfigDict(
         env_file=CORE_ROOT / ".env",

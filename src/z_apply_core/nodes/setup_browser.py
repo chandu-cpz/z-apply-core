@@ -9,10 +9,11 @@ from z_apply_core.agents.context_inbox import ContextInbox
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.browser_tools import (
     INITIAL_AGENT_BROWSER_TOOLS,
+    make_batched_tool,
     make_click_upload_tool,
     make_observe_tool,
 )
-from z_apply_core.config import DEFAULT_RESUME_PATH
+from z_apply_core.config import DEFAULT_RESUME_PATH, load_settings
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.live_view import LiveView
 from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -94,9 +95,27 @@ async def setup_browser(
 
 
 def _agent_browser_tools(browser: BrowserSession) -> list[object]:
-    safe_names = tuple(name for name in INITIAL_AGENT_BROWSER_TOOLS if name != "browser_tabs")
+    settings = load_settings()
+    safe_names: tuple[str, ...]
+    if settings.browser_batch_tools:
+        # Batch mode: one scripted mutation tool plus the cheap read tools. The
+        # per-specialist filters keep browser_batched out of the auth/reviewer
+        # agents and keep browser_take_screenshot available for VisionSpecialist.
+        safe_names = ("browser_snapshot", "browser_find", "browser_take_screenshot")
+        tools: list[object] = [
+            *browser.tools.langchain_tools(safe_names),
+            make_batched_tool(
+                browser.run_action_batch,
+                revision_provider=lambda: browser.last_observation_revision,
+            ),
+        ]
+    else:
+        safe_names = tuple(
+            name for name in INITIAL_AGENT_BROWSER_TOOLS if name != "browser_tabs"
+        )
+        tools = [*browser.tools.langchain_tools(safe_names)]
     return [
-        *browser.tools.langchain_tools(safe_names),
+        *tools,
         make_observe_tool(browser.observe),
         make_click_upload_tool(
             browser.upload_files,
