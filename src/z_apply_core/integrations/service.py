@@ -111,8 +111,6 @@ class _Run:
             task=request.task or DEFAULT_TASK,
             company=None,
             role=None,
-            prompt_variant=request.prompt_variant,
-            prompt_sha=request.prompt_sha,
             status=RunStatus.QUEUED,
             phase=RunPhase.QUEUED,
             outcome=None,
@@ -684,8 +682,6 @@ class ZApplyCore:
             await self._emit(run, "run.phase_changed", {"phase": RunPhase.AUTHENTICATION.value})
             run.call_ledger = RunCallLedger(
                 job_url=run.request.job_url,
-                prompt_variant=run.request.prompt_variant,
-                prompt_sha=run.request.prompt_sha,
             )
             if run.provider is None:
                 initial_name = run.request.provider or default_provider_name()
@@ -702,8 +698,6 @@ class ZApplyCore:
                 run.request.job_url,
                 task=run.request.task or DEFAULT_TASK,
                 live_view=run.request.live_view,
-                prompt_variant=run.request.prompt_variant,
-                prompt_sha=run.request.prompt_sha,
                 sink=_GraphSink(self, run),
                 provider=run.provider,
                 resources=run.resources,

@@ -20,8 +20,6 @@ Usage:
 Options:
     --jobs-file     job list file (default: z-apply-core/jobs.txt)
     --api           backend base URL (default http://127.0.0.1:8000)
-    --prompt-variant  orchestrator prompt variant (default: backend default =
-                      the compact orchestrator.md)
     --max-active    do not queue beyond this many active runs (default: the
                       backend's Z_APPLY_MAX_ACTIVE_RUNS, read from /diagnostics)
     --interval      poll seconds (default 30)
@@ -56,7 +54,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="continuous_apply", description=__doc__)
     parser.add_argument("--jobs-file", default=str(DEFAULT_JOBS_FILE))
     parser.add_argument("--api", default="http://127.0.0.1:8000")
-    parser.add_argument("--prompt-variant", default=None)
     parser.add_argument("--max-active", type=int, default=None)
     parser.add_argument("--interval", type=int, default=30)
     parser.add_argument("--once", action="store_true")
@@ -177,12 +174,10 @@ def _is_retryable_failure(entry: dict[str, Any]) -> bool:
     return entry.get("status") == "failed" and (calls is None or int(calls) == 0)
 
 
-def _start_run(api: str, job: dict[str, str], prompt_variant: str | None) -> dict[str, Any]:
+def _start_run(api: str, job: dict[str, str]) -> dict[str, Any]:
     body: dict[str, Any] = {"job_url": job["url"]}
     if job.get("task"):
         body["task"] = job["task"]
-    if prompt_variant:
-        body["prompt_variant"] = prompt_variant
     return _http_json("POST", f"{api}/api/v1/runs", body)
 
 
@@ -224,7 +219,7 @@ def main(argv: list[str] | None = None) -> int:
     max_active = args.max_active or _backend_max_active(args.api)
 
     print(f"continuous: api={args.api} jobs={jobs_file} max_active={max_active} "
-          f"watch={not args.once} prompt_variant={args.prompt_variant or '(backend default)'}")
+          f"watch={not args.once}")
     print(f"continuous: total spent so far ${float(state.get('total_cost_usd') or 0.0):.4f} "
           f"({len(state['attempted'])} runs attempted)")
 
@@ -291,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
                 print("continuous: capacity full; waiting for a slot…")
                 break
             try:
-                run = _start_run(args.api, job, args.prompt_variant)
+                run = _start_run(args.api, job)
             except Exception as exc:
                 # Transient POST failure: leave the URL pending (do NOT mark it
                 # attempted) so the next interval loop re-tries it. The interval
@@ -301,8 +296,7 @@ def main(argv: list[str] | None = None) -> int:
             run_id = str(run.get("id", ""))
             state["attempted"][run_id] = {"url": job["url"], "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
             attempted_by_url[job["url"]] = run_id
-            print(f"continuous: queued {job['url']} -> run {run_id} "
-                  f"(prompt {run.get('prompt_variant') or 'default'})")
+            print(f"continuous: queued {job['url']} -> run {run_id}")
             _save_state(state_path, state)
             time.sleep(2)  # brief spacing between POSTs so the queue drains cleanly
 

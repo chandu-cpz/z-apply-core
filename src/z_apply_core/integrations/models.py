@@ -63,8 +63,6 @@ class StartRunRequest:
     task: str | None = None
     resume_path: Path | None = None
     live_view: bool = True
-    prompt_variant: str | None = None
-    prompt_sha: str | None = None
     provider: str | None = None
     model: str | None = None
 
@@ -149,8 +147,6 @@ class CoreRunView:
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
-    prompt_variant: str | None = None
-    prompt_sha: str | None = None
     # Runtime reasoning override: "auto"/"off"/"on" plus an optional effort.
     current_reasoning: str = "auto"
     current_reasoning_effort: str | None = None
