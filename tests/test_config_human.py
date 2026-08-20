@@ -294,27 +294,43 @@ class HumanToolTests(unittest.IsolatedAsyncioTestCase):
 
 class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_artifacts_are_sent_in_the_bound_topic(self) -> None:
-        channel = TelegramHumanChannel(token="token", chat_id="-100")
-        bot = FakeBot()
-        channel.bot = bot  # type: ignore[assignment]
-        channel._app = SimpleNamespace()
-        channel.bind_run(run_id="run-artifacts", url="https://jobs.example.test/123")
-
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            channel = TelegramHumanChannel(token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs")
+            bot = FakeBot()
+            channel.bot = bot  # type: ignore[assignment]
+            channel._app = SimpleNamespace()
+            channel.bind_run(run_id="run-artifacts", url="https://jobs.example.test/123")
+
             artifact_root = root / ".z-apply" / "runs" / "run-artifacts"
             artifact_root.mkdir(parents=True)
             pdf = artifact_root / "application-review.pdf"
             png = artifact_root / "submission-confirmation.png"
             pdf.write_bytes(b"pdf")
             png.write_bytes(b"png")
-            with patch("z_apply_core.human.telegram.CORE_ROOT", root):
-                await channel.send_artifact(path=str(pdf), caption="Review")
-                await channel.send_artifact(path=str(png), caption="Submitted")
+            await channel.send_artifact(path=str(pdf), caption="Review")
+            await channel.send_artifact(path=str(png), caption="Submitted")
 
         self.assertEqual(len(bot.created_topics), 1)
         self.assertEqual(bot.documents[0]["message_thread_id"], 777)
         self.assertEqual(bot.photos[0]["message_thread_id"], 777)
+
+    async def test_artifacts_outside_the_runs_root_are_not_sent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            channel = TelegramHumanChannel(token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs")
+            bot = FakeBot()
+            channel.bot = bot  # type: ignore[assignment]
+            channel._app = SimpleNamespace()
+            channel.bind_run(run_id="run-artifacts", url="https://jobs.example.test/123")
+
+            outside = root / "elsewhere" / "secret.pdf"
+            outside.parent.mkdir(parents=True)
+            outside.write_bytes(b"pdf")
+            await channel.send_artifact(path=str(outside), caption="Review")
+
+        self.assertEqual(bot.documents, [])
+        self.assertEqual(bot.photos, [])
 
     async def test_bound_run_reuses_one_topic_across_different_question_metadata(
         self,
@@ -404,24 +420,23 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await second, "two")
 
     async def test_captcha_image_is_attached_and_created_topics_are_closed(self) -> None:
-        channel = TelegramHumanChannel(token="token", chat_id="-100")
-        bot = FakeBot()
-        channel.bot = bot  # type: ignore[assignment]
-        channel._app = SimpleNamespace()
-
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            channel = TelegramHumanChannel(token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs")
+            bot = FakeBot()
+            channel.bot = bot  # type: ignore[assignment]
+            channel._app = SimpleNamespace()
+
             image_path = root / ".z-apply" / "runs" / "run-1" / "captcha.png"
             image_path.parent.mkdir(parents=True)
             image_path.write_bytes(b"image")
-            with patch("z_apply_core.human.telegram.CORE_ROOT", root):
-                task = asyncio.create_task(
-                    channel.ask(question="Enter CAPTCHA", image_path=str(image_path))
-                )
-                await asyncio.sleep(0)
-                request_id = next(iter(channel._pending))
-                await channel.resolve(request_id, "1234")
-                self.assertEqual(await task, "1234")
+            task = asyncio.create_task(
+                channel.ask(question="Enter CAPTCHA", image_path=str(image_path))
+            )
+            await asyncio.sleep(0)
+            request_id = next(iter(channel._pending))
+            await channel.resolve(request_id, "1234")
+            self.assertEqual(await task, "1234")
 
         self.assertEqual(len(bot.photos), 1)
         await channel._delete_created_topics()

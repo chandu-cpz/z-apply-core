@@ -658,8 +658,8 @@ def _stamp_gateway_cache_breakpoints(payload: dict[str, Any]) -> None:
 class OpenCodeGoProvider:
     """OpenAI-compatible provider for the opencode Zen gateway.
 
-    Serves MiMo V2.5 (default, free tier) or DeepSeek V4 Flash
-    via the gateway's ``/zen/go/v1`` chat-completions endpoint. Thinking maps to the gateway's
+    Serves Muse Spark 1.2 Contributor (default), MiMo V2.5, or DeepSeek V4
+    Flash via the gateway's ``/zen/go/v1`` chat-completions endpoint. Thinking maps to the gateway's
     DeepSeek-style ``thinking``/``reasoning_effort`` body fields, but it is
     DISABLED by default: on orchestrator-sized prompts the V4 thinking blocks
     consume the entire output budget (measured: 21.5s stream with zero
@@ -675,7 +675,7 @@ class OpenCodeGoProvider:
     """
 
     BASE_URL = "https://opencode.ai/zen/go/v1"
-    DEFAULT_MODEL = "mimo-v2.5"
+    DEFAULT_MODEL = "muse-spark-1.2-contributor"
     DEFAULT_CACHE_KEY = "z-apply"
     DEFAULT_SESSION_ID = "z-apply"
 
@@ -1288,11 +1288,12 @@ register_provider(
 register_provider(
     ProviderSpec(
         name="opencodego",
-        description="opencode Zen gateway (opencode.ai/zen/go/v1); free MiMo V2.5 by default",
+        description="opencode Zen gateway (opencode.ai/zen/go/v1); Muse Spark 1.2 Contributor by default",
         env_key="OPENCODEGO_API_KEY",
         env_attr="opencodego_api_key",
         default_model=OpenCodeGoProvider.DEFAULT_MODEL,
         suggested_models=(
+            "muse-spark-1.2-contributor",
             "mimo-v2.5",
             "deepseek-v4-flash",
         ),

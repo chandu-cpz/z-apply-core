@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from playwright.async_api import Locator, Page
 
 from z_apply_core.browser_observation import BrowserCapabilities, BrowserControlState
-from z_apply_core.browser_targeting import classify_submit_control
+from z_apply_core.browser_targeting import classify_submit_control, empty_file_inputs
 
 CONTROL_SELECTOR = (
     'input:not([type="hidden"]), select, textarea, [contenteditable="true"], [role="combobox"]'
@@ -50,11 +50,11 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
     # must NOT be required here: the upload resolver and the form's own
     # validation see these controls, and the typed context must agree with
     # them or the agent loops on a contradiction ("no upload pending" vs the
-    # form's "Resume cannot be empty").
-    file_inputs = await _enabled(page.locator('input[type="file"]'))
-    empty_file_inputs = [control for control in file_inputs if not await _has_value(control)]
+    # form's "Resume cannot be empty"). empty_file_inputs() is the single
+    # source of truth shared with the upload resolver.
+    empty_uploads = await empty_file_inputs(page)
     required_upload = False
-    for control in empty_file_inputs:
+    for control in empty_uploads:
         if await _is_required(control):
             required_upload = True
             break

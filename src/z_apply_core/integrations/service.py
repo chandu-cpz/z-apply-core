@@ -14,7 +14,7 @@ import mimetypes
 from collections.abc import AsyncIterator, Awaitable
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from z_apply_core.agents.context_inbox import ContextInbox, ContextMessage
@@ -65,6 +65,7 @@ from z_apply_core.integrations.models import (
 from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
+from z_apply_core.teardown import abest_effort, best_effort
 from z_apply_core.text_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -354,8 +355,10 @@ class ZApplyCore:
         self._closing = True
         self._wake.set()
         for run in tuple(self._runs.values()):
-            with contextlib.suppress(Exception):
+            try:
                 await self._cancel(run)
+            except Exception as exc:  # noqa: BLE001 - teardown must not abort
+                logger.warning("Error cancelling run during close: %s", exc, exc_info=True)
         active_tasks = [run.task for run in self._runs.values() if run.task is not None]
         if active_tasks:
             await asyncio.gather(*active_tasks, return_exceptions=True)
@@ -363,17 +366,17 @@ class ZApplyCore:
             self._scheduler.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._scheduler
-        with contextlib.suppress(Exception):
-            await self._workspace.close()
+        await abest_effort("workspace close during close", self._workspace.close)
         if self._telegram is not None:
             stop = getattr(self._telegram, "stop", None)
             if callable(stop):
-                with contextlib.suppress(Exception):
-                    await stop()
+                await abest_effort("telegram stop during close", cast(Any, stop))
             self._telegram = None
         if self._candidate_memory is not None:
-            with contextlib.suppress(Exception):
-                self._candidate_memory.close()
+            best_effort(
+                "candidate memory close during close",
+                self._candidate_memory.close,
+            )
             self._candidate_memory = None
         self._started = False
 
@@ -853,10 +856,10 @@ class ZApplyCore:
         if ledger is None:
             return
         try:
-            from z_apply_core.config import CORE_ROOT
+            from z_apply_core.paths import z_apply_root
 
             history_path, run_copy = ledger.write_history(
-                CORE_ROOT / ".z-apply",
+                z_apply_root(),
                 run_id=run.run_id,
                 status=status,
             )

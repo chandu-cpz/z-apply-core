@@ -122,7 +122,7 @@ def _persist_call_ledger(
     status: str,
 ) -> None:
     """Persist the run's LLM ledger so it survives process shutdown."""
-    from z_apply_core.config import CORE_ROOT
+    from z_apply_core.paths import z_apply_root
 
     run_id = ""
     if state is not None:
@@ -130,7 +130,7 @@ def _persist_call_ledger(
         if isinstance(runtime, RunRuntime):
             run_id = str(runtime.run_id or "")
     history_path, run_copy = ledger.write_history(
-        CORE_ROOT / ".z-apply",
+        z_apply_root(),
         run_id=run_id,
         status=status,
     )

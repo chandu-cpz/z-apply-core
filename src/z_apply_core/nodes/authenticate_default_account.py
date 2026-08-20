@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import logging
 
 from langchain_core.runnables.config import RunnableConfig
@@ -23,6 +22,7 @@ from z_apply_core.stream_events import (
     ledger_from_config,
     sink_from_config,
 )
+from z_apply_core.teardown import abest_effort
 
 SIMPLIFY_DASHBOARD_URL = "https://simplify.jobs/dashboard"
 
@@ -111,8 +111,10 @@ async def authenticate_default_account(
             # it as ambiguous rather than hard-blocking the application before
             # it starts.
             summary = f"Simplify auth check stalled: {exc}"
-            with contextlib.suppress(Exception):
-                await _restore_job_page(runtime, original_url)
+            await abest_effort(
+                "job page restore after stall",
+                lambda: _restore_job_page(runtime, original_url),
+            )
             await _emit(sink, "not_verified", summary)
             return {
                 "auth_status": "not_verified",
@@ -120,8 +122,10 @@ async def authenticate_default_account(
                 "snapshot": str(state.get("snapshot", "")),
             }
         summary = f"Simplify auth check failed: {exc}"
-        with contextlib.suppress(Exception):
-            await _restore_job_page(runtime, original_url)
+        await abest_effort(
+            "job page restore after failure",
+            lambda: _restore_job_page(runtime, original_url),
+        )
         await _emit(sink, "failed", summary)
         return {
             "auth_status": "failed",

@@ -27,12 +27,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-from z_apply_core.config import CORE_ROOT
+from z_apply_core.paths import DEFAULT_MASTER_PROFILE, PROFILES_ROOT
 
 logger = logging.getLogger(__name__)
-
-PROFILES_ROOT = CORE_ROOT / ".z-apply" / "profiles"
-DEFAULT_MASTER_PROFILE = CORE_ROOT / ".z-apply" / "browser-profile"
 DEFAULT_SLOT_COUNT = 3
 
 SlotState = Literal["pristine", "leased", "resetting", "quarantined"]

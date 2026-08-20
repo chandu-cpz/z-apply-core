@@ -125,6 +125,17 @@ async def resolve_auth_submit_control(page: Page, target: Locator) -> Locator | 
     return None
 
 
+async def empty_file_inputs(page: Page) -> list[Locator]:
+    """Return enabled file inputs that currently hold no file. Single source of truth."""
+    controls = page.locator('input[type="file"]')
+    empty: list[Locator] = []
+    for index in range(await controls.count()):
+        control = controls.nth(index)
+        if await control.is_enabled() and not await control.input_value():
+            empty.append(control)
+    return empty
+
+
 async def _controlled_file_input(page: Page, locator: Locator) -> Locator | None:
     values: list[str] = []
     for attribute in ("for", "aria-controls"):

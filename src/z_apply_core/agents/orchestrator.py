@@ -13,9 +13,7 @@ from langchain_core.tools import BaseTool, ToolException, tool
 from langgraph.checkpoint.memory import InMemorySaver
 
 from z_apply_core.agents.authentication import captcha_artifact_path
-from z_apply_core.agents.browser_mutation_serializer import SerializeBrowserMutationsMiddleware
-from z_apply_core.agents.capability_context import CapabilityContextMiddleware
-from z_apply_core.agents.context_inbox import ContextInbox, ContextInboxMiddleware
+from z_apply_core.agents.context_inbox import ContextInbox
 from z_apply_core.agents.goal_runner import (
     ActiveGoalExhausted,
     ActiveGoalMiddleware,
@@ -27,12 +25,11 @@ from z_apply_core.agents.harness_profile import (
     deepagent_filesystem_permissions,
 )
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.middleware_factory import build_agent_middleware
 from z_apply_core.agents.model_provider import ModelProvider, get_provider
-from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen, NoProgressGuardMiddleware
+from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen
 from z_apply_core.agents.prompts import ORCHESTRATOR_PROMPT, load_prompt
-from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
-from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import (
     ModelRouter,
     build_router_middleware,
@@ -41,11 +38,9 @@ from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_session import BrowserSession
-from z_apply_core.config import CORE_ROOT
 from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
-from z_apply_core.context.token_metric import TokenMetricMiddleware
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.tools import make_human_tools
 from z_apply_core.log_labels import node_info
@@ -55,10 +50,10 @@ from z_apply_core.memory.platform_playbooks import (
     make_platform_memory_tool,
 )
 from z_apply_core.memory.tools import make_candidate_memory_tools
+from z_apply_core.paths import CORE_ROOT, run_context_dir
 from z_apply_core.stream_events import (
     FrameworkEventSink,
     SequencedEventSink,
-    _emit_usage_sync,
 )
 
 logger = logging.getLogger(__name__)
@@ -310,7 +305,7 @@ async def run_orchestrator(
         return "Application blocked; the run stopped cleanly."
 
     run_context = RunContext(run_id=run_id)
-    evidence_store = EvidenceStore(base_dir=CORE_ROOT / ".z-apply" / "runs" / run_id / "context")
+    evidence_store = EvidenceStore(base_dir=run_context_dir(run_id))
     if active_browser is not None:
         active_browser.bind_run_context(run_context)
         active_browser.bind_evidence_store(evidence_store)
@@ -347,7 +342,7 @@ async def run_orchestrator(
         if active_browser is not None
         else []
     )
-    deepagent_backend = FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True)
+    deepagent_backend = FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True)  # repo root for virtual FS
     # One lock shared by the orchestrator and every specialist so browser
     # mutations never overlap even when a subagent and the orchestrator act in
     # the same response.
@@ -578,43 +573,37 @@ def build_orchestrator_middleware(
     active_goal_middleware: ActiveGoalMiddleware,
     mutation_lock: asyncio.Lock | None = None,
 ) -> list[AgentMiddleware]:
-    """Build the orchestrator middleware chain in execution order.
+    """Build the orchestrator middleware chain via single factory.
 
-    The first element is the outermost wrapper. ``TokenMetricMiddleware``
-    wraps every other middleware, and its emit adapter forwards typed events
-    into the run-sequenced sink.
+    Delegates to :func:`build_agent_middleware` so all agents share one
+    ordering invariant. See factory docstring for skeleton.
     """
-
-    def usage_emit(event: object) -> None:
-        _emit_usage_sync(event_sink, event)
-
-    return [
-        TokenMetricMiddleware(agent="orchestrator", run_context=run_context, emit=usage_emit),
-        *([ContextInboxMiddleware(context_inbox)] if context_inbox is not None else []),
-        CapabilityContextMiddleware(
-            active_browser,
-            platform_playbooks=platform_playbooks,
-            job_url=job_url,
-            run_context=run_context,
-            evidence_store=evidence_store,
-        ),
-        NoProgressGuardMiddleware(
-            browser=active_browser,
-            on_no_progress=router_middleware.reject_active_response,
-            max_stagnant_tool_calls=12,
-            max_identical_denials=3,
-            max_non_progress=6,
-            window_size=6,
-            repetition_threshold=3,
-        ),
-        SerializeBrowserMutationsMiddleware(sink=event_sink, lock=mutation_lock),
-        SubagentDispatchMiddleware(
-            ["AnswerWriter", "AuthenticationSpecialist", "SubmissionReviewer", "VisionSpecialist"],
-            browser=active_browser,
-        ),
-        *model_retry_middleware(provider),
-        router_middleware,
-        ProseToolCallGuardMiddleware(),
-        orchestrator_human_guard,
-        active_goal_middleware,
-    ]
+    base = build_agent_middleware(
+        role="orchestrator",
+        provider=provider,
+        run_context=run_context,
+        evidence_store=evidence_store,
+        event_sink=event_sink,
+        active_browser=active_browser,
+        platform_playbooks=platform_playbooks,
+        job_url=job_url,
+        context_inbox=context_inbox,
+        router_middleware=router_middleware,
+        human_guard=orchestrator_human_guard,
+        no_progress_kwargs={
+            "max_stagnant_tool_calls": 12,
+            "max_identical_denials": 3,
+            "max_non_progress": 6,
+            "window_size": 6,
+            "repetition_threshold": 3,
+        },
+        extra_middleware=[
+            SubagentDispatchMiddleware(
+                ["AnswerWriter", "AuthenticationSpecialist", "SubmissionReviewer", "VisionSpecialist"],
+                browser=active_browser,
+            )
+        ],
+        mutation_lock=mutation_lock,
+    )
+    # ActiveGoal is innermost, after human guard
+    return [*base, active_goal_middleware]

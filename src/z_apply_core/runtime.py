@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +10,7 @@ from z_apply_core.browser_session import BrowserSession
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.live_view import LiveView
 from z_apply_core.memory.applicant_memory import CandidateMemory
+from z_apply_core.teardown import abest_effort, best_effort
 from z_apply_core.virtual_display import VirtualDisplaySession
 
 
@@ -37,16 +37,13 @@ class RunRuntime:
         if self.shared_resources:
             return
         if self.human_channel is not None:
-            with contextlib.suppress(Exception):
-                stop = cast(Any, getattr(self.human_channel, "stop", None))
-                if callable(stop):
-                    await stop()
+            stop = cast(Any, getattr(self.human_channel, "stop", None))
+            if callable(stop):
+                await abest_effort("RunRuntime human_channel stop", stop)
         if self.candidate_memory is not None:
-            with contextlib.suppress(Exception):
-                self.candidate_memory.close()
-        with contextlib.suppress(Exception):
-            await self.browser.close()
+            best_effort("RunRuntime candidate_memory close", self.candidate_memory.close)
+        await abest_effort("RunRuntime browser close", self.browser.close)
         if self.live_view is not None:
-            self.live_view.stop()
+            best_effort("RunRuntime live_view stop", self.live_view.stop)
         if self.display is not None:
-            self.display.stop()
+            best_effort("RunRuntime display stop", self.display.stop)

@@ -17,10 +17,13 @@ Navigate to the provided job application links and fill out all required fields 
 
 2. Simplify Extension Protocol
    - Upon loading an application page, use `browser_snapshot` targeting `target=".simplify-jobs-shadow-root"` to evaluate the Simplify extension state.
-   - Evaluate support: If the page is supported, click `Autofill this page`. If it is unsupported, close the Simplify popup and proceed to fill the page manually.
+    - Evaluate support: If the page is supported, click `Autofill this page`, then wait 10 to 60 seconds depending on form size while it fills the details. If it is unsupported, close the Simplify popup and proceed to fill the page manually.
    - Multi-page requirement: Simplify must be checked and activated independently for every single page of a multi-page form.
 
 3. Browser Action Optimization
    - Aggressively utilize `browser_batched` for predictable sequences to minimize unnecessary network roundtrips.
-   - Strictly use scoped snapshots (`target="[selector]"`) to parse specific UI elements rather than capturing the entire page state to maintain speed and efficiency.
+   - Strictly use scoped snapshots (`target="[selector]"`) with appropriate depth to parse specific UI elements rather than capturing the entire page state to maintain speed and efficiency.
+
+4. Masking
+    - Some fields may be masked. Do not assume masked values are correct; continue with the remaining fields.
 </execution_rules>

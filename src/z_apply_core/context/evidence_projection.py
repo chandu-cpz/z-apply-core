@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from z_apply_core.browser_observation import DEFAULT_EVIDENCE_BUDGET_CHARS
 from z_apply_core.browser_tools import REF_TAG_RE
 
 if TYPE_CHECKING:
@@ -57,7 +58,7 @@ class EvidenceProjection:
     def project(
         observation: BrowserObservation,
         *,
-        budget_chars: int = 8000,
+        budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS,
     ) -> str:
         if not observation.evidence.strip():
             return ""

@@ -9,7 +9,7 @@ from z_apply_core.agents.authentication import build_authentication_tools
 from z_apply_core.agents.model_provider import provider_from_config
 from z_apply_core.agents.orchestrator import run_orchestrator
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
-from z_apply_core.config import DEFAULT_RESUME_PATH, load_settings
+from z_apply_core.config import load_settings
 from z_apply_core.gmail_tools import make_gmail_tools
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -43,7 +43,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         human_channel=_human_channel(state),
         sink=sink,
         provider=provider,
-        resume_path=str(DEFAULT_RESUME_PATH),
+        resume_path=str(load_settings().default_resume_path),
         candidate_memory=runtime_candidate_memory(state),
         run_id=_run_id(state),
         artifact_publisher=_artifact_publisher(state),

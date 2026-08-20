@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import html
 import logging
 import re
@@ -15,8 +14,9 @@ from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message, U
 from telegram.error import BadRequest, NetworkError
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-from z_apply_core.config import CORE_ROOT
 from z_apply_core.human.sanitize import sanitize_human_text
+from z_apply_core.paths import runs_root
+from z_apply_core.teardown import abest_effort
 
 logger = logging.getLogger(__name__)
 
@@ -93,14 +93,17 @@ def _option_signature(value: str) -> str:
 async def _shutdown_application(
     app: Application[Any, Any, Any, Any, Any, Any],
 ) -> None:
-    with contextlib.suppress(Exception):
+    async def stop_updater() -> None:
         if app.updater is not None and app.updater.running:
             await app.updater.stop()
-    with contextlib.suppress(Exception):
+
+    async def stop_app() -> None:
         if app.running:
             await app.stop()
-    with contextlib.suppress(Exception):
-        await app.shutdown()
+
+    await abest_effort("telegram updater stop", stop_updater)
+    await abest_effort("telegram app stop", stop_app)
+    await abest_effort("telegram app shutdown", app.shutdown)
 
 
 @dataclass(slots=True)
@@ -121,11 +124,16 @@ class TelegramHumanChannel:
         chat_id: int | str,
         proxy: str = "",
         bot_api_base: str = "",
+        artifact_root: Path | None = None,
     ) -> None:
         self.token = token
         self.chat_id = chat_id
         self._proxy = proxy
         self._bot_api_base = bot_api_base
+        # Containment root for sendable artifacts; defaults to the runs tree.
+        # Injectable so tests can point it at a temp directory instead of
+        # patching module globals.
+        self._artifact_root = artifact_root
         self.bot = Bot(
             token=token,
             base_url=bot_api_base or "https://api.telegram.org/bot",
@@ -542,10 +550,9 @@ class TelegramHumanChannel:
         except Exception:
             logger.exception("Failed to send Telegram request image: %s", path)
 
-    @staticmethod
-    def _safe_artifact_path(path: str) -> Path | None:
+    def _safe_artifact_path(self, path: str) -> Path | None:
         artifact = Path(path).expanduser().resolve()
-        artifact_root = (CORE_ROOT / ".z-apply" / "runs").resolve()
+        artifact_root = (self._artifact_root or runs_root()).resolve()
         if not artifact.is_file() or not artifact.is_relative_to(artifact_root):
             return None
         if artifact.suffix.casefold() not in {".png", ".jpg", ".jpeg", ".webp", ".pdf"}:

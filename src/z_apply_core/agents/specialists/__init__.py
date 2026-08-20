@@ -10,12 +10,9 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from z_apply_core.agents.authentication import AuthenticationBudgetMiddleware
-from z_apply_core.agents.browser_mutation_serializer import SerializeBrowserMutationsMiddleware
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
+from z_apply_core.agents.middleware_factory import build_agent_middleware
 from z_apply_core.agents.model_provider import ModelProvider
-from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
-from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
-from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import build_router_middleware
 from z_apply_core.agents.specialist_task_context import SpecialistTaskContextMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
@@ -27,8 +24,7 @@ from z_apply_core.agents.specialists.submission_reviewer import (
 from z_apply_core.agents.specialists.vision import build_vision_specialist
 from z_apply_core.agents.vision_message_compat import VisionToolMessageCompatibilityMiddleware
 from z_apply_core.context.call_ledger import RunCallLedger
-from z_apply_core.context.token_metric import TokenMetricMiddleware
-from z_apply_core.stream_events import FrameworkEventSink, _emit_usage_sync
+from z_apply_core.stream_events import FrameworkEventSink
 
 
 def _with_routing(
@@ -41,6 +37,7 @@ def _with_routing(
     preserve_task_context: bool = False,
     sink: FrameworkEventSink | None = None,
     ledger: RunCallLedger | None = None,
+    mutation_lock: asyncio.Lock | None = None,
 ) -> SubAgent:
     enriched: dict[str, Any] = dict(spec)
     enriched["model"] = model
@@ -50,27 +47,28 @@ def _with_routing(
         sink=sink,
         ledger=ledger,
     )
-
-    def usage_emit(event: object) -> None:
-        _emit_usage_sync(sink, event)
-
-    enriched["middleware"] = [
-        TokenMetricMiddleware(agent=role, emit=usage_emit),
-        *extra_middleware,
-        *([SpecialistTaskContextMiddleware()] if preserve_task_context else []),
-        NoProgressGuardMiddleware(
-            on_no_progress=router_middleware.reject_active_response,
-            # Subagents are browserless and often run weaker free-tier models;
-            # a couple of denied or repeated memory lookups while gathering
-            # human answers is not a loop yet. Keep the circuit loose enough to
-            # survive answer-getting phases but still catch real thrash.
-            max_identical_denials=3,
-            max_non_progress=5,
-        ),
-        *model_retry_middleware(provider),
-        router_middleware,
-        ProseToolCallGuardMiddleware(),
-    ]
+    # Role-tuned NoProgress guard: browserless subagents need looser thresholds
+    no_progress_kwargs: dict[str, Any] = {
+        "max_identical_denials": 3,
+        "max_non_progress": 5,
+    }
+    # extra_middleware lands after NoProgress/SerializeMutations in the shared
+    # factory skeleton; SpecialistTaskContext only appends a reminder message
+    # and no guard reads task identity from request messages, so the position
+    # is safe.
+    leading: list[AgentMiddleware[Any, Any, Any]] = []
+    if preserve_task_context:
+        leading.append(SpecialistTaskContextMiddleware())
+    leading.extend(extra_middleware)
+    enriched["middleware"] = build_agent_middleware(
+        role=role,
+        provider=provider,
+        event_sink=sink,
+        router_middleware=router_middleware,
+        no_progress_kwargs=no_progress_kwargs,
+        extra_middleware=leading,
+        mutation_lock=mutation_lock,
+    )
     return cast("SubAgent", enriched)
 
 
@@ -105,9 +103,9 @@ async def build_specialists(
             extra_middleware=[
                 HumanEscalationGuardMiddleware(allowed_reasons=frozenset({"human_challenge"})),
                 AuthenticationBudgetMiddleware(max_waits=1),
-                SerializeBrowserMutationsMiddleware(sink=sink, lock=mutation_lock),
             ],
             sink=sink,
+            mutation_lock=mutation_lock,
         ),
         _with_routing(
             build_vision_specialist(browser_tools),
@@ -117,6 +115,7 @@ async def build_specialists(
             ledger=ledger,
             extra_middleware=[VisionToolMessageCompatibilityMiddleware()],
             sink=sink,
+            mutation_lock=mutation_lock,
         ),
         _with_routing(
             build_answer_writer(
@@ -131,6 +130,7 @@ async def build_specialists(
             preserve_task_context=True,
             extra_middleware=answer_writer_middleware,
             sink=sink,
+            mutation_lock=mutation_lock,
         ),
         _with_routing(
             build_submission_reviewer([*reviewer_tools, *submission_reviewer_tools]),
@@ -139,5 +139,6 @@ async def build_specialists(
             model=fallback_model,
             ledger=ledger,
             sink=sink,
+            mutation_lock=mutation_lock,
         ),
     ]

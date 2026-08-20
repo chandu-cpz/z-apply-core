@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import warnings
 from dataclasses import dataclass
 from typing import Any
+
+# Shared evidence budget: every caller renders observations through the same
+# 8k tiered projection so repeated context injection stays predictable.
+# Defined here (base layer) because the projection modules sit above this one
+# and a runtime import from z_apply_core.context would be circular.
+DEFAULT_EVIDENCE_BUDGET_CHARS = 8000
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +96,12 @@ class BrowserObservation:
         )
 
     def compact_render(self, *, max_chars: int = 5_000) -> str:
-        """Render bounded, interaction-focused evidence for a model turn.
+        """Deprecated: use :meth:`bounded_render` or :class:`EvidenceProjection`.
+
+        Kept for backward compatibility only. New code should use
+        ``bounded_render()`` (defaults to ``DEFAULT_EVIDENCE_BUDGET_CHARS``) or
+        ``EvidenceStore.render_bounded`` / ``EvidenceProjection.project`` which
+        share a single 8k tiered projection.
 
         The complete observation remains available from browser tools and artifacts.
         This projection only limits repeated context injection; it is not used to
@@ -98,6 +110,12 @@ class BrowserObservation:
         roughly halving the context growth that makes cumulative input tokens
         balloon across a run.
         """
+        warnings.warn(
+            "BrowserObservation.compact_render is deprecated; use bounded_render() "
+            "or EvidenceProjection.project / EvidenceStore.render_bounded",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         header = (
             "BROWSER OBSERVATION\n"
             f"revision: {self.revision}\n"
@@ -151,7 +169,7 @@ class BrowserObservation:
         kept = [lines[index] for index in sorted(selected)]
         return header + "\n".join(kept) + marker
 
-    def bounded_render(self, budget_chars: int = 8000) -> str:
+    def bounded_render(self, budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS) -> str:
         """Render a deterministic, budget-bounded evidence projection."""
         from z_apply_core.context.evidence_projection import EvidenceProjection
 
@@ -178,5 +196,5 @@ class ActionReceipt:
             f"after_revision: {self.after.revision}\n"
             f"changed: {'true' if self.changed else 'false'}\n"
             f"executor_result: {self.result or '(no separate result)'}\n"
-            f"{self.after.compact_render()}"
+            f"{self.after.bounded_render(budget_chars=DEFAULT_EVIDENCE_BUDGET_CHARS)}"
         )

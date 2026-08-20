@@ -12,12 +12,12 @@ from typing import Any, Protocol, cast
 
 from qdrant_client import QdrantClient, models
 
-from z_apply_core.config import CORE_ROOT
+from z_apply_core.paths import qdrant_path
 from z_apply_core.text_utils import alnum_key
 
 logger = logging.getLogger(__name__)
 
-MEMORY_PATH = CORE_ROOT / ".z-apply" / "qdrant"
+MEMORY_PATH = qdrant_path()
 MEMORY_COLLECTION = "z_apply_core_applicant_memory_v1"
 MEMORY_NAMESPACE = uuid.UUID("f0e95a1d-6811-4fe6-a938-fb1153f3b8a9")
 _MEMORY_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="candidate-memory")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -335,7 +336,7 @@ class BatchWiringTests(unittest.TestCase):
 
     def test_batch_mode_exposes_batched_tool_without_legacy_mutations(self) -> None:
         with patch("z_apply_core.nodes.setup_browser.load_settings") as settings:
-            settings.return_value = SimpleNamespace(browser_batch_tools=True)
+            settings.return_value = SimpleNamespace(browser_batch_tools=True, default_resume_path=Path("/tmp/resume.pdf"))
             names = {getattr(tool, "name", "") for tool in self._session_tools()}
         self.assertIn("browser_batched", names)
         self.assertNotIn("browser_navigate", names)
@@ -346,7 +347,7 @@ class BatchWiringTests(unittest.TestCase):
 
     def test_legacy_mode_restores_legacy_mutations(self) -> None:
         with patch("z_apply_core.nodes.setup_browser.load_settings") as settings:
-            settings.return_value = SimpleNamespace(browser_batch_tools=False)
+            settings.return_value = SimpleNamespace(browser_batch_tools=False, default_resume_path=Path("/tmp/resume.pdf"))
             names = {getattr(tool, "name", "") for tool in self._session_tools()}
         self.assertNotIn("browser_batched", names)
         self.assertIn("browser_observe", names)

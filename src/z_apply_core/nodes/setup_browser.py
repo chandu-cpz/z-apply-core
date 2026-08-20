@@ -13,7 +13,7 @@ from z_apply_core.browser_tools import (
     make_click_upload_tool,
     make_observe_tool,
 )
-from z_apply_core.config import DEFAULT_RESUME_PATH, load_settings
+from z_apply_core.config import load_settings
 from z_apply_core.human.factory import make_configured_human_channel
 from z_apply_core.live_view import LiveView
 from z_apply_core.memory.applicant_memory import CandidateMemory
@@ -46,7 +46,7 @@ async def setup_browser(
     display.start()
     try:
         live_view.start(display.display, enabled=bool(state.get("live_view", True)))
-        browser = await BrowserSession.start()
+        browser = await BrowserSession.start(display=display.display)
         snapshot = await browser.tools.call("browser_navigate", {"url": state["job_url"]})
         if not snapshot.startswith("### Error"):
             snapshot = await browser.tools.call("browser_snapshot")
@@ -119,7 +119,7 @@ def _agent_browser_tools(browser: BrowserSession) -> list[object]:
         make_observe_tool(browser.observe),
         make_click_upload_tool(
             browser.upload_files,
-            default_paths=(str(DEFAULT_RESUME_PATH),),
+            default_paths=(str(settings.default_resume_path),),
             revision_provider=lambda: browser.last_observation_revision,
         ),
     ]

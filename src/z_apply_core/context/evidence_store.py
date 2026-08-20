@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from z_apply_core.browser_observation import DEFAULT_EVIDENCE_BUDGET_CHARS
 from z_apply_core.context.evidence_projection import EvidenceProjection
 
 if TYPE_CHECKING:
@@ -44,7 +45,7 @@ def render_bounded(
     observation: BrowserObservation,
     store: EvidenceStore,
     *,
-    budget_chars: int = 8000,
+    budget_chars: int = DEFAULT_EVIDENCE_BUDGET_CHARS,
 ) -> str:
     store.save(observation)
     return EvidenceProjection.project(observation, budget_chars=budget_chars)

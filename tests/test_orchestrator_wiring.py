@@ -51,8 +51,9 @@ def _build(
 
 def test_chain_order_metric_outermost(tmp_path: Path) -> None:
     chain = _build(tmp_path)
-    assert isinstance(chain[0], TokenMetricMiddleware)
-    assert isinstance(chain[1], CapabilityContextMiddleware)
+    # CapabilityContext must be outermost so evidence is injected before TokenMetric measures
+    assert isinstance(chain[0], CapabilityContextMiddleware)
+    assert isinstance(chain[1], TokenMetricMiddleware)
     assert isinstance(chain[2], NoProgressGuardMiddleware)
     assert isinstance(chain[3], SerializeBrowserMutationsMiddleware)
 
@@ -75,6 +76,9 @@ def test_token_metric_and_capability_carry_run_context(tmp_path: Path) -> None:
     chain = _build(tmp_path, run_context=run_context)
     assert chain[0]._run_context is run_context
     assert chain[1]._run_context is run_context
+    # TokenMetric after CapabilityContext so estimate includes injected evidence
+    assert isinstance(chain[0], CapabilityContextMiddleware)
+    assert isinstance(chain[1], TokenMetricMiddleware)
 
 
 def test_capability_context_carries_wiring(tmp_path: Path) -> None:

@@ -9,7 +9,7 @@ from langchain.agents.middleware.types import AgentState, ContextT, ModelRespons
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
-from z_apply_core.browser_observation import BrowserCapabilities
+from z_apply_core.browser_observation import DEFAULT_EVIDENCE_BUDGET_CHARS, BrowserCapabilities
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
@@ -102,7 +102,8 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
                 current_evidence = render_bounded(observation, self._evidence_store)
             else:
                 current_evidence = (
-                    "\nCURRENT BROWSER EVIDENCE\n" + observation.compact_render()
+                    "\nCURRENT BROWSER EVIDENCE\n"
+                    + observation.bounded_render(budget_chars=DEFAULT_EVIDENCE_BUDGET_CHARS)
                     if observation is not None
                     else ""
                 )

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
-from z_apply_core.config import CORE_ROOT, load_settings
+from z_apply_core.config import load_settings
+from z_apply_core.paths import master_profile_path, run_artifacts_dir
 
 
 def build_browser_config(
@@ -21,11 +23,10 @@ def build_browser_config(
     #
     # ``display`` gives the browser its OWN X display (per-run Xvfb) so
     # concurrent runs each render on their own screen and the live view can
-    # follow the focused run. Passed per-launch via env so concurrent launches
-    # never race on the process-global DISPLAY.
-    workspace_dir = CORE_ROOT / ".z-apply"
-    profile_dir = profile_dir or workspace_dir / "browser-profile"
-    output_dir = workspace_dir / "runs" / run_id / "browser-artifacts"
+    # follow the focused run. Passed per-launch through the camoufox options
+    # so concurrent launches never race on the process-global DISPLAY.
+    profile_dir = profile_dir or master_profile_path()
+    output_dir = run_artifacts_dir(run_id)
     profile_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
     settings = load_settings()
@@ -52,15 +53,17 @@ def build_browser_config(
         "console": {"level": "error"},
     }
     if display:
-        # Per-run X display: passed via launch env so concurrent launches never
-        # race on the process-global DISPLAY. GDK/Wayland guards match what
-        # camoufox does for its own virtual displays.
-        config["browser"]["launchOptions"] = {
-            "env": {
-                "DISPLAY": display,
-                "GDK_BACKEND": "x11",
-                "MOZ_ENABLE_WAYLAND": "0",
-            }
+        # Per-run X display. Routed through camoufoxOptions.env because the MCP
+        # driver drops launchOptions.env entirely (_to_python_launch_options has
+        # no "env" mapping). Camoufox replaces the child environment when env is
+        # given, so merge the parent environment to keep PATH/HOME intact.
+        # GDK/Wayland guards match what camoufox does for its own virtual
+        # displays.
+        config["browser"]["camoufoxOptions"]["env"] = {
+            **os.environ,
+            "DISPLAY": display,
+            "GDK_BACKEND": "x11",
+            "MOZ_ENABLE_WAYLAND": "0",
         }
     secrets = {
         name: value

@@ -36,12 +36,13 @@ from z_apply_core.browser_tools import (
     make_auth_submit_tool,
     make_verification_link_tool,
 )
-from z_apply_core.config import CORE_ROOT
 from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.context.token_metric import TokenMetricMiddleware
 from z_apply_core.human.channel import HumanChannel
 from z_apply_core.human.tools import make_manual_auth_tool
 from z_apply_core.log_labels import node_info
+from z_apply_core.paths import CORE_ROOT
+from z_apply_core.paths import captcha_path as paths_captcha_path
 from z_apply_core.stream_events import FrameworkEventSink, _emit_usage_sync
 
 logger = logging.getLogger(__name__)
@@ -71,16 +72,7 @@ class AuthenticationRun:
 
 def captcha_artifact_path(run_id: str) -> str:
     """Best-effort captcha screenshot path attached to a manual-auth handoff."""
-    return str(
-        (
-            CORE_ROOT
-            / ".z-apply"
-            / "runs"
-            / run_id
-            / "browser-artifacts"
-            / "captcha.png"
-        ).resolve()
-    )
+    return str(paths_captcha_path(run_id).resolve())
 
 
 def parse_authentication_result(text: str) -> AuthStatus:

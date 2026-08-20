@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 from collections.abc import AsyncIterator
@@ -147,7 +146,7 @@ class RunBrowserLease:
             return
         self.closed = True
         for page in tuple(self.owned_pages):
-            with contextlib.suppress(Exception):
+            try:
                 if not page.is_closed():
                     # A page mid-navigation (hung network, stuck load) can make
                     # playwright's close() block forever, hanging the whole
@@ -157,15 +156,19 @@ class RunBrowserLease:
                         await asyncio.wait_for(page.close(), timeout=5)
                     except TimeoutError:
                         logger.warning("page.close() timed out; continuing shutdown")
+            except Exception as exc:  # noqa: BLE001 - page teardown must not abort
+                logger.warning("Failed to close page during shutdown: %s", exc, exc_info=True)
         self.owned_pages.clear()
 
     async def stop_loading(self) -> None:
         """Leave retained pages inspectable without background navigation work."""
         for page in tuple(self.owned_pages):
-            if page.is_closed():
-                continue
-            with contextlib.suppress(Exception):
+            try:
+                if page.is_closed():
+                    continue
                 await page.keyboard.press("Escape")
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Failed to stop page loading: %s", exc, exc_info=True)
 
 
 class BrowserWorkspace:
@@ -187,8 +190,7 @@ class BrowserWorkspace:
         self._creation_lock = asyncio.Lock()
         self._started = False
 
-    async def start(self, *, live_view: bool = True) -> None:
-        del live_view  # per-run live views are created in open_run
+    async def start(self) -> None:
         if self._started:
             return
         async with self._start_lock:

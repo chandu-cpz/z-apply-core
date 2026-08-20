@@ -39,10 +39,9 @@ from pathlib import Path
 from typing import Any
 
 from z_apply_core.browser_config import build_browser_config
+from z_apply_core.paths import DEFAULT_MASTER_PROFILE, PROFILES_ROOT
 from z_apply_core.profile_pool import (
-    DEFAULT_MASTER_PROFILE,
     DEFAULT_SLOT_COUNT,
-    PROFILES_ROOT,
     ProfileSlot,
     ProfileSlotPool,
     _clean_launch_artifacts,

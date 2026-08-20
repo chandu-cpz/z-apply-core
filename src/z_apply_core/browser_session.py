@@ -26,6 +26,7 @@ from z_apply_core.browser_form_inspection import (
     required_file_upload_pending,
 )
 from z_apply_core.browser_observation import (
+    DEFAULT_EVIDENCE_BUDGET_CHARS,
     ActionReceipt,
     BrowserCapabilities,
     BrowserControlState,
@@ -34,6 +35,7 @@ from z_apply_core.browser_observation import (
 from z_apply_core.browser_submission import SubmissionGuard
 from z_apply_core.browser_targeting import (
     classify_submit_control,
+    empty_file_inputs,
     is_direct_file_upload_trigger,
     resolve_auth_submit_control,
     resolve_file_input,
@@ -46,10 +48,9 @@ from z_apply_core.browser_tools import (
     normalize_browser_arguments,
     validate_bounded_wait_arguments,
 )
-from z_apply_core.config import CORE_ROOT
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
-from z_apply_core.profile_pool import PROFILES_ROOT
+from z_apply_core.paths import PROFILES_ROOT, runs_root
 from z_apply_core.text_utils import collapsed_label
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ VISUAL_EVIDENCE_UNAVAILABLE_NOTE = (
     "for this run, so no visual evidence exists. Rely on DOM/ARIA evidence or "
     "report that visual evidence is unavailable."
 )
-ARTIFACT_ROOT = CORE_ROOT / ".z-apply" / "runs"
+ARTIFACT_ROOT = runs_root()
 
 #: Per-step ceiling for a single ``browser_batched`` action. The backend's own
 #: ``action_timeout`` (default 5s) bounds each Playwright call, but target
@@ -177,7 +178,13 @@ class BrowserSession:
         )
 
     @classmethod
-    async def start(cls, *, run_id: str | None = None, profile_dir: Path | None = None) -> Self:
+    async def start(
+        cls,
+        *,
+        run_id: str | None = None,
+        profile_dir: Path | None = None,
+        display: str | None = None,
+    ) -> Self:
         resolved_run_id = run_id or uuid4().hex
         if profile_dir is None:
             # Never launch on the sealed master: standalone sessions get a
@@ -185,7 +192,7 @@ class BrowserSession:
             profile_dir = PROFILES_ROOT / f"scratch-{resolved_run_id[:12]}"
         return cls(
             await create_connection(
-                build_browser_config(resolved_run_id, profile_dir=profile_dir)
+                build_browser_config(resolved_run_id, profile_dir=profile_dir, display=display)
             ),
             run_id=resolved_run_id,
             scratch_profile=profile_dir,
@@ -360,7 +367,7 @@ class BrowserSession:
         evidence_store = getattr(self, "evidence_store", None)
         if evidence_store is not None:
             return f"{result}\n{render_bounded(observation, evidence_store)}"
-        return f"{result}\n{observation.compact_render()}"
+        return f"{result}\n{observation.bounded_render(budget_chars=DEFAULT_EVIDENCE_BUDGET_CHARS)}"
 
     async def observe(self, *, full: bool = False) -> str:
         """Return a compact browser state signal, or the full evidence tree when ``full``.
@@ -551,7 +558,7 @@ class BrowserSession:
         if evidence_store is not None:
             evidence = render_bounded(after, evidence_store)
         else:
-            evidence = after.compact_render()
+            evidence = after.bounded_render(budget_chars=DEFAULT_EVIDENCE_BUDGET_CHARS)
         stopped_note = ""
         if stopped is not None:
             stopped_index, stopped_action = stopped
@@ -761,20 +768,7 @@ class BrowserSession:
 
     @staticmethod
     async def _empty_file_inputs(page: Any) -> list[Any]:
-        """Return enabled file inputs that currently hold no file.
-
-        Mirrors the empty-file-upload fact the capability inspector reports so
-        deterministic resolution and browser evidence never disagree. Visibility
-        is deliberately not required: boards hide the native control behind a
-        styled label, and set_input_files works on a hidden input.
-        """
-        controls = page.locator('input[type="file"]')
-        empty_inputs: list[Any] = []
-        for index in range(await controls.count()):
-            control = controls.nth(index)
-            if await control.is_enabled() and not await control.input_value():
-                empty_inputs.append(control)
-        return empty_inputs
+        return await empty_file_inputs(page)
 
     @staticmethod
     async def _file_input_names(page: Any) -> list[str]:
@@ -809,11 +803,21 @@ class BrowserSession:
             return
         try:
             async with self._operation_scope():
-                tab = await self._backend._ensure_tab()
-                resolved = await tab.resolve_target(target=target)
-                await resolved.locator.select_text()
+                await self._select_target_text(target)
         except Exception as exc:  # noqa: BLE001 - best-effort pre-clear
             logger.debug("browser_type pre-clear skipped for %r: %s", target, exc)
+
+    async def _pre_select_type_target_no_gate(self, target: str) -> None:
+        """Select text without acquiring the workspace gate (caller already holds it)."""
+        try:
+            await self._select_target_text(target)
+        except Exception as exc:  # noqa: BLE001 - best-effort pre-clear
+            logger.debug("browser_type pre-clear skipped for %r: %s", target, exc)
+
+    async def _select_target_text(self, target: str) -> None:
+        tab = await self._backend._ensure_tab()
+        resolved = await tab.resolve_target(target=target)
+        await resolved.locator.select_text()
 
     @property
     def pending_atomic_upload_target(self) -> str:

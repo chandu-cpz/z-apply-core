@@ -10,9 +10,9 @@ from langchain_core.tools import BaseTool, ToolException, tool
 
 from z_apply_core.browser_observation import ActionReceipt
 from z_apply_core.browser_session import BrowserSession
-from z_apply_core.config import CORE_ROOT
+from z_apply_core.paths import playbooks_root
 
-DEFAULT_PLAYBOOK_ROOT = CORE_ROOT / ".z-apply" / "platform-memory"
+DEFAULT_PLAYBOOK_ROOT = playbooks_root()
 _MAX_ACTIVE_PLAYBOOK_CHARS = 6_000
 _MAX_EPISODE_PART_CHARS = 400
 

@@ -38,7 +38,7 @@ class ProviderSelectionTests(unittest.TestCase):
             "INFERX_API_KEY": "",
             "INFERX_MODEL": "deepseek-v4-flash-0731",
             "OPENCODEGO_API_KEY": "",
-            "OPENCODEGO_MODEL": "mimo-v2.5",
+            "OPENCODEGO_MODEL": "muse-spark-1.2-contributor",
         }
         values.update(overrides)
         return patch(
@@ -155,7 +155,7 @@ class ProviderSelectionTests(unittest.TestCase):
     def test_opencodego_provider_default_model(self) -> None:
         provider = OpenCodeGoProvider(api_key="sk-test")
 
-        self.assertEqual(provider._model, "mimo-v2.5")
+        self.assertEqual(provider._model, "muse-spark-1.2-contributor")
         self.assertEqual(provider.BASE_URL, "https://opencode.ai/zen/go/v1")
 
     def test_get_provider_catalog(self) -> None:

@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from z_apply_core.teardown import best_effort
+
 logger = logging.getLogger(__name__)
 
 _DESKTOP_ENV = {
@@ -118,8 +120,10 @@ class LiveView:
         self.remmina = None
         self.x11vnc = None
         self.port = None
-        with contextlib.suppress(Exception):
+        try:
             self.state_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("LiveView state unlink failed: %s", exc)
 
     def _write_state(self, display: str) -> None:
         data = {
@@ -128,8 +132,10 @@ class LiveView:
             "x11vnc_pid": self.x11vnc.pid if self.x11vnc else None,
             "remmina_pid": self.remmina.pid if self.remmina else None,
         }
-        with contextlib.suppress(Exception):
+        try:
             self.state_path.write_text(json.dumps(data), encoding="utf-8")
+        except OSError as exc:
+            logger.debug("LiveView state write failed: %s", exc)
 
     def _cleanup_prior_state(self, display: str | None) -> None:
         """Reap a stale live view left by a PREVIOUS process on THIS display.
@@ -149,8 +155,10 @@ class LiveView:
             return
         _terminate_pid(_int_or_zero(data.get("remmina_pid")), "remmina", "remmina")
         _terminate_pid(_int_or_zero(data.get("x11vnc_pid")), "x11vnc", "x11vnc")
-        with contextlib.suppress(Exception):
+        try:
             self.state_path.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.debug("LiveView stale unlink failed: %s", exc)
 
 
 def _reserve_local_port() -> int:
@@ -181,12 +189,15 @@ def _wait_for_port(
 def _terminate(proc: subprocess.Popen[bytes] | None, timeout_s: float = 3.0) -> None:
     if proc is None or proc.poll() is not None:
         return
-    with contextlib.suppress(Exception):
+
+    def terminate() -> None:
         proc.terminate()
         proc.wait(timeout=timeout_s)
-    if proc.poll() is None:
-        with contextlib.suppress(Exception):
-            proc.kill()
+
+    best_effort("live_view process terminate", terminate)
+    if proc.poll() is not None:
+        return
+    best_effort("live_view process kill", proc.kill)
 
 
 def _terminate_pid(pid: int, token: str, name: str, timeout_s: float = 3.0) -> None:
