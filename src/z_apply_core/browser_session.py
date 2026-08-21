@@ -1180,6 +1180,11 @@ class BrowserSession:
             meta["cwd"] = str(self._capture_workspace)
         return meta
 
+    async def page_title(self) -> str:
+        """Best-effort current page title; never raises, empty when unknown."""
+        _, title = await self._page_identity()
+        return title
+
     async def _page_identity(self) -> tuple[str, str]:
         """Read non-critical page identity without making snapshots fail."""
         ensure_tab = getattr(self._backend, "_ensure_tab", None)

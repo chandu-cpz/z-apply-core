@@ -32,6 +32,10 @@ class RunRuntime:
     context_inbox: ContextInbox | None = None
     shared_resources: bool = False
     artifact_callback: Callable[[str, Path], Awaitable[None]] | None = None
+    # Sync callback the orchestrator's report_job_metadata tool calls with the
+    # (company, role, location) it reads off the job page; the service layer
+    # binds it to the live run view.
+    metadata_reporter: Callable[[str, str, str | None], None] | None = None
 
     async def close(self) -> None:
         if self.shared_resources:

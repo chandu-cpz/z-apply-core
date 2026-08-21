@@ -11,7 +11,7 @@ import contextlib
 import hashlib
 import logging
 import mimetypes
-from collections.abc import AsyncIterator, Awaitable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from typing import Any, cast
@@ -24,7 +24,7 @@ from z_apply_core.agents.providers import (
     default_gateway_name,
     get_model_gateway,
 )
-from z_apply_core.browser_session import ARTIFACT_ROOT
+from z_apply_core.browser_session import ARTIFACT_ROOT, BrowserSession
 from z_apply_core.browser_workspace import BrowserWorkspace
 from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.graph import run_job
@@ -65,7 +65,7 @@ from z_apply_core.memory.applicant_memory import CandidateMemory
 from z_apply_core.runtime import RunResources, RunRuntime
 from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 from z_apply_core.teardown import abest_effort, best_effort
-from z_apply_core.text_utils import utc_now
+from z_apply_core.text_utils import clean_job_metadata, utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,31 @@ RETAINED_BROWSER_TTL_SECONDS = 600
 SNAPSHOT_SUMMARY_LIMIT = 280
 
 _LIVE_ONLY_EVENTS = frozenset({"agent.message.delta", "model.tool_call.delta", "stream.metrics"})
+
+# Page-title shapes the passive metadata fallback understands: "Role | Company"
+# and "Role – Company" (en/em dash or spaced hyphen). A bare hyphen without
+# spaces is ignored so hyphenated role titles never split.
+_JOB_TITLE_SEPARATORS = (" | ", " – ", " — ", " - ")
+
+
+def _metadata_reporter(run: _Run) -> Callable[[str, str, str | None], None]:
+    """Bind the orchestrator's report_job_metadata tool to one run's live view."""
+    def report(company: str, role: str, location: str | None = None) -> None:
+        run.view = replace(run.view, company=company, role=role)
+
+    return report
+
+
+def _role_company_from_title(title: str) -> tuple[str, str] | None:
+    """Split a 'Role | Company' style title into ``(role, company)``, or None."""
+    for separator in _JOB_TITLE_SEPARATORS:
+        left, found, right = title.partition(separator)
+        if found:
+            role = clean_job_metadata(left)
+            company = clean_job_metadata(right)
+            if role and company:
+                return role, company
+    return None
 
 
 class _Run:
@@ -654,6 +679,7 @@ class ZApplyCore:
             self._focused_run_id = run.run_id
             run.view = replace(run.view, browser_tab_state=BrowserTabState.OPEN)
             await self._emit(run, "browser.page_opened", {})
+            await self._capture_title_metadata(run, lease.session)
             run.human_broker = HumanRequestBroker(
                 run_id=run.run_id,
                 on_requested=lambda request: self._human_requested(run, request),
@@ -672,6 +698,7 @@ class ZApplyCore:
                 artifact_callback=lambda kind, path: _discard(
                     self._artifact_created(run, kind, path)
                 ),
+                metadata_reporter=_metadata_reporter(run),
             )
             run.resources.runtime = runtime
             run.view = replace(
@@ -754,6 +781,26 @@ class ZApplyCore:
             if run.view.browser_tab_state is BrowserTabState.OPEN:
                 await self._workspace.quiesce_run(run.run_id)
             self._wake.set()
+
+    async def _capture_title_metadata(self, run: _Run, session: BrowserSession) -> None:
+        """Seed company/role from the initial page title, before the agent acts.
+
+        Purely cosmetic best-effort so the cockpit shows something meaningful
+        immediately; the report_job_metadata tool call remains authoritative.
+        Never overwrites values the tool already set.
+        """
+        try:
+            title = await session.page_title()
+        except Exception as exc:  # noqa: BLE001 - metadata capture must never block a run
+            logger.debug("title metadata capture skipped for %s: %s", run.run_id, exc)
+            return
+        parsed = _role_company_from_title(title)
+        if parsed is None:
+            return
+        if run.view.company is not None or run.view.role is not None:
+            return
+        role, company = parsed
+        run.view = replace(run.view, company=company, role=role)
 
     async def _terminal(
         self, run: _Run, outcome: RunOutcome, summary: str, payload: dict[str, Any] | None = None

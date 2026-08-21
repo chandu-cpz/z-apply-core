@@ -7,6 +7,14 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+JOB_METADATA_MAX_LENGTH = 120
+
+
+def clean_job_metadata(value: str) -> str:
+    """Trimmed job metadata value capped at ``JOB_METADATA_MAX_LENGTH``."""
+    return value.strip()[:JOB_METADATA_MAX_LENGTH]
+
+
 def alnum_key(text: str) -> str:
     """Case-folded alphanumeric-only key for tolerant label comparisons.
 

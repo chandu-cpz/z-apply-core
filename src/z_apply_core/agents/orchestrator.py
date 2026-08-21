@@ -55,6 +55,7 @@ from z_apply_core.stream_events import (
     FrameworkEventSink,
     SequencedEventSink,
 )
+from z_apply_core.text_utils import clean_job_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +91,39 @@ def decide_goal_stall(
     return stall_count, stall_count >= limit
 
 
+def make_report_job_metadata(
+    metadata_reporter: Callable[[str, str, str | None], None] | None,
+) -> BaseTool:
+    """Build the orchestrator tool that records company/role on the live run view.
+
+    The reporter is bound by the service layer to ``run.view``; when absent
+    (CLI runs) the tool still validates and reports that it cannot persist.
+    """
+    @tool
+    async def report_job_metadata(company: str, role: str, location: str | None = None) -> str:
+        """Record the company and role for this application on the run view.
+
+        Call it once, before any form filling or autofill (including
+        Simplify), using values read from the job page. Company and role
+        title are required; include location when the page shows one.
+        """
+        cleaned_company = clean_job_metadata(company)
+        cleaned_role = clean_job_metadata(role)
+        cleaned_location = clean_job_metadata(location) if location else ""
+        if not cleaned_company or not cleaned_role:
+            return (
+                "report_job_metadata rejected: company and role are required "
+                "non-empty strings read from the page. Re-call with real values."
+            )
+        if metadata_reporter is None:
+            return "Metadata reporting is unavailable for this run; continue the application."
+        metadata_reporter(cleaned_company, cleaned_role, cleaned_location or None)
+        suffix = " (location accepted, not persisted yet)" if cleaned_location else ""
+        return f"Recorded job metadata: company={cleaned_company}, role={cleaned_role}{suffix}."
+
+    return report_job_metadata
+
+
 async def run_orchestrator(
     *,
     job_url: str,
@@ -110,6 +144,7 @@ async def run_orchestrator(
     context_inbox: ContextInbox | None = None,
     browser: BrowserSession | None = None,
     call_ledger: RunCallLedger | None = None,
+    metadata_reporter: Callable[[str, str, str | None], None] | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
     configure_z_apply_harness_profile()
@@ -351,6 +386,7 @@ async def run_orchestrator(
             *human_tools,
             application_blocked,
             application_submitted,
+            make_report_job_metadata(metadata_reporter),
         ],
         system_prompt=load_prompt(ORCHESTRATOR_PROMPT),
         middleware=build_orchestrator_middleware(
