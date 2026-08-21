@@ -188,9 +188,14 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
                 "with the exact same parameters against the same unchanged browser "
                 "revision. THAT IS A NO-PROGRESS LOOP - you are wasting the turn "
                 "repeating yourself. STOP repeating it. Do not call this exact "
-                "tool with these exact same parameters again. Instead: inspect "
-                "fresh browser evidence, then choose a DIFFERENT action - act on "
-                "a different control, or proceed even if an open list stays open."
+                "tool with these exact same parameters again. Instead rotate to a "
+                "DIFFERENT strategy class: browser_find over navigation vocabulary "
+                "(Next / Continue / Submit / Apply / Back - and beyond, read them "
+                "off the page), a SCOPED subtree snapshot of a region you have not "
+                "examined (browser_snapshot with target=<ref> from the truncation "
+                "coverage list), or act on a different control entirely. Repeating "
+                "the same probe class against an unchanged page can never advance "
+                "the application."
             )
             result = self._denied_tool_message(request, reason)
             await self._emit_denial(request, "identical_call", reason)
@@ -327,7 +332,9 @@ class NoProgressGuardMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT,
             raise NoProgressCircuitOpen(
                 f"The same typed browser action ({signature[0]}) repeated within the "
                 "recent window without advancing the application; ending this agent "
-                "turn for fresh-evidence recovery."
+                "turn for fresh-evidence recovery. On resume: rotate strategy class "
+                "- run the browser_find navigation ladder or scope subtree snapshots "
+                "of unexamined regions; do not repeat the same probe."
             )
 
     def _denied_tool_message(self, request: ToolCallRequest, reason: str) -> ToolMessage:
