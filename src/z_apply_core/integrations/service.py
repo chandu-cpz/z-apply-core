@@ -78,6 +78,9 @@ DEFAULT_TASK = (
 # after this window the browser is auto-released (slot reset) so the pool
 # capacity recycles instead of filling with retained browsers forever.
 RETAINED_BROWSER_TTL_SECONDS = 600
+# Free-text summary bound in stream snapshots; the full text stays available
+# via REST so high-frequency snapshot payloads stay small.
+SNAPSHOT_SUMMARY_LIMIT = 280
 
 _LIVE_ONLY_EVENTS = frozenset({"agent.message.delta", "model.tool_call.delta", "stream.metrics"})
 
@@ -581,7 +584,10 @@ class ZApplyCore:
             raise InvalidRunTransition("cannot close browser workspace while applications execute")
         await self._workspace.close()
         for run in self._runs.values():
+            if run.view.browser_tab_state is BrowserTabState.CLOSED:
+                continue
             run.view = replace(run.view, browser_tab_state=BrowserTabState.CLOSED)
+            await self._emit(run, "browser.closed", {"reason": "shutdown"})
 
     async def subscribe(self, *, run_id: str | None = None) -> AsyncIterator[CoreEvent]:
         async with self._broadcaster.subscription() as stream:
@@ -793,6 +799,7 @@ class ZApplyCore:
             if run.view.browser_tab_state is BrowserTabState.OPEN:
                 await self._workspace.close_run(run.run_id)
                 run.view = replace(run.view, browser_tab_state=BrowserTabState.CLOSED)
+                await self._emit(run, "browser.closed", {"reason": "cancelled"})
             return
         if outcome in (RunOutcome.SUBMITTED_VERIFIED,):
             return
@@ -808,9 +815,10 @@ class ZApplyCore:
                     and view.browser_tab_state is BrowserTabState.OPEN
                 ):
                     await self._workspace.close_run(run.run_id)
-                    run.view = replace(
-                        run.view, browser_tab_state=BrowserTabState.CLOSED
-                    )
+                    run.view = replace(run.view, browser_tab_state=BrowserTabState.CLOSED)
+                    # State change must be observable: emit so stream clients
+                    # patch their stores instead of showing a stale open tab.
+                    await self._emit(run, "browser.closed", {"reason": "retention_ttl"})
                     logger.info(
                         "auto-released retained browser for run %s after TTL",
                         run.run_id,
@@ -1081,6 +1089,9 @@ class ZApplyCore:
     ) -> None:
         run.sequence += 1
         run.view = replace(run.view, latest_event_sequence=run.sequence)
+        # Every persisted event carries the run view snapshot taken AFTER the
+        # mutation that triggered it, so stream consumers can patch local
+        # state directly instead of refetching (state-in-stream, not hints).
         event = CoreEvent(
             run.run_id,
             run.sequence,
@@ -1088,7 +1099,7 @@ class ZApplyCore:
             event_type,
             source or {"component": "core"},
             level,
-            _safe_payload(payload),
+            _safe_payload({**payload, "view": _view_snapshot(run.view)}),
         )
         for sink in tuple(self._sinks):
             await sink.accept(event)
@@ -1172,6 +1183,38 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
             "submission.review_ready" if payload.get("ready") else "submission.review_not_ready"
         ),
     }.get(event, "graph.event")
+
+
+def _view_snapshot(view: CoreRunView) -> dict[str, Any]:
+    """Compact JSON-safe snapshot of a run view for stream consumers.
+
+    Attached to every persisted event so clients can patch local state
+    directly. Free-text ``summary`` is truncated: the full text stays
+    available via REST; snapshots stay small on high-frequency paths.
+    """
+    return {
+        "run_id": view.run_id,
+        "job_url": view.job_url,
+        "task": view.task,
+        "company": view.company,
+        "role": view.role,
+        "status": view.status.value,
+        "phase": view.phase.value,
+        "outcome": view.outcome.value if view.outcome is not None else None,
+        "summary": view.summary[:SNAPSHOT_SUMMARY_LIMIT] if view.summary is not None else None,
+        "current_agent": view.current_agent,
+        "current_model": view.current_model,
+        "current_provider": view.current_provider,
+        "browser_tab_state": view.browser_tab_state.value,
+        "control_mode": view.control_mode.value,
+        "pending_human_request_id": view.pending_human_request_id,
+        "latest_event_sequence": view.latest_event_sequence,
+        "created_at": view.created_at.isoformat(),
+        "started_at": view.started_at.isoformat() if view.started_at is not None else None,
+        "finished_at": view.finished_at.isoformat() if view.finished_at is not None else None,
+        "current_reasoning": view.current_reasoning,
+        "current_reasoning_effort": view.current_reasoning_effort,
+    }
 
 
 def _safe_payload(value: Any) -> dict[str, Any]:
