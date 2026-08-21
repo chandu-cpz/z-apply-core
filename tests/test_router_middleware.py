@@ -10,10 +10,8 @@ from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
-    ToolMessage,
 )
 
-from z_apply_core.agents.model_provider import ModelCapabilities, ModelInfo, ModelSelection
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
 from z_apply_core.agents.router_middleware import (
     ModelRouter,
@@ -23,28 +21,36 @@ from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.stream_events import FrameworkTraceEvent
 
 
-def _make_selection(model_id: str = "agnes/agnes-2.0-flash") -> ModelSelection:
-    return ModelSelection(
-        info=ModelInfo(
-            id=model_id,
-            capabilities=ModelCapabilities(tools=True, structured=True, reasoning=True),
-            metadata={"provider": "agnes"},
-        ),
-        llm=MagicMock(),
-        callback=None,
-    )
+class FakeGateway:
+    """ModelGateway stand-in: get_model returns a fresh client per generation.
+
+    Bump ``generation`` to simulate a live provider/model switch: the gateway
+    cache is invalidated and the next get_model returns a different object.
+    """
+
+    def __init__(self, name: str = "agnes", model_id: str = "agnes/agnes-2.0-flash") -> None:
+        self.name = name
+        self.model_id = model_id
+        self.generation = 0
+        self._client: Any = None
+        self._client_generation = -1
+
+    def get_model(self, thinking_effort: str | None = None) -> Any:
+        # Mirrors the real gateway: same object until the config changes.
+        if self._client_generation != self.generation:
+            self._client = MagicMock(model=f"{self.model_id}#{self.generation}")
+            self._client_generation = self.generation
+        return self._client
 
 
 class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
     async def test_orphan_tool_result_passes_through_untouched(self) -> None:
-        selection = _make_selection("strict/model")
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
+        gateway = FakeGateway("strict", "strict/model")
         request = MagicMock(
             tools=[sentinel.tool],
             response_format=None,
             messages=[
                 HumanMessage(content="Continue the application."),
-                ToolMessage(content="stale result", tool_call_id="call-orphan"),
             ],
         )
         request.override.side_effect = lambda **values: SimpleNamespace(
@@ -52,74 +58,28 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         )
         handler = AsyncMock(return_value=sentinel.response)
 
-        await ModelRouter(
-            cast(Any, provider),
-            role="orchestrator",
-            selection=selection,
-        ).awrap_model_call(request, handler)
+        await ModelRouter(cast(Any, gateway), role="orchestrator").awrap_model_call(
+            request, handler
+        )
 
         forwarded = handler.await_args.args[0]
-        self.assertEqual(
-            [type(message) for message in forwarded.messages],
-            [HumanMessage, ToolMessage],
-        )
-        self.assertEqual(forwarded.messages[1].tool_call_id, "call-orphan")
-
-    async def test_preserves_tool_result_with_matching_assistant_call(self) -> None:
-        selection = _make_selection("strict/model")
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
-        request = MagicMock(
-            tools=[sentinel.tool],
-            response_format=None,
-            messages=[
-                HumanMessage(content="Continue."),
-                AIMessage(
-                    content="",
-                    tool_calls=[{"name": "lookup", "args": {}, "id": "call-1"}],
-                ),
-                ToolMessage(content="valid", tool_call_id="call-1"),
-            ],
-        )
-        request.override.side_effect = lambda **values: SimpleNamespace(
-            messages=request.messages, **values
-        )
-        handler = AsyncMock(return_value=sentinel.response)
-
-        await ModelRouter(
-            cast(Any, provider),
-            role="orchestrator",
-            selection=selection,
-        ).awrap_model_call(request, handler)
-
-        forwarded = handler.await_args.args[0]
-        self.assertEqual(
-            [type(message) for message in forwarded.messages],
-            [HumanMessage, AIMessage, ToolMessage],
-        )
+        self.assertEqual([type(m) for m in forwarded.messages], [HumanMessage])
 
     def test_factory_builds_model_router(self) -> None:
-        selection = _make_selection()
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
-        router = build_router_middleware(
-            cast(Any, provider),
-            role="orchestrator",
-            selection=selection,
-        )
+        router = build_router_middleware(cast(Any, FakeGateway()), role="orchestrator")
         self.assertIsInstance(router, ModelRouter)
 
-    async def test_model_router_announces_once_and_never_rotates(self) -> None:
+    async def test_model_router_announces_once_and_reuses_client(self) -> None:
         events: list[FrameworkTraceEvent] = []
 
         class Sink:
             async def accept(self, event: object) -> None:
                 events.append(cast(FrameworkTraceEvent, event))
 
-        selection = _make_selection()
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
+        gateway = FakeGateway()
         middleware = ModelRouter(
-            cast(Any, provider),
+            cast(Any, gateway),
             role="orchestrator",
-            selection=selection,
             sink=cast(Any, Sink()),
         )
         request = MagicMock(tools=[sentinel.tool], response_format=None, messages=[])
@@ -135,28 +95,62 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(selected), 1)
         self.assertEqual(selected[0].data["model_id"], "agnes/agnes-2.0-flash")
         self.assertEqual(middleware.last_model_id, "agnes/agnes-2.0-flash")
+        # Same client object drove both requests (gateway cache identity).
+        first_model = handler.await_args_list[0].args[0].model
+        second_model = handler.await_args_list[1].args[0].model
+        self.assertIs(first_model, second_model)
 
-    async def test_model_router_leases_once_for_missing_selection(self) -> None:
-        selection = _make_selection()
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
-        middleware = ModelRouter(cast(Any, provider), role="AnswerWriter")
+    async def test_live_switch_swaps_client_and_reannounces(self) -> None:
+        events: list[FrameworkTraceEvent] = []
+
+        class Sink:
+            async def accept(self, event: object) -> None:
+                events.append(cast(FrameworkTraceEvent, event))
+
+        gateway = FakeGateway()
+        middleware = ModelRouter(
+            cast(Any, gateway),
+            role="orchestrator",
+            sink=cast(Any, Sink()),
+        )
         request = MagicMock(tools=[], response_format=None, messages=[])
+        request.override.side_effect = lambda **values: SimpleNamespace(
+            messages=request.messages, **values
+        )
         handler = AsyncMock(return_value=sentinel.response)
 
         await middleware.awrap_model_call(request, handler)
+        gateway.model_id = "groq/qwen3.6-27b"
+        gateway.generation = 1  # cache invalidated: next client is a new object
+        await middleware.awrap_model_call(request, handler)
         await middleware.awrap_model_call(request, handler)
 
-        provider.lease.assert_awaited_once()
-        self.assertEqual(middleware.last_model_id, "agnes/agnes-2.0-flash")
+        selected = [event for event in events if event.event == "model_selected"]
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(selected[1].data["model_id"], "groq/qwen3.6-27b")
+        # The new client drives requests from the switch onward.
+        first_model = handler.await_args_list[0].args[0].model
+        second_model = handler.await_args_list[1].args[0].model
+        third_model = handler.await_args_list[2].args[0].model
+        self.assertIsNot(second_model, first_model)
+        self.assertIs(second_model, third_model)
+
+    async def test_per_role_effort_is_passed_to_the_gateway(self) -> None:
+        seen: list[str | None] = []
+
+        class EffortGateway(FakeGateway):
+            def get_model(self, thinking_effort: str | None = None) -> Any:
+                seen.append(thinking_effort)
+                return MagicMock(model="m")
+
+        middleware = ModelRouter(cast(Any, EffortGateway()), role="AuthenticationSpecialist")
+        request = MagicMock(tools=[], response_format=None, messages=[])
+        handler = AsyncMock(return_value=sentinel.response)
+        await middleware.awrap_model_call(request, handler)
+        self.assertEqual(seen, ["low"])
 
     def test_model_router_reject_logs_without_rotating(self) -> None:
-        selection = _make_selection()
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
-        middleware = ModelRouter(
-            cast(Any, provider),
-            role="orchestrator",
-            selection=selection,
-        )
+        middleware = ModelRouter(cast(Any, FakeGateway()), role="orchestrator")
         middleware.reject_active_response(
             ToolProtocolViolation("tool_protocol_failure: no progress")
         )
@@ -169,12 +163,9 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             async def accept(self, event: object) -> None:
                 events.append(cast(FrameworkTraceEvent, event))
 
-        selection = _make_selection()
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
         middleware = ModelRouter(
-            cast(Any, provider),
+            cast(Any, FakeGateway()),
             role="AnswerWriter",
-            selection=selection,
             sink=cast(Any, Sink()),
         )
         request = MagicMock(
@@ -208,6 +199,7 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(started), 1)
         self.assertEqual(len(content), 1)
         self.assertEqual(started[0].data["role"], "AnswerWriter")
+        self.assertEqual(started[0].data["provider"], "agnes")
         self.assertEqual(started[0].data["model_id"], "agnes/agnes-2.0-flash")
         self.assertIn("Fill the Skills field", started[0].data["prompt_preview"])
         self.assertEqual(content[0].data["text"], "done")
@@ -222,12 +214,9 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
             async def accept(self, event: object) -> None:
                 events.append(cast(FrameworkTraceEvent, event))
 
-        selection = _make_selection()
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
         middleware = ModelRouter(
-            cast(Any, provider),
+            cast(Any, FakeGateway()),
             role="AnswerWriter",
-            selection=selection,
             sink=cast(Any, Sink()),
         )
         request = MagicMock(tools=[], response_format=None, messages=[])
@@ -245,12 +234,9 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_model_router_appends_each_successful_call_to_ledger(self) -> None:
         ledger = RunCallLedger(job_url="https://example.test/job")
-        selection = _make_selection()
-        provider = SimpleNamespace(lease=AsyncMock(return_value=selection))
         middleware = ModelRouter(
-            cast(Any, provider),
+            cast(Any, FakeGateway()),
             role="orchestrator",
-            selection=selection,
             ledger=ledger,
         )
         request = MagicMock(tools=[], response_format=None, messages=[])
@@ -266,3 +252,4 @@ class RouterMiddlewareTests(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

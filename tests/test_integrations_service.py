@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -9,7 +10,7 @@ import pytest
 from z_apply_core.human.broker import BrokerRequest
 from z_apply_core.integrations import CoreIntegrationConfig, RunOutcome, StartRunRequest, ZApplyCore
 from z_apply_core.integrations.models import RunStatus
-from z_apply_core.integrations.service import _Run
+from z_apply_core.integrations.service import InvalidRunTransition, _Run
 from z_apply_core.stream_events import V3RunResult
 
 
@@ -183,15 +184,18 @@ async def test_service_limits_concurrent_runs_without_serializing_the_queue(
 
 @pytest.mark.asyncio
 async def test_set_run_reasoning_updates_view_and_emits_event() -> None:
-    from z_apply_core.agents.model_provider import OpenCodeGoProvider, SwitchableModelProvider
+    from z_apply_core.agents.providers import GATEWAYS, ModelGateway
 
     core = ZApplyCore(CoreIntegrationConfig())
     run = _Run(StartRunRequest(job_url="https://example.test/job"), "run-1")
     core._runs["run-1"] = run
-    run.provider = SwitchableModelProvider(
-        OpenCodeGoProvider(api_key="sk-test"),
-        initial_name="opencodego",
-        initial_model="mimo-v2.5",
+    gw = GATEWAYS["opencodego"]
+    run.provider = ModelGateway(
+        gateway=gw,
+        api_key="sk-test",
+        model="mimo-v2.5",
+        default_thinking=False,
+        default_effort=None,
     )
 
     stream = core.subscribe(run_id="run-1")
@@ -203,7 +207,7 @@ async def test_set_run_reasoning_updates_view_and_emits_event() -> None:
     assert view.current_reasoning_effort == "medium"
     assert run.provider.current_reasoning == "on"
     assert run.provider.current_reasoning_effort == "medium"
-    assert run.provider._provider._reasoning_mode == "on"
+    assert run.provider.current_reasoning == "on"
 
     event = await anext(iterator)
     assert event.type == "reasoning.updated"
@@ -216,15 +220,18 @@ async def test_set_run_reasoning_updates_view_and_emits_event() -> None:
 
 @pytest.mark.asyncio
 async def test_set_run_reasoning_rejects_invalid_values() -> None:
-    from z_apply_core.agents.model_provider import OpenCodeGoProvider, SwitchableModelProvider
+    from z_apply_core.agents.providers import GATEWAYS, ModelGateway
 
     core = ZApplyCore(CoreIntegrationConfig())
     run = _Run(StartRunRequest(job_url="https://example.test/job"), "run-1")
     core._runs["run-1"] = run
-    run.provider = SwitchableModelProvider(
-        OpenCodeGoProvider(api_key="sk-test"),
-        initial_name="opencodego",
-        initial_model="mimo-v2.5",
+    gw = GATEWAYS["opencodego"]
+    run.provider = ModelGateway(
+        gateway=gw,
+        api_key="sk-test",
+        model="mimo-v2.5",
+        default_thinking=False,
+        default_effort=None,
     )
 
     with pytest.raises(ValueError):
@@ -257,3 +264,63 @@ async def test_set_run_reasoning_requires_provider() -> None:
 
     with pytest.raises(ValueError):
         await core.set_run_reasoning("run-1", "on")
+
+
+@pytest.mark.asyncio
+async def test_switch_run_model_updates_provider_view_and_emits_event() -> None:
+    from unittest.mock import patch
+
+    from z_apply_core.agents.providers import GATEWAYS, ModelGateway
+    from z_apply_core.config import Settings
+
+    def _gateway(name: str, model: str) -> ModelGateway:
+        gw = GATEWAYS[name]
+        return ModelGateway(
+            gateway=gw,
+            api_key="sk-test",
+            model=model,
+            default_thinking=True,
+            default_effort=None,
+        )
+
+    core = ZApplyCore(CoreIntegrationConfig())
+    run = _Run(StartRunRequest(job_url="https://example.test/job"), "run-1")
+    core._runs["run-1"] = run
+    run.provider = _gateway("opencodego", "mimo-v2.5")
+
+    settings = Settings(_env_file=None, OPENCODEGO_API_KEY="sk-test", GROQ_API_KEY="gsk-test")
+    with patch("z_apply_core.config.load_settings", return_value=settings):
+        view = await core.switch_run_model("run-1", "groq")
+
+    assert view.current_provider == "groq"
+    assert view.current_model == "qwen/qwen3.6-27b"
+    assert run.provider.name == "groq"
+    assert run.provider.model_id == "qwen/qwen3.6-27b"
+
+    stream = core.subscribe(run_id="run-1")
+    event = await stream.__aiter__().__anext__()
+    assert event.type == "model.switched"
+    assert event.payload.get("provider") == "groq"
+    assert event.payload.get("model") == "qwen/qwen3.6-27b"
+
+
+@pytest.mark.asyncio
+async def test_switch_run_model_rejects_terminal_runs() -> None:
+    from z_apply_core.agents.providers import GATEWAYS, ModelGateway
+    from z_apply_core.integrations.models import RunStatus
+
+    core = ZApplyCore(CoreIntegrationConfig())
+    run = _Run(StartRunRequest(job_url="https://example.test/job"), "run-1")
+    core._runs["run-1"] = run
+    gw = GATEWAYS["agnes"]
+    run.provider = ModelGateway(
+        gateway=gw,
+        api_key="sk-test",
+        model=gw.default_model,
+        default_thinking=True,
+        default_effort=None,
+    )
+    run.view = replace(run.view, status=RunStatus.TERMINAL)
+
+    with pytest.raises(InvalidRunTransition):
+        await core.switch_run_model("run-1", "groq")

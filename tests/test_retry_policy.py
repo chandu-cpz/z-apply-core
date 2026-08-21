@@ -1,10 +1,21 @@
 import unittest
 
-from z_apply_core.agents.model_provider import OpenCodeGoProvider
+from z_apply_core.agents.providers import GATEWAYS, ModelGateway
 from z_apply_core.agents.retry_policy import (
     is_instant_retry_provider,
     model_retry_middleware,
 )
+
+
+def _zen_gateway() -> ModelGateway:
+    gw = GATEWAYS["opencodego"]
+    return ModelGateway(
+        gateway=gw,
+        api_key="test-key",
+        model=gw.default_model,
+        default_thinking=False,
+        default_effort=None,
+    )
 
 
 class TestRetryPolicy(unittest.TestCase):
@@ -23,7 +34,7 @@ class TestRetryPolicy(unittest.TestCase):
         self.assertTrue(network.jitter)
 
     def test_opencodego_retries_instantly_without_delay(self) -> None:
-        provider = OpenCodeGoProvider(api_key="test-key")
+        provider = _zen_gateway()
         self.assertTrue(is_instant_retry_provider(provider))
         network, inner = model_retry_middleware(provider)
         self.assertEqual(inner.max_retries, 8)

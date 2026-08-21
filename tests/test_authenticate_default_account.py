@@ -129,6 +129,10 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
                 return_value=make_settings(),
             ),
             patch(
+                "z_apply_core.nodes.authenticate_default_account.provider_from_config",
+                return_value=MagicMock(),
+            ),
+            patch(
                 "z_apply_core.nodes.authenticate_default_account.run_authentication_agent",
                 side_effect=fake_run_authentication_agent,
             ),
@@ -200,6 +204,10 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
                 return_value=make_settings(),
             ),
             patch(
+                "z_apply_core.nodes.authenticate_default_account.provider_from_config",
+                return_value=MagicMock(),
+            ),
+            patch(
                 "z_apply_core.nodes.authenticate_default_account.run_authentication_agent",
                 side_effect=fake_run_authentication_agent,
             ),
@@ -240,6 +248,10 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
                 return_value=make_settings(has_credentials=False),
             ),
             patch(
+                "z_apply_core.nodes.authenticate_default_account.provider_from_config",
+                return_value=MagicMock(),
+            ),
+            patch(
                 "z_apply_core.nodes.authenticate_default_account.run_authentication_agent",
                 side_effect=fake_run_authentication_agent,
             ),
@@ -276,6 +288,10 @@ class AuthenticateDefaultAccountTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "z_apply_core.nodes.authenticate_default_account.load_settings",
                 return_value=make_settings(),
+            ),
+            patch(
+                "z_apply_core.nodes.authenticate_default_account.provider_from_config",
+                return_value=MagicMock(),
             ),
             patch(
                 "z_apply_core.nodes.authenticate_default_account.run_authentication_agent",

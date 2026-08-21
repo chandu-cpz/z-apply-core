@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections.abc import Sequence
-from typing import Any, Literal, cast
+from typing import Any
 
 from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain.agents.middleware.types import (
@@ -14,12 +14,11 @@ from langchain.agents.middleware.types import (
     ResponseT,
 )
 from langchain_core.messages import (
-    AIMessage,
     AnyMessage,
 )
 
-from z_apply_core.agents.model_provider import ModelProvider, ModelSelection
 from z_apply_core.agents.protocol_guard import ToolProtocolViolation
+from z_apply_core.agents.providers import ModelGateway
 from z_apply_core.context.call_ledger import RunCallLedger
 from z_apply_core.context.model_metrics import (
     CallContent,
@@ -73,32 +72,6 @@ def _detect_vision(messages: Sequence[AnyMessage]) -> bool:
             if isinstance(block, dict) and block.get("type") in {"image", "image_url"}:
                 return True
     return False
-
-
-def _normalize_provider_reasoning(response: Any) -> tuple[Any, bool]:
-    """Detect assistant responses that produced no final content or tool call.
-
-    Provider reasoning arrives out-of-band via ``reasoning_content`` and never
-    enters assistant content, so no content rewriting happens here; the only
-    concern is flagging a response that is all reasoning with no final message.
-    """
-    messages = getattr(response, "result", None)
-    if not isinstance(messages, list):
-        return response, False
-
-    missing_final = any(
-        isinstance(message, AIMessage) and not message.tool_calls and not message.text.strip()
-        for message in messages
-    )
-    if not missing_final:
-        return response, False
-    return (
-        ModelResponse(
-            result=messages,
-            structured_response=response.structured_response,
-        ),
-        True,
-    )
 
 
 def _prompt_preview(messages: Sequence[AnyMessage], limit: int = 400) -> str:
@@ -300,33 +273,26 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
 
     def __init__(
         self,
-        provider: ModelProvider,
+        gateway: ModelGateway,
         role: str,
         *,
-        selection: ModelSelection | None = None,
         sink: FrameworkEventSink | None = None,
         ledger: RunCallLedger | None = None,
     ) -> None:
         super().__init__()
-        self._provider = provider
+        self._gateway = gateway
         self._role = role
-        self._selection = selection
         self._sink = sink
         self._ledger = ledger
         self._policy = ROLE_POLICY.get(role, {"priority": "balanced", "reasoning": True})
         self._announced = False
-        # The provider epoch this router last leased at. Mid-run provider/model
-        # switches bump the switchable provider's epoch; when it no longer
-        # matches, the router re-leases on the next call so the switch actually
-        # lands (the graph's bound model is fixed at construction).
-        self._lease_epoch = getattr(provider, "epoch", 0)
-        # Once a live switch is observed, drive the request with the freshly
-        # leased model on every subsequent call (the graph model never updates).
-        self._override_model = False
-        class_name = type(provider).__name__
-        if class_name.endswith("Provider"):
-            class_name = class_name[: -len("Provider")]
-        self._provider_name = class_name.lower() or type(provider).__name__
+        # Last chat client this router drove a request with. The gateway caches
+        # clients, so an unchanged config returns the same object every call;
+        # a live provider/model switch (or reasoning change) invalidates the
+        # cache, the identity check below notices, and the router re-announces
+        # and drives requests with the fresh client from then on (the graph's
+        # bound model is fixed at construction).
+        self._current_llm: Any | None = None
 
     @property
     def name(self) -> str:
@@ -334,8 +300,7 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
 
     @property
     def last_model_id(self) -> str:
-        selection = self._selection
-        return selection.info.id if selection is not None else ""
+        return self._gateway.model_id
 
     def reject_active_response(self, error: ToolProtocolViolation) -> None:
         """Log only: single-model provider has no alternative model to rotate to."""
@@ -351,35 +316,17 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
         request: ModelRequest[ContextT],
         handler: Any,
     ) -> Any:
-        selection = self._selection
-        provider_epoch = getattr(self._provider, "epoch", 0)
-        epoch_moved = self._lease_epoch != provider_epoch
-        if selection is None or epoch_moved:
-            selection = await self._provider.lease(
-                tools=bool(request.tools),
-                structured=request.response_format is not None,
-                vision=_detect_vision(request.messages) or bool(self._policy.get("force_vision")),
-                reasoning=bool(self._policy.get("reasoning", False)),
-                reasoning_effort=self._policy.get("reasoning_effort"),
-                priority=cast(
-                    "Literal['fast', 'quality', 'balanced']",
-                    self._policy.get("priority", "balanced"),
-                ),
-            )
-            self._selection = selection
-            self._lease_epoch = provider_epoch
-            if epoch_moved:
-                # A live provider/model switch happened since this router last
-                # leased (covers both a switch mid-run and a switch before this
-                # router's first call). Re-announce and drive the request with
-                # the freshly leased model from now on so the switch actually
-                # lands (the graph's bound model is fixed at construction).
-                self._override_model = True
-                self._announced = False
+        llm = self._gateway.get_model(thinking_effort=self._policy.get("reasoning_effort"))
+        model_id = self._gateway.model_id
+        if llm is not self._current_llm:
+            # New client: first call, or the gateway config changed since the
+            # last one (live switch / reasoning override). Re-announce.
+            self._current_llm = llm
+            self._announced = False
         if not self._announced:
             await self._emit(
                 "model_selected",
-                selection.info.id,
+                model_id,
                 {
                     "role": self._role,
                     "priority": self._policy.get("priority", "balanced"),
@@ -393,18 +340,17 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
             self._announced = True
 
         prompt_preview = _prompt_preview(request.messages)
-        call_request = request
-        if self._override_model:
-            # The graph's bound model is fixed; hand the freshly leased model to
-            # the downstream handler so the mid-run switch actually drives calls.
-            call_request = request.override(model=selection.llm)
+        # The graph's bound model is fixed at construction; always hand the
+        # gateway's current client to the downstream handler so live switches
+        # actually drive calls.
+        call_request = request.override(model=llm)
         input_tokens_estimate = estimate_messages_tokens(call_request.messages)
         await self._emit(
             "model_call_start",
-            selection.info.id,
+            model_id,
             {
                 "role": self._role,
-                "provider": self._provider_name,
+                "provider": self._gateway.name,
                 "input_tokens_estimate": input_tokens_estimate,
                 "tool_count": len(request.tools or []),
                 "prompt_preview": prompt_preview,
@@ -418,7 +364,7 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
         except Exception as exc:  # noqa: BLE001 - report every failed attempt
             await self._emit(
                 "model_failed",
-                selection.info.id,
+                model_id,
                 {
                     "role": self._role,
                     "error_type": type(exc).__name__,
@@ -428,8 +374,8 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
             logger.warning(
                 "router %s model %s [%s] failed in %.2fs: %s: %s",
                 self._role,
-                selection.info.id,
-                self._provider_name,
+                model_id,
+                self._gateway.name,
                 time.monotonic() - start,
                 type(exc).__name__,
                 exc,
@@ -468,15 +414,15 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
                 on_done=lambda metrics, content: _emit_call_metrics(
                     metrics,
                     content,
-                    model_id=selection.info.id,
+                    model_id=model_id,
                     role=self._role,
-                    provider_id=self._provider_name,
+                    provider_id=self._gateway.name,
                 ),
                 on_progress=lambda metrics, content: _emit_live_progress(
                     self._sink,
                     self._role,
-                    selection.info.id,
-                    self._provider_name,
+                    model_id,
+                    self._gateway.name,
                     metrics,
                     content,
                 ),
@@ -494,9 +440,9 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
             _emit_call_metrics(
                 metrics,
                 content_from_messages(stream_result),
-                model_id=selection.info.id,
+                model_id=model_id,
                 role=self._role,
-                provider_id=self._provider_name,
+                provider_id=self._gateway.name,
             )
         return result
 
@@ -511,18 +457,16 @@ StaticModelRouter = ModelRouter
 
 
 def build_router_middleware(
-    provider: ModelProvider,
+    gateway: ModelGateway,
     role: str,
     *,
-    selection: ModelSelection | None = None,
     sink: FrameworkEventSink | None = None,
     ledger: RunCallLedger | None = None,
 ) -> ModelRouter:
     """Return the model middleware for telemetry and invocation handling."""
     return ModelRouter(
-        provider,
+        gateway,
         role=role,
-        selection=selection,
         sink=sink,
         ledger=ledger,
     )

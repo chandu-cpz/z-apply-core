@@ -23,7 +23,7 @@ class GraphCleanupTests(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("z_apply_core.graph.build_graph", return_value=graph),
-            patch("z_apply_core.graph.get_provider", return_value=MagicMock()),
+            patch("z_apply_core.graph.get_model_gateway", return_value=MagicMock()),
             patch(
                 "z_apply_core.graph.consume_v3_events",
                 new=AsyncMock(side_effect=asyncio.CancelledError),

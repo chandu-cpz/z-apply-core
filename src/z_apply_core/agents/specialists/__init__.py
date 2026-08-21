@@ -12,7 +12,7 @@ from langchain_core.tools import BaseTool
 from z_apply_core.agents.authentication import AuthenticationBudgetMiddleware
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.middleware_factory import build_agent_middleware
-from z_apply_core.agents.model_provider import ModelProvider
+from z_apply_core.agents.providers import ModelGateway
 from z_apply_core.agents.router_middleware import build_router_middleware
 from z_apply_core.agents.specialist_task_context import SpecialistTaskContextMiddleware
 from z_apply_core.agents.specialists.answer_writer import build_answer_writer
@@ -30,7 +30,7 @@ from z_apply_core.stream_events import FrameworkEventSink
 def _with_routing(
     spec: SubAgent,
     *,
-    provider: ModelProvider,
+    provider: ModelGateway,
     role: str,
     model: BaseChatModel,
     extra_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
@@ -73,7 +73,7 @@ def _with_routing(
 
 
 async def build_specialists(
-    provider: ModelProvider,
+    provider: ModelGateway,
     browser_tools: Sequence[BaseTool],
     *,
     fallback_model: BaseChatModel,

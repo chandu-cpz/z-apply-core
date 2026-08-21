@@ -6,18 +6,18 @@ from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen
 
 
 def is_instant_retry_provider(provider: object) -> bool:
-    """True when a provider wants immediate retries with no backoff sleep.
+    """True when a gateway wants immediate retries with no backoff sleep.
 
     The opencode Zen gateway is queue-based: a full queue clears on its own,
     and a fresh request made immediately usually succeeds. Sleeping only
-    delays the retry without improving its odds, so OpenCodeGo retries
-    instantly while every other provider keeps backoff pacing.
+    delays the retry without improving its odds, so it retries instantly
+    while every other gateway keeps backoff pacing.
     """
-    if provider is None:
-        return False
-    from z_apply_core.agents.model_provider import OpenCodeGoProvider
-
-    return isinstance(provider, OpenCodeGoProvider)
+    # Strict bool check: a bare getattr would let MagicMock providers report
+    # instant_retry in tests.
+    return isinstance(getattr(provider, "instant_retry", None), bool) and (
+        provider.instant_retry  # type: ignore[attr-defined]
+    )
 
 
 def is_network_error(exc: Exception) -> bool:

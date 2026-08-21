@@ -9,8 +9,8 @@ from z_apply_core.agents.authentication import (
     build_authentication_tools,
     run_authentication_agent,
 )
-from z_apply_core.agents.model_provider import provider_from_config
 from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen
+from z_apply_core.agents.providers import provider_from_config
 from z_apply_core.config import load_settings
 from z_apply_core.gmail_tools import make_gmail_tools
 from z_apply_core.runtime import RunRuntime

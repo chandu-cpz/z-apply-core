@@ -18,12 +18,11 @@ from typing import Any, cast
 from uuid import uuid4
 
 from z_apply_core.agents.context_inbox import ContextInbox, ContextMessage
-from z_apply_core.agents.model_provider import (
-    PROVIDERS,
-    ModelProvider,
-    SwitchableModelProvider,
-    default_provider_name,
-    get_provider,
+from z_apply_core.agents.providers import (
+    GATEWAYS,
+    ModelGateway,
+    default_gateway_name,
+    get_model_gateway,
 )
 from z_apply_core.browser_session import ARTIFACT_ROOT
 from z_apply_core.browser_workspace import BrowserWorkspace
@@ -89,19 +88,16 @@ class _Run:
         self.run_id = run_id
         self.resources = RunResources()
         self.sequence = 0
-        initial_provider_name = request.provider or default_provider_name()
+        initial_provider_name = request.provider or default_gateway_name()
         initial_model = request.model or (
-            PROVIDERS[initial_provider_name].default_model if initial_provider_name in PROVIDERS else None
+            GATEWAYS[initial_provider_name].default_model
+            if initial_provider_name in GATEWAYS
+            else None
         )
         try:
-            initial_provider = get_provider(
+            self.provider: ModelGateway | None = get_model_gateway(
                 provider_name=request.provider,
                 model=request.model,
-            )
-            self.provider: SwitchableModelProvider | None = SwitchableModelProvider(
-                initial_provider,
-                initial_name=initial_provider_name,
-                initial_model=initial_model or "",
             )
         except Exception:
             self.provider = None
@@ -177,7 +173,7 @@ class _GraphSink(FrameworkEventSink):
             self._run.view = replace(self._run.view, current_agent=name)
         model = payload.get("model_id") or payload.get("auth_model_id")
         if isinstance(model, str):
-            provider_name = self._run.provider.current_provider_name if self._run.provider else None
+            provider_name = self._run.provider.name if self._run.provider else None
             self._run.view = replace(
                 self._run.view, current_model=model, current_provider=provider_name
             )
@@ -322,7 +318,7 @@ class ZApplyCore:
         # that app.py's explicit config already shadows.
         self._config = config or CoreIntegrationConfig()
         self._runs: dict[str, _Run] = {}
-        self._provider: ModelProvider | None = None
+        self._provider: ModelGateway | None = None
         self._started = False
         self._closing = False
         self._scheduler: asyncio.Task[None] | None = None
@@ -343,7 +339,7 @@ class ZApplyCore:
             return
         if self._closing:
             raise CoreShuttingDown()
-        self._provider = get_provider()
+        self._provider = get_model_gateway()
         self._candidate_memory = CandidateMemory()
         self._telegram = make_configured_human_channel()
         self._started = True
@@ -527,15 +523,10 @@ class ZApplyCore:
         if run.view.status is RunStatus.TERMINAL:
             raise InvalidRunTransition("terminal runs cannot switch model")
         resolved_model = model or (
-            PROVIDERS[provider].default_model if provider in PROVIDERS else ""
+            GATEWAYS[provider].default_model if provider in GATEWAYS else ""
         )
         if run.provider is None:
-            new_provider = get_provider(provider, model)
-            run.provider = SwitchableModelProvider(
-                new_provider,
-                initial_name=provider,
-                initial_model=resolved_model,
-            )
+            run.provider = get_model_gateway(provider, model)
         else:
             run.provider.switch(provider, model)
         run.view = replace(run.view, current_model=resolved_model or None, current_provider=provider)
@@ -554,7 +545,7 @@ class ZApplyCore:
         reasoning_effort: str | None = None,
     ) -> CoreRunView:
         """Set the runtime reasoning override for a live run."""
-        from z_apply_core.agents.model_provider import REASONING_EFFORTS, REASONING_MODES
+        from z_apply_core.agents.providers import REASONING_EFFORTS, REASONING_MODES
 
         run = self._require_run(run_id)
         if run.view.status is RunStatus.TERMINAL:
@@ -687,16 +678,7 @@ class ZApplyCore:
                 job_url=run.request.job_url,
             )
             if run.provider is None:
-                initial_name = run.request.provider or default_provider_name()
-                initial_model = run.request.model or (
-                    PROVIDERS[initial_name].default_model if initial_name in PROVIDERS else ""
-                )
-                inst = get_provider(run.request.provider, run.request.model)
-                run.provider = SwitchableModelProvider(
-                    inst,
-                    initial_name=initial_name,
-                    initial_model=initial_model,
-                )
+                run.provider = get_model_gateway(run.request.provider, run.request.model)
             state, result = await run_job(
                 run.request.job_url,
                 task=run.request.task or DEFAULT_TASK,

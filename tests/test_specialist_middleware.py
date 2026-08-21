@@ -13,7 +13,7 @@ from z_apply_core.agents.specialists import build_specialists
 
 async def _specialist_chains(lock: asyncio.Lock) -> list[list[object]]:
     specs = await build_specialists(
-        MagicMock(),  # type: ignore[arg-type]  # ModelProvider protocol; never leased here
+        MagicMock(),  # type: ignore[arg-type]  # ModelGateway; never leased here
         [],
         fallback_model=MagicMock(),
         sink=None,

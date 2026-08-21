@@ -6,8 +6,8 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import BaseTool
 
 from z_apply_core.agents.authentication import build_authentication_tools
-from z_apply_core.agents.model_provider import provider_from_config
 from z_apply_core.agents.orchestrator import run_orchestrator
+from z_apply_core.agents.providers import provider_from_config
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.config import load_settings
 from z_apply_core.gmail_tools import make_gmail_tools

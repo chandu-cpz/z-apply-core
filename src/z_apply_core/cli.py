@@ -12,10 +12,10 @@ from langchain_core.tools import tool
 from rich.text import Text
 
 from z_apply_core import __version__
-from z_apply_core.agents.model_provider import (
-    default_provider_name,
-    get_provider,
-    list_providers,
+from z_apply_core.agents.providers import (
+    default_gateway_name,
+    get_model_gateway,
+    list_gateways,
 )
 from z_apply_core.config import load_settings
 from z_apply_core.context.call_ledger import RunCallLedger
@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     run = subcommands.add_parser("run")
     run.add_argument("--job-url", default=DEFAULT_JOB_URL)
     run.add_argument("--task", default=DEFAULT_RUN_TASK)
-    run.add_argument("--provider", choices=[p.name for p in list_providers()])
+    run.add_argument("--provider", choices=[p.name for p in list_gateways()])
     run.add_argument("--no-vnc", action="store_true")
     run.set_defaults(handler=run_command)
 
@@ -65,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="verify the provider's prompt cache: sends one fixed prompt twice and "
         "checks the second call reports cache_read_tokens",
     )
-    probe.add_argument("--provider", choices=[p.name for p in list_providers()])
+    probe.add_argument("--provider", choices=[p.name for p in list_gateways()])
     probe.set_defaults(handler=cache_probe_command)
 
     return parser
@@ -212,17 +212,17 @@ def cache_probe_command(args: argparse.Namespace) -> int:
     second-call miss means every repeated prefix is billed at the full input
     rate instead of the discounted cache-read rate.
     """
-    provider_name = args.provider or default_provider_name()
+    provider_name = args.provider or default_gateway_name()
     try:
-        provider = get_provider(provider_name=provider_name or None)
-        selection = asyncio.run(provider.lease(tools=True, reasoning=False))
+        gateway = get_model_gateway(provider_name=provider_name or None)
+        llm = gateway.get_model()
     except Exception as exc:
-        print(f"cache-probe: could not lease a model from {provider_name or 'default'}: {exc}")
+        print(f"cache-probe: could not build a client for {provider_name or 'default'}: {exc}")
         return 2
 
     try:
-        first = asyncio.run(_cache_probe_once(selection.llm))
-        second = asyncio.run(_cache_probe_once(selection.llm))
+        first = asyncio.run(_cache_probe_once(llm))
+        second = asyncio.run(_cache_probe_once(llm))
     except Exception as exc:
         print(f"cache-probe: model call failed: {type(exc).__name__}: {exc}")
         return 2
@@ -230,7 +230,7 @@ def cache_probe_command(args: argparse.Namespace) -> int:
     cache1, input1, seconds1 = first
     cache2, input2, seconds2 = second
     print(f"provider={provider_name or 'default'}")
-    print(f"model={selection.info.id}")
+    print(f"model={gateway.model_id}")
     print(
         f"call 1 (cold):      input={input1 if input1 is not None else 'n/a':>6} "
         f"cache_read={cache1 if cache1 is not None else 'n/a'} "
@@ -263,7 +263,7 @@ def providers_command(_args: argparse.Namespace) -> int:
     from rich.table import Table
 
     settings = load_settings()
-    default = default_provider_name()
+    default = default_gateway_name()
 
     table = Table(title="Available model providers")
     table.add_column("Provider")
@@ -271,13 +271,11 @@ def providers_command(_args: argparse.Namespace) -> int:
     table.add_column("Status")
     table.add_column("Configure via")
 
-    for spec in list_providers():
-        model = spec.default_model
-        configure_via = spec.env_key
-        status = "key set" if getattr(settings, spec.env_attr, False) else "no key set"
-        if spec.name == default:
+    for gateway in list_gateways():
+        status = "key set" if getattr(settings, gateway.settings_attr, "") else "no key set"
+        if gateway.name == default:
             status = "active default"
-        table.add_row(spec.name, model, status, configure_via)
+        table.add_row(gateway.name, gateway.default_model, status, gateway.env_key)
 
     renderer = RichStreamRenderer()
     renderer.console.print(table)

@@ -23,10 +23,10 @@ from z_apply_core.agents.harness_profile import (
     DEEPAGENT_FILESYSTEM_PERMISSIONS,
     configure_z_apply_harness_profile,
 )
-from z_apply_core.agents.model_provider import ModelProvider
 from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.prompts import load_prompt
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
+from z_apply_core.agents.providers import ModelGateway
 from z_apply_core.agents.result import AuthStatus
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import build_router_middleware
@@ -184,7 +184,7 @@ async def run_authentication_agent(
     tools: Sequence[BaseTool],
     config: RunnableConfig,
     sink: FrameworkEventSink | None = None,
-    provider: ModelProvider | None = None,
+    provider: ModelGateway | None = None,
     ledger: RunCallLedger | None = None,
     browser: BrowserSession | None = None,
 ) -> AuthenticationRun:
@@ -200,27 +200,21 @@ async def run_authentication_agent(
             "Model routing failed: no model provider was provided.", "", "failed"
         )
     try:
-        selection = await provider.lease(
-            tools=True,
-            reasoning=True,
-            reasoning_effort="low",
-            priority="balanced",
-        )
+        llm = provider.get_model(thinking_effort="low")
     except (ImportError, ValueError) as exc:
         return AuthenticationRun(f"Model selection failed: {exc}", "", "failed")
 
-    node_info(logger, "authenticate_default_account", "initial model: %s", selection.info.id)
+    node_info(logger, "authenticate_default_account", "initial model: %s", provider.model_id)
     router_middleware = build_router_middleware(
         provider,
         role="authenticate_default_account",
-        selection=selection,
         sink=sink,
         ledger=ledger,
     )
     usage_emit = lambda event: _emit_usage_sync(sink, event)  # noqa: E731
 
     agent = create_deep_agent(
-        model=selection.llm,
+        model=llm,
         tools=list(tools),
         system_prompt=AUTHENTICATION_SYSTEM_PROMPT,
         middleware=[

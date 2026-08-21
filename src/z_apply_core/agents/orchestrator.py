@@ -26,9 +26,9 @@ from z_apply_core.agents.harness_profile import (
 )
 from z_apply_core.agents.human_escalation_guard import HumanEscalationGuardMiddleware
 from z_apply_core.agents.middleware_factory import build_agent_middleware
-from z_apply_core.agents.model_provider import ModelProvider, get_provider
 from z_apply_core.agents.no_progress_guard import NoProgressCircuitOpen
 from z_apply_core.agents.prompts import ORCHESTRATOR_PROMPT, load_prompt
+from z_apply_core.agents.providers import ModelGateway, get_model_gateway
 from z_apply_core.agents.result import OrchestratorRun, RunStatus
 from z_apply_core.agents.router_middleware import (
     ModelRouter,
@@ -100,7 +100,7 @@ async def run_orchestrator(
     human_tools: Sequence[BaseTool] = (),
     authentication_tools: Sequence[BaseTool] = (),
     sink: FrameworkEventSink | None = None,
-    provider: ModelProvider | None = None,
+    provider: ModelGateway | None = None,
     resume_path: str = "",
     candidate_memory: CandidateMemory | None = None,
     run_id: str = "",
@@ -116,16 +116,12 @@ async def run_orchestrator(
 
     if provider is None:
         try:
-            provider = get_provider()
+            provider = get_model_gateway()
         except ValueError as exc:
             return OrchestratorRun(f"Model routing failed: {exc}", "", "failed")
 
     try:
-        selection = await provider.lease(
-            tools=True,
-            reasoning=True,
-            priority="balanced",
-        )
+        llm = provider.get_model()
     except (ImportError, ValueError) as exc:
         return OrchestratorRun(f"Model selection failed: {exc}", "", "failed")
 
@@ -138,7 +134,7 @@ async def run_orchestrator(
         await candidate_memory.all_facts() if candidate_memory is not None else []
     )
 
-    node_info(logger, "orchestrator", "initial model: %s", selection.info.id)
+    node_info(logger, "orchestrator", "initial model: %s", provider.model_id)
     approval: bool | None = None
     terminal: tuple[RunStatus, str] | None = None
 
@@ -312,7 +308,6 @@ async def run_orchestrator(
     router_middleware = build_router_middleware(
         provider,
         role="orchestrator",
-        selection=selection,
         sink=event_sink,
         ledger=call_ledger,
     )
@@ -348,7 +343,7 @@ async def run_orchestrator(
     # the same response.
     mutation_lock = asyncio.Lock()
     agent = create_deep_agent(
-        model=selection.llm,
+        model=llm,
         tools=[
             *orchestrator_browser_tools,
             *platform_memory_tools,
@@ -375,7 +370,7 @@ async def run_orchestrator(
         subagents=await build_specialists(
             provider,
             browser_tools,
-            fallback_model=selection.llm,
+            fallback_model=llm,
             candidate_resume=_candidate_resume_context(),
             answer_writer_candidate_facts=candidate_facts,
             answer_writer_human_tools=subagent_human_tools,
@@ -560,7 +555,7 @@ def _resume_profile_facts(resume_text: str) -> dict[str, str]:
 
 def build_orchestrator_middleware(
     *,
-    provider: ModelProvider | None = None,
+    provider: ModelGateway | None = None,
     run_context: RunContext,
     evidence_store: EvidenceStore,
     event_sink: SequencedEventSink,

@@ -5,7 +5,7 @@ from typing import Any, cast
 from langgraph.graph import END, START, StateGraph
 
 from z_apply_core.agents.context_inbox import ContextInbox
-from z_apply_core.agents.model_provider import ModelProvider, get_provider
+from z_apply_core.agents.providers import ModelGateway, get_model_gateway
 from z_apply_core.nodes import (
     auth_blocked,
     authenticate_default_account,
@@ -55,7 +55,7 @@ async def run_job(
     task: str,
     live_view: bool = True,
     sink: FrameworkEventSink | None = None,
-    provider: ModelProvider | None = None,
+    provider: ModelGateway | None = None,
     provider_name: str | None = None,
     resources: RunResources | None = None,
     cleanup_resources: bool = True,
@@ -65,7 +65,7 @@ async def run_job(
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
     run_resources = resources or RunResources()
-    resolved_provider = provider or get_provider(provider_name=provider_name)
+    resolved_provider = provider or get_model_gateway(provider_name=provider_name)
     try:
         stream = graph.astream_events(
             initial_state(
