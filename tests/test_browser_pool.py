@@ -23,14 +23,20 @@ def _make_master(root: Path) -> Path:
     (master / "storage" / "default" / "https+++example.test").mkdir(parents=True)
     (master / "extensions").mkdir()
     (master / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").write_bytes(b"xpi")
-    (master / "extensions.json").write_text(json.dumps({
-        "addons": [{
-            "id": SIMPLIFY_ADDON_ID,
-            "active": True,
-            "location": "app-profile",
-            "version": "3.0.8",
-        }]
-    }))
+    (master / "extensions.json").write_text(
+        json.dumps(
+            {
+                "addons": [
+                    {
+                        "id": SIMPLIFY_ADDON_ID,
+                        "active": True,
+                        "location": "app-profile",
+                        "version": "3.0.8",
+                    }
+                ]
+            }
+        )
+    )
     (master / "extension-preferences.json").write_text("{}")
     (master / "extension-settings.json").write_text("{}")
     (master / "prefs.js").write_text("user_pref('x', true);")
@@ -75,7 +81,9 @@ class RecordingLauncher:
         self._failures: dict[str, int] = {}
         self.hang = False
 
-    async def __call__(self, run_id: str, profile_dir: Path, display: str | None = None) -> tuple[FakeServer, object, FakeContext]:
+    async def __call__(
+        self, run_id: str, profile_dir: Path, display: str | None = None
+    ) -> tuple[FakeServer, object, FakeContext]:
         if self.hang:
             await asyncio.sleep(60)
         if self._failures.get(run_id, 0) < self.fail_times.get(run_id, 0):

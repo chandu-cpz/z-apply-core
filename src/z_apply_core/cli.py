@@ -169,8 +169,7 @@ def _last_token_usage(state: RunState) -> TokenUsage | None:
 
 
 _CACHE_PROBE_SYSTEM = (
-    "You are a prefix-cache probe. Respond with the single word `ok`. "
-    "Do not add anything else."
+    "You are a prefix-cache probe. Respond with the single word `ok`. Do not add anything else."
 )
 _CACHE_PROBE_USER = (
     "This exact prompt is sent twice to verify the provider's prompt cache. "

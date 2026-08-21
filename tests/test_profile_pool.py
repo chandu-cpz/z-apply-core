@@ -17,14 +17,20 @@ def _make_master(root: Path) -> Path:
     (master / "storage" / "default" / "https+++example.test").mkdir(parents=True)
     (master / "extensions").mkdir()
     (master / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").write_bytes(b"xpi")
-    (master / "extensions.json").write_text(json.dumps({
-        "addons": [{
-            "id": SIMPLIFY_ADDON_ID,
-            "active": True,
-            "location": "app-profile",
-            "version": "3.0.8",
-        }]
-    }))
+    (master / "extensions.json").write_text(
+        json.dumps(
+            {
+                "addons": [
+                    {
+                        "id": SIMPLIFY_ADDON_ID,
+                        "active": True,
+                        "location": "app-profile",
+                        "version": "3.0.8",
+                    }
+                ]
+            }
+        )
+    )
     (master / "extension-preferences.json").write_text("{}")
     (master / "extension-settings.json").write_text("{}")
     (master / "prefs.js").write_text("user_pref('x', true);")
@@ -69,8 +75,15 @@ class ProfileSlotPoolTests(unittest.IsolatedAsyncioTestCase):
         # The Simplify sideload must survive the mirror.
         self.assertTrue((slot.dir / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").is_file())
         # Disposable profile junk must not leak into slots.
-        for name in ("cache2", "startupCache", "datareporting", "places.sqlite",
-                     "favicons.sqlite", "sessionstore.jsonlz4", "cookies.sqlite-wal"):
+        for name in (
+            "cache2",
+            "startupCache",
+            "datareporting",
+            "places.sqlite",
+            "favicons.sqlite",
+            "sessionstore.jsonlz4",
+            "cookies.sqlite-wal",
+        ):
             self.assertFalse((slot.dir / name).exists(), name)
 
     async def test_verify_manifest_rejects_missing_simplify_sideload(self) -> None:
@@ -113,7 +126,9 @@ class ProfileSlotPoolTests(unittest.IsolatedAsyncioTestCase):
         for path in self.master.rglob("*"):
             if path.is_file():
                 path.chmod(path.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
-        self.master.chmod(self.master.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH)
+        self.master.chmod(
+            self.master.stat().st_mode & ~stat.S_IWUSR & ~stat.S_IWGRP & ~stat.S_IWOTH
+        )
 
         await self.pool.provision()
         slot = self.pool.slots[0]
@@ -144,9 +159,11 @@ class ProfileSlotPoolTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.to_thread(profile_pool.verify_manifest, slot.dir)
         # Sideload present but its xpi removed -> rejected.
         (slot.dir / "extensions" / f"{SIMPLIFY_ADDON_ID}.xpi").unlink()
-        (slot.dir / "extensions.json").write_text(json.dumps({
-            "addons": [{"id": SIMPLIFY_ADDON_ID, "active": True, "location": "app-profile"}]
-        }))
+        (slot.dir / "extensions.json").write_text(
+            json.dumps(
+                {"addons": [{"id": SIMPLIFY_ADDON_ID, "active": True, "location": "app-profile"}]}
+            )
+        )
         with self.assertRaises(profile_pool.ProfileSlotError):
             await asyncio.to_thread(profile_pool.verify_manifest, slot.dir)
         # Storage wiped -> rejected even with a valid sideload.

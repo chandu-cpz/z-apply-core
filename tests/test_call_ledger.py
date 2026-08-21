@@ -34,7 +34,9 @@ class CostEstimateTests(unittest.TestCase):
         self.assertEqual(estimate.cache_read_tokens, 1_000_000)
 
     def test_cache_read_never_exceeds_input(self) -> None:
-        estimate = estimate_cost("opencodego", input_tokens=100, output_tokens=0, cache_read_tokens=500)
+        estimate = estimate_cost(
+            "opencodego", input_tokens=100, output_tokens=0, cache_read_tokens=500
+        )
 
         self.assertEqual(estimate.cache_read_tokens, 100)
 
@@ -75,7 +77,9 @@ class CallLedgerTests(unittest.TestCase):
         self.assertEqual(ledger.job_url, "https://example.test/job")
         self.assertEqual(ledger.call_count, 2)
         self.assertEqual([entry.sequence for entry in ledger.entries], [1, 2])
-        self.assertEqual([entry.agent for entry in ledger.entries], ["orchestrator", "AnswerWriter"])
+        self.assertEqual(
+            [entry.agent for entry in ledger.entries], ["orchestrator", "AnswerWriter"]
+        )
         self.assertEqual(ledger.total_input_tokens, 500)
         self.assertEqual(ledger.total_output_tokens, 80)
         self.assertAlmostEqual(

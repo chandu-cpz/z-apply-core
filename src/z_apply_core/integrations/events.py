@@ -268,7 +268,10 @@ class EventBroadcaster:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=timeout)
                 except TimeoutError:
-                    if frame is not None and time.monotonic() - frame.started >= _FRAME_FLUSH_SECONDS:
+                    if (
+                        frame is not None
+                        and time.monotonic() - frame.started >= _FRAME_FLUSH_SECONDS
+                    ):
                         flushed = emit_frame()
                         if flushed is not None:
                             yield flushed

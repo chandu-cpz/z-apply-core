@@ -63,9 +63,16 @@ async def report_job_metadata(company: str, role: str, location: str | None = No
 
 
 BROWSER_TOOLS = [
-    "browser_navigate", "browser_snapshot", "browser_find", "browser_click",
-    "browser_type", "browser_fill_form", "browser_select_option",
-    "browser_evaluate", "browser_tabs", "browser_wait_for",
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_find",
+    "browser_click",
+    "browser_type",
+    "browser_fill_form",
+    "browser_select_option",
+    "browser_evaluate",
+    "browser_tabs",
+    "browser_wait_for",
     "browser_handle_dialog",
 ]
 
@@ -89,7 +96,11 @@ async def main() -> None:
             for t in (request.tools or [])
         ]
 
-    request = ModelRequest(model=GenericFakeChatModel(messages=iter([AIMessage(content="ok")])), messages=[HumanMessage(content="probe")], tools=list(ALL_TOOLS))
+    request = ModelRequest(
+        model=GenericFakeChatModel(messages=iter([AIMessage(content="ok")])),
+        messages=[HumanMessage(content="probe")],
+        tools=list(ALL_TOOLS),
+    )
     await mw.awrap_model_call(request, handler)
     names = sorted(captured.get("tools") or [])
     print(f"post-filter tool count: {len(names)}")

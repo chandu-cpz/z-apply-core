@@ -402,9 +402,7 @@ class MetricStream:
         """
         duration_ms = int((now - self._started) * 1000)
         ttft_ms = (
-            int((self._first_at - self._started) * 1000)
-            if self._first_at is not None
-            else None
+            int((self._first_at - self._started) * 1000) if self._first_at is not None else None
         )
         return CallMetrics(
             input_tokens=None,

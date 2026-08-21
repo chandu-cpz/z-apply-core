@@ -14,6 +14,7 @@ from z_apply_core.agents.no_progress_guard import NoProgressGuardMiddleware
 from z_apply_core.agents.protocol_guard import ProseToolCallGuardMiddleware
 from z_apply_core.agents.retry_policy import model_retry_middleware
 from z_apply_core.agents.router_middleware import ModelRouter
+from z_apply_core.agents.stage_timing import wrap_chain_with_stage_timing
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
@@ -80,9 +81,19 @@ def build_agent_middleware(
 
     # NoProgress with role-tuned kwargs
     if no_progress_kwargs is not None:
-        chain.append(NoProgressGuardMiddleware(browser=active_browser, on_no_progress=router_middleware.reject_active_response, **no_progress_kwargs))
+        chain.append(
+            NoProgressGuardMiddleware(
+                browser=active_browser,
+                on_no_progress=router_middleware.reject_active_response,
+                **no_progress_kwargs,
+            )
+        )
     else:
-        chain.append(NoProgressGuardMiddleware(browser=active_browser, on_no_progress=router_middleware.reject_active_response))
+        chain.append(
+            NoProgressGuardMiddleware(
+                browser=active_browser, on_no_progress=router_middleware.reject_active_response
+            )
+        )
 
     chain.append(SerializeBrowserMutationsMiddleware(sink=event_sink, lock=mutation_lock))
     chain.extend(extra_middleware)
@@ -91,4 +102,6 @@ def build_agent_middleware(
     chain.append(ProseToolCallGuardMiddleware())
     if human_guard is not None:
         chain.append(human_guard)
-    return chain
+    # DEC-010: time each awrap_model_call stage; emit model_phase events when a
+    # stage crosses the threshold (FAIL-006 inter-turn hole observability).
+    return wrap_chain_with_stage_timing(chain, sink=event_sink, role=role)

@@ -68,9 +68,7 @@ def _resolve(
     """Read one gateway's live config off settings; raise if the key is missing."""
     api_key = getattr(settings, gateway.settings_attr, "")
     if not api_key:
-        raise ValueError(
-            f"{gateway.env_key} is required for the {gateway.name} gateway."
-        )
+        raise ValueError(f"{gateway.env_key} is required for the {gateway.name} gateway.")
     return {
         "gateway": gateway,
         "api_key": api_key,
@@ -226,8 +224,7 @@ class ModelGateway:
             extra_body["prompt_cache_retention"] = "24h"
             kwargs["extra_body"] = extra_body
             kwargs["default_headers"] = {
-                "x-opencode-session": os.environ.get("OPENCODEGO_SESSION", "").strip()
-                or "z-apply"
+                "x-opencode-session": os.environ.get("OPENCODEGO_SESSION", "").strip() or "z-apply"
             }
         cls = _zen_chat_class() if gateway.wire_fixups else _chat_class(gateway.chat_cls)
         llm: BaseChatModel = cls(**kwargs)

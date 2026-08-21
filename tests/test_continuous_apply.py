@@ -58,7 +58,12 @@ class DrainFinishedTests(unittest.TestCase):
     def test_drain_sets_status_calls_and_cost_once(self) -> None:
         state = {"attempted": {"r1": {"url": "https://j/x"}}, "total_cost_usd": 0.0}
         terminal_rows = [
-            {"id": "r1", "status": "terminal", "outcome": "blocked", "summary": "phone field rejected"},
+            {
+                "id": "r1",
+                "status": "terminal",
+                "outcome": "blocked",
+                "summary": "phone field rejected",
+            },
         ]
 
         def fake_http(method: str, url: str, payload=None) -> object:

@@ -130,9 +130,7 @@ def _kill_processes_on_profile(profile_dir: Path) -> None:
     """
     needle = str(profile_dir)
     try:
-        result = subprocess.run(
-            ["pgrep", "-f", needle], capture_output=True, text=True, timeout=10
-        )
+        result = subprocess.run(["pgrep", "-f", needle], capture_output=True, text=True, timeout=10)
     except (subprocess.TimeoutExpired, FileNotFoundError):
         return
     pids = [line.strip() for line in result.stdout.splitlines() if line.strip()]
@@ -164,9 +162,7 @@ class BrowserPool:
         close_timeout: float = DEFAULT_CLOSE_TIMEOUT_SECONDS,
         retry_backoff_base: float = 3.0,
     ) -> None:
-        self._slots = ProfileSlotPool(
-            master=master, slots_root=slots_root, slot_count=slot_count
-        )
+        self._slots = ProfileSlotPool(master=master, slots_root=slots_root, slot_count=slot_count)
         self._max_active = max_active
         self._launcher = launcher or self._default_launcher
         self._launch_timeout = launch_timeout

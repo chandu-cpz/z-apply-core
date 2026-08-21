@@ -107,9 +107,7 @@ def build_authentication_tools(
     live browser (VNC/web) and only needs the notification.
     """
     allowed = set(AUTHENTICATION_BROWSER_TOOLS)
-    tools: list[BaseTool] = [
-        tool for tool in browser_tools if getattr(tool, "name", "") in allowed
-    ]
+    tools: list[BaseTool] = [tool for tool in browser_tools if getattr(tool, "name", "") in allowed]
     if submit_auth_form is not None:
         tools.append(make_auth_submit_tool(submit_auth_form))
     if open_verification_link is not None:

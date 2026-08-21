@@ -110,9 +110,7 @@ class BrowserUploadTests(unittest.TestCase):
             "z_apply_core.browser_session.BrowserSession._empty_file_inputs",
             new=AsyncMock(return_value=[resume, cover_letter]),
         ):
-            resolved = asyncio.run(
-                session._resolve_upload_file_input(tab, "e366", name="resume")
-            )
+            resolved = asyncio.run(session._resolve_upload_file_input(tab, "e366", name="resume"))
 
         self.assertIs(resolved, resume)
 
@@ -132,9 +130,7 @@ class BrowserUploadTests(unittest.TestCase):
             "z_apply_core.browser_session.BrowserSession._empty_file_inputs",
             new=AsyncMock(return_value=[named]),
         ):
-            resolved = asyncio.run(
-                session._resolve_upload_file_input(tab, "e366", name="cv")
-            )
+            resolved = asyncio.run(session._resolve_upload_file_input(tab, "e366", name="cv"))
 
         self.assertIs(resolved, named)
 

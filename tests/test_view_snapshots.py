@@ -55,9 +55,7 @@ async def _terminal_run_with_open_browser() -> tuple[ZApplyCore, _Run, list]:
     core = ZApplyCore(CoreIntegrationConfig())
     run = _make_run()
     core._runs[run.run_id] = run
-    run.view = replace(
-        run.view, status=RunStatus.TERMINAL, browser_tab_state=BrowserTabState.OPEN
-    )
+    run.view = replace(run.view, status=RunStatus.TERMINAL, browser_tab_state=BrowserTabState.OPEN)
 
     async def fake_close_run(run_id: str) -> None:
         return None

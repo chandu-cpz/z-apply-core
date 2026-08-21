@@ -75,9 +75,9 @@ def _real_page(
     """A realistic multi-section one-page form in REAL aria-snapshot format."""
     lines = [
         "- document [ref=e1]:",
-        '  - banner [ref=e11]:',
+        "  - banner [ref=e11]:",
         '    - img "Company Logo" [ref=e12]',
-        '  - main [ref=e23]:',
+        "  - main [ref=e23]:",
         '    - heading "Easy Apply" [level=3] [ref=e29]',
         '    - button "Choose a file or drop it here" [ref=e42] [cursor=pointer]',
     ]
@@ -87,14 +87,14 @@ def _real_page(
     for entry in range(profile_entries):
         lines.extend(
             [
-                f'    - generic [ref=e{ref}]:',
+                f"    - generic [ref=e{ref}]:",
                 f'      - heading "Experience" [level=3] [ref=e{ref + 1}]',
             ]
         )
         for field in range(4):
             lines.extend(
                 [
-                    f'      - generic [ref=e{ref + 2 + field * 2}]:',
+                    f"      - generic [ref=e{ref + 2 + field * 2}]:",
                     f'        - textbox "Detail {entry}-{field}" [ref=e{ref + 3 + field * 2}]:',
                 ]
             )
@@ -107,7 +107,7 @@ def _real_page(
         ref += 40
     for _ in range(filler_paragraphs):
         lines.append(
-            '    - paragraph [ref=e777]: '
+            "    - paragraph [ref=e777]: "
             "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod "
             "tempor incididunt ut labore et dolore magna aliqua ut enim ad minim."
         )
@@ -117,7 +117,7 @@ def _real_page(
             '    - button "Choose a file or drop it here" [ref=e286] [cursor=pointer]',
             '    - textbox "Message to the Hiring Team" [ref=e303]',
             f'    - button "{next_label}" [ref=e311] [cursor=pointer]:',
-            '      - generic [ref=e313]: ' + next_label,
+            "      - generic [ref=e313]: " + next_label,
             '    - link "Privacy Notice" [ref=e316] [cursor=pointer]',
         ]
     )
@@ -135,9 +135,7 @@ def test_full_text_preserved_under_budget() -> None:
 def test_over_budget_keeps_interactive_and_appends_marker() -> None:
     observation = _observation()
     # Budget fits exactly the interactive tier plus the marker head line.
-    marker_head = (
-        "[evidence truncated to budget — "
-    )
+    marker_head = "[evidence truncated to budget — "
 
     projected = EvidenceProjection.project(observation, budget_chars=400)
 
@@ -185,11 +183,7 @@ def test_force_include_dedupes_and_caps() -> None:
     projected = _project("\n".join(lines))
 
     assert "evidence truncated to budget" in projected
-    apply_lines = [
-        line
-        for line in projected.splitlines()
-        if 'button "Apply With Partner' in line
-    ]
+    apply_lines = [line for line in projected.splitlines() if 'button "Apply With Partner' in line]
     assert len(apply_lines) <= 8
 
 

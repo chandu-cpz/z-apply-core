@@ -50,9 +50,7 @@ def _message_has_text(message: dict[str, Any]) -> bool:
         return bool(content.strip())
     if isinstance(content, list):
         return any(
-            isinstance(block, dict)
-            and isinstance(block.get("text"), str)
-            and block["text"].strip()
+            isinstance(block, dict) and isinstance(block.get("text"), str) and block["text"].strip()
             for block in content
         )
     return False

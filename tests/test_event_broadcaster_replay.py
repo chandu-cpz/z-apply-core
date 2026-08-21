@@ -286,7 +286,9 @@ async def test_coalesce_flushes_frame_by_time_and_keeps_streaming() -> None:
             if event.payload.get("deltas") == ["b"]:
                 break
 
-    merged = [event for event in collected if event is not None and event.type == "agent.message.delta"]
+    merged = [
+        event for event in collected if event is not None and event.type == "agent.message.delta"
+    ]
     assert [event.payload.get("deltas") for event in merged] == [["a"], ["b"]]
 
 
