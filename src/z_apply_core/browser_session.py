@@ -15,6 +15,7 @@ from uuid import uuid4
 from langchain_core.tools import ToolException
 from playwright_python_mcp.mcp import create_connection
 
+from z_apply_core.browser_capability_batch import inspect_page_capabilities_with_fallback
 from z_apply_core.browser_config import build_browser_config
 from z_apply_core.browser_form_inspection import (
     SUBMIT_SELECTOR,
@@ -22,7 +23,6 @@ from z_apply_core.browser_form_inspection import (
     inspect_control,
     inspect_control_options,
     inspect_page_blockers,
-    inspect_page_capabilities,
     required_file_upload_pending,
 )
 from z_apply_core.browser_observation import (
@@ -916,10 +916,15 @@ class BrowserSession:
             return await required_file_upload_pending(tab.page)
 
     async def inspect_capabilities(self) -> BrowserCapabilities:
-        """Return compositional structural facts about the current browser page."""
+        """Return compositional structural facts about the current browser page.
+
+        Batch-first (OPT-DEC-010 H2): one evaluate pass collects every
+        selector set's raw facts; on batch failure this degrades to the
+        legacy per-control scan instead of failing the turn.
+        """
         async with self._operation_scope():
             tab = await self._backend._ensure_tab()
-            return await inspect_page_capabilities(tab.page)
+            return await inspect_page_capabilities_with_fallback(tab.page)
 
     async def inspect_control_state(self, target: str) -> BrowserControlState:
         """Return typed live state for one exact browser-resolved form target."""
