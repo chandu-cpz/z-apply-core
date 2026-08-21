@@ -48,6 +48,12 @@ from z_apply_core.browser_tools import (
     normalize_browser_arguments,
     validate_bounded_wait_arguments,
 )
+from z_apply_core.browser_value_provenance import (
+    EVALUATE_WRITE_REJECTION,
+    ProvenanceEntry,
+    first_form_write,
+    provenance_entries_for,
+)
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.paths import PROFILES_ROOT, runs_root
@@ -157,6 +163,10 @@ class BrowserSession:
         self._last_auth_submit_snapshot = ""
         self._pending_atomic_upload_target = ""
         self._pending_file_chooser: Any | None = None
+        # PROP-005 S2: provenance entries collected during a batch run, then
+        # attached to the batch receipt. Declared for type checkers; the batch
+        # path assigns a fresh list per run before any step executes.
+        self._pending_batch_written: list[ProvenanceEntry] = []
         self._capture_workspace = ARTIFACT_ROOT / run_id / "browser-artifacts"
         self.tools = BrowserToolRegistry(
             tuple(tools if tools is not None else server.backend_pool.tools),
@@ -230,6 +240,8 @@ class BrowserSession:
         normalized = normalize_browser_arguments(arguments)
         if name == "browser_snapshot" and "target" not in normalized:
             normalized["target"] = "html"
+        if name == "browser_evaluate":
+            self._guard_evaluate(normalized)
         if name == "browser_take_screenshot":
             normalized = self._ensure_screenshot_filename(normalized)
         try:
@@ -246,6 +258,20 @@ class BrowserSession:
                 "Capture fresh browser evidence and retry on a control the "
                 "evidence actually shows."
             ) from exc
+
+    def _guard_evaluate(self, arguments: dict[str, Any]) -> None:
+        """Reject evaluate bodies that write form-control values (PROP-005 S2).
+
+        Reads stay free; only assignment-shaped writes to live control state
+        are blocked. Values reach form controls through typed fill tools that
+        carry provenance receipts — never through injected script.
+        """
+        body = str(arguments.get("function") or "")
+        reason = first_form_write(body)
+        if reason is not None:
+            raise BrowserToolExecutionError(
+                EVALUATE_WRITE_REJECTION.format(reason=reason)
+            )
 
     async def _guard_click_or_type(self, name: str, arguments: dict[str, Any]) -> bool:
         """Apply the upload + submission guards shared by standalone calls and
@@ -460,6 +486,9 @@ class BrowserSession:
             await self._pre_select_type_target(normalized)
         before_observation = self._current_observation()
         mutation = await self.call_tool(name, arguments)
+        written: tuple[ProvenanceEntry, ...] = ()
+        if name in {"browser_type", "browser_fill_form", "browser_select_option"}:
+            written = provenance_entries_for(name, normalized)
         try:
             evidence = await self.call_tool("browser_snapshot")
         except BrowserToolExecutionError as exc:
@@ -478,6 +507,7 @@ class BrowserSession:
             after=after,
             changed=changed,
             result=mutation,
+            written=written,
         )
         self._last_action_receipt = receipt
         if self.run_context is not None:
@@ -501,6 +531,8 @@ class BrowserSession:
             )
         before = self._current_observation()
         markers: list[str] = []
+        written: list[ProvenanceEntry] = []
+        self._pending_batch_written = written
         stopped: tuple[int, str] | None = None
         async with self._operation_scope():
             for index, raw_step in enumerate(steps):
@@ -533,6 +565,7 @@ class BrowserSession:
                     stopped = (index, action)
                     break
             after, note = await self._batch_evidence(before, stopped)
+        del self._pending_batch_written
         changed = before.signature != after.signature
         signature = json.dumps(
             {"name": "browser_batched", "arguments": {"steps": steps}},
@@ -548,6 +581,7 @@ class BrowserSession:
             after=after,
             changed=changed,
             result="\n".join(markers),
+            written=tuple(written),
         )
         self._last_action_receipt = receipt
         if self.run_context is not None:
@@ -569,8 +603,12 @@ class BrowserSession:
             f"changed: {'true' if changed else 'false'}\n"
             f"after_revision: {after.revision}\n"
         )
+        written_block = ""
+        if receipt.written:
+            provenance = "\n".join(entry.render() for entry in receipt.written)
+            written_block = f"written_controls (value provenance):\n{provenance}\n"
         rendered = (
-            f"{header}{''.join(marker + '\n' for marker in markers)}{landing_block}{evidence}{note}"
+            f"{header}{''.join(marker + '\n' for marker in markers)}{written_block}{landing_block}{evidence}{note}"
         )
         if stopped is not None:
             # A stopped batch is a failed script: surface it as a contained tool
@@ -644,7 +682,24 @@ class BrowserSession:
             guarded_submit = await self._guard_click_or_type("browser_type", arguments)
             async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
                 result = await self._call_backend_tool(backend_name, arguments)
+            self._pending_batch_written.extend(provenance_entries_for("browser_type", arguments))
             return result, guarded_submit
+        if action == "fill_form":
+            async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
+                result = await self._call_backend_tool(backend_name, arguments)
+            self._pending_batch_written.extend(
+                provenance_entries_for("browser_fill_form", arguments)
+            )
+            return result, False
+        if action == "select_option":
+            async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
+                result = await self._call_backend_tool(backend_name, arguments)
+            self._pending_batch_written.extend(
+                provenance_entries_for("browser_select_option", arguments)
+            )
+            return result, False
+        if action == "evaluate":
+            self._guard_evaluate(arguments)
         if action == "press":
             key = arguments.get("key")
             if not isinstance(key, str) or not key.strip():
