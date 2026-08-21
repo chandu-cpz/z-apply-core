@@ -63,6 +63,14 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         self._last_playbook_text: str | None = None
         self._last_capabilities_signature: str | None = None
         self._last_capability_record: dict[str, Any] | None = None
+        # OPT-DEC-010 H1 rider: signature-keyed capability cache. _filter_tools
+        # consumes a capability object on EVERY turn (dedupe-skipped ones
+        # included), so the cache — not a skip — is what removes redundant
+        # browser scans. Any control-state change alters the observation
+        # signature, which is the invalidation signal.
+        self._capability_cache: dict[str, BrowserCapabilities] = {}
+        self._capability_cache_hits = 0
+        self._last_capability_lookup: str = "none"
 
     def _note_capabilities(self, capabilities: Any) -> bool:
         """Record whether the capability snapshot changed since the last turn.
@@ -115,13 +123,40 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         record = self._last_capability_record or {}
         logger.info(
             "capability_probe revision=%s result_hash=%s inspection_ms=%d "
-            "controls_scanned=%d injected=%s",
+            "controls_scanned=%d injected=%s cache=%s",
             revision,
             record.get("result_hash", "?"),
             record.get("inspection_ms", 0),
             record.get("controls_scanned", 0),
             injected,
+            self._last_capability_lookup,
         )
+
+    async def _capabilities_for_turn(self) -> BrowserCapabilities | None:
+        """Cache-first capability lookup keyed by observation signature."""
+        browser = self._browser
+        if browser is None:
+            return None
+        observation = browser.current_observation
+        signature = observation.signature if observation is not None else None
+        if signature is not None:
+            cached = self._capability_cache.get(signature)
+            if cached is not None:
+                self._capability_cache_hits += 1
+                self._last_capability_lookup = "cache"
+                return cached
+        try:
+            capabilities = await browser.inspect_capabilities()
+        except Exception:
+            self._last_capability_lookup = "error"
+            return None
+        self._last_capability_lookup = "fresh"
+        if signature is not None and capabilities is not None:
+            # Small bound: alternating revisions must not grow this forever.
+            if len(self._capability_cache) >= 4:
+                self._capability_cache.pop(next(iter(self._capability_cache)))
+            self._capability_cache[signature] = capabilities
+        return capabilities
 
     async def awrap_model_call(
         self,
@@ -132,10 +167,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         if browser is None:
             return await handler(request)
         capabilities: BrowserCapabilities | None
-        try:
-            capabilities = await browser.inspect_capabilities()
-        except Exception:
-            capabilities = None
+        capabilities = await self._capabilities_for_turn()
         changed = self._note_capabilities(capabilities)
         if capabilities is not None and capabilities.inspection_ms >= 1000:
             logger.warning(
