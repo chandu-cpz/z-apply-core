@@ -119,7 +119,8 @@ UNRESOLVED when its evidence shows:
 
 ## Evidence interpretation rules
 
-- `<secret>NAME</secret>` is runtime redaction of a populated configured secret.
+- A secret-mask token (`<secret name="NAME" length="N"/>`, legacy shape
+  `<secret>NAME</secret>`) is runtime redaction of a populated configured secret.
   It is positive evidence that the control has a value. It is never literal page
   text, a placeholder, or an invalid value.
 - An accessibility snapshot is a flattened semantic tree. Nearby labels, text,
