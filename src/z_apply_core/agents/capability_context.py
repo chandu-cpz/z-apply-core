@@ -20,25 +20,29 @@ logger = logging.getLogger(__name__)
 __all__ = ["CapabilityContextMiddleware"]
 
 CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
-_ALWAYS_AVAILABLE = frozenset(
+
+# Deepagents framework scaffolding trimmed from every model request. These are
+# generic coding-agent filesystem/search tools injected by create_deep_agent,
+# not application capabilities; this agent works through live browser evidence.
+# The filter BLOCKLISTS scaffolding instead of ALLOWLISTING browser actions so
+# any app-level tool wired into create_deep_agent (e.g. report_job_metadata,
+# FAIL-005) stays visible to the model by default.
+_FRAMEWORK_SCAFFOLDING_TOOLS = frozenset(
     {
-        "task",
-        "ask_human",
-        "application_blocked",
-        "browser_wait_for",
-    }
-)
-_ORCHESTRATOR_CONTROL_TOOLS = _ALWAYS_AVAILABLE | frozenset(
-    {
-        "application_submitted",
-        "remember_platform_lesson",
-        "lookup_candidate_memory",
+        "read_file",
+        "write_file",
+        "edit_file",
+        "ls",
+        "glob",
+        "grep",
+        "delete",
+        "execute",
     }
 )
 
 
 class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
-    """Narrow model-visible actions using trusted compositional browser facts."""
+    """Trim framework scaffolding and inject trusted compositional browser facts."""
 
     def __init__(
         self,
@@ -173,12 +177,10 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         *,
         atomic_upload_pending: bool = False,
     ) -> list[BaseTool | dict[str, Any]]:
-        tools = [
-            tool
-            for tool in tools
-            if _tool_name(tool).startswith("browser_")
-            or _tool_name(tool) in _ORCHESTRATOR_CONTROL_TOOLS
-        ]
+        # Fail open: drop only known framework scaffolding. Every tool the
+        # service layer wires into create_deep_agent is intentional and must
+        # reach the model regardless of browser capability state.
+        tools = [tool for tool in tools if _tool_name(tool) not in _FRAMEWORK_SCAFFOLDING_TOOLS]
         if atomic_upload_pending:
             return [tool for tool in tools if _tool_name(tool) == "browser_click_upload"]
         return tools
