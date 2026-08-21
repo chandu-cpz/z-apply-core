@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -89,6 +90,79 @@ class EscalationLadderTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(allowed, sentinel)
         handler.assert_awaited_once_with(request)
+
+
+class ProductionEscalationStackTests(unittest.TestCase):
+    """Wire DEC-002 through the SAME construction path run_orchestrator uses."""
+
+    def test_orchestrator_guard_opens_only_after_production_wiring(self):
+        from z_apply_core.agents.orchestrator import build_escalation_stack
+
+        orch_guard, aw_guard, result_mw = build_escalation_stack()
+        # One shared ladder across all three gates.
+        self.assertIs(orch_guard._ladder, result_mw._ladder)
+        self.assertIs(aw_guard._ladder, result_mw._ladder)
+
+        async def run_flow():
+            ask = _ask_request()
+
+            # Fresh ladder: direct asking is denied even though the reason is
+            # a legitimate candidate fact.
+            denied = await orch_guard.awrap_tool_call(ask, AsyncMock())
+            self.assertIn("denied", denied.content)
+
+            # Two empty AnswerWriter delegations trip the shared ladder...
+            empty = ToolMessage(content="", tool_call_id="t1", name="task")
+            task_request = SimpleNamespace(
+                tool_call={
+                    "name": "task",
+                    "id": "t1",
+                    "args": {"subagent_type": "AnswerWriter", "description": "x"},
+                }
+            )
+            for _ in range(2):
+                out = await result_mw.awrap_tool_call(
+                    task_request, AsyncMock(return_value=empty)
+                )
+                self.assertIn("Delegation failed", out.content)
+
+            # ...and the ORCHESTRATOR's guard now permits the ask.
+            sentinel = ToolMessage(content="ok", tool_call_id="c")
+            return await orch_guard.awrap_tool_call(ask, AsyncMock(return_value=sentinel))
+
+        allowed = asyncio.run(run_flow())
+        self.assertEqual(allowed.content, "ok")
+
+    def test_delegation_result_wraps_dispatch_passthrough(self):
+        """Order [SubagentDispatch, DelegationResult] still lets the result
+        middleware see the FINAL ToolMessage for AnswerWriter dispatches."""
+        import asyncio
+
+        from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+
+        _, _, result_mw = build_stack_helper()
+        dispatch = SubagentDispatchMiddleware(["AnswerWriter"])
+        final = ToolMessage(content="", tool_call_id="t9", name="task")
+        inner = AsyncMock(return_value=final)
+        async def outer(req):
+            return await result_mw.awrap_tool_call(req, inner)
+        request = SimpleNamespace(
+            tool_call={
+                "name": "task",
+                "id": "t9",
+                "args": {"subagent_type": "AnswerWriter", "description": "x"},
+            }
+        )
+        out = asyncio.run(dispatch.awrap_tool_call(request, outer))
+        self.assertIn("Delegation failed", out.content)
+        self.assertEqual(out.status, "error")
+        inner.assert_awaited_once()
+
+
+def build_stack_helper():
+    from z_apply_core.agents.orchestrator import build_escalation_stack
+
+    return build_escalation_stack()
 
 
 if __name__ == "__main__":

@@ -95,6 +95,38 @@ def decide_goal_stall(
     return stall_count, stall_count >= limit
 
 
+def build_escalation_stack(
+    *, ladder_threshold: int = 2,
+) -> tuple[
+    HumanEscalationGuardMiddleware,
+    HumanEscalationGuardMiddleware,
+    DelegationResultMiddleware,
+]:
+    """Build the per-run escalation gates around ONE shared failure ladder.
+
+    Returns ``(orchestrator_guard, answer_writer_guard, delegation_result)``.
+    The ladder MUST reach every gate: the delegation-result middleware records
+    empty specialist outputs, and once failures reach ``ladder_threshold`` the
+    orchestrator's guard — the agent that actually calls ``ask_human`` — opens
+    ``missing_candidate_fact``. Wiring the ladder into only the delegate-side
+    guard recreates the FAIL-003 deadlock (deny survives proven delegation
+    failure), so this factory is the single construction path and the wiring
+    test asserts through it.
+    """
+    ladder = DelegationFailureLadder(threshold=ladder_threshold)
+    return (
+        HumanEscalationGuardMiddleware(
+            allowed_reasons=frozenset({"human_challenge"}),
+            delegation_ladder=ladder,
+        ),
+        HumanEscalationGuardMiddleware(
+            allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"}),
+            delegation_ladder=ladder,
+        ),
+        DelegationResultMiddleware(ladder),
+    )
+
+
 def make_report_job_metadata(
     metadata_reporter: Callable[[str, str, str | None], None] | None,
 ) -> BaseTool:
@@ -355,14 +387,14 @@ async def run_orchestrator(
         on_no_progress=router_middleware.reject_active_response,
         sink=event_sink,
     )
-    orchestrator_human_guard = HumanEscalationGuardMiddleware(
-        allowed_reasons=frozenset({"human_challenge"})
+    # One ladder per run, shared by EVERY escalation gate: the orchestrator's
+    # guard (the agent that calls ask_human), the AnswerWriter's guard, and
+    # the delegation-result middleware (records failures). Attaching it only
+    # to the delegate side would leave the orchestrator's own deny branch
+    # firing forever — the exact FAIL-003 deadlock this ladder exists to break.
+    orchestrator_human_guard, answer_writer_human_guard, delegation_result_middleware = (
+        build_escalation_stack()
     )
-    # One ladder per run, shared by the delegation-result middleware (records
-    # failures) and the AnswerWriter's guard (opens direct asking once the
-    # delegate path has failed enough times).
-    delegation_ladder = DelegationFailureLadder()
-    delegation_result_middleware = DelegationResultMiddleware(delegation_ladder)
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
@@ -425,12 +457,7 @@ async def run_orchestrator(
                 if candidate_memory is not None
                 else ()
             ),
-            answer_writer_middleware=[
-                HumanEscalationGuardMiddleware(
-                    allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"}),
-                    delegation_ladder=delegation_ladder,
-                )
-            ],
+            answer_writer_middleware=[answer_writer_human_guard],
             authentication_tools=[
                 *authentication_tools,
             ],
