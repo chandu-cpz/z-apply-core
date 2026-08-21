@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from langchain_core.tools import ToolException
 from pydantic import ValidationError
 
 from z_apply_core.agents.no_progress_guard import _target_refs
@@ -114,6 +115,43 @@ class BatchSchemaTests(unittest.TestCase):
         normalized = [normalize_browser_arguments(step) for step in steps]
         self.assertEqual(normalized[0]["target"], "e12")
         self.assertEqual(normalized[1]["fields"][0]["target"], "e34")
+
+    def test_empty_fill_form_step_is_rejected(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        with self.assertRaisesRegex(ToolException, "empty fields list"):
+            normalize_browser_arguments({"action": "fill_form", "fields": []})
+
+    def test_blank_snapshot_step_target_is_rejected(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        for blank in ("", "   "):
+            with self.assertRaisesRegex(ToolException, "empty target"):
+                normalize_browser_arguments({"action": "snapshot", "target": blank})
+
+    def test_snapshot_step_without_target_stays_full_page(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        normalized = normalize_browser_arguments({"action": "snapshot", "depth": 2})
+
+        self.assertNotIn("target", normalized)
+        self.assertEqual(normalized["depth"], 2)
+
+    def test_valid_steps_and_standalone_args_pass_through(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        filled = normalize_browser_arguments(
+            {"action": "fill_form", "fields": [{"target": "e12", "value": "x"}]}
+        )
+        self.assertEqual(filled["fields"], [{"target": "e12", "value": "x"}])
+
+        targeted = normalize_browser_arguments({"action": "snapshot", "target": "e90"})
+        self.assertEqual(targeted["target"], "e90")
+
+        # Standalone tool calls carry no ``action`` key and keep today's
+        # strip-empty behavior instead of the batched-step rejections.
+        standalone = normalize_browser_arguments({"fields": [], "target": ""})
+        self.assertEqual(standalone, {"fields": []})
 
     def test_schema_carries_one_compact_argument(self) -> None:
         schema = BrowserBatchArgs.model_json_schema()

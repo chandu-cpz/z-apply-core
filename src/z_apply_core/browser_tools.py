@@ -102,9 +102,10 @@ _AGENT_TOOL_DESCRIPTIONS["browser_snapshot"] = (
     "page structure, option lists, or field values - browser_observe is only a "
     "cheap change probe and returns no page evidence. Prefer mutation receipts "
     "and the injected post-action context first; they already carry a bounded "
-    "view. SCOPE IT TO STAY CHEAP: pass `target=<ref>` to snapshot only that "
-    "subtree (e.g. the form container's ref, or a specific section) instead of "
-    "the whole page, and pass a `depth` (e.g. depth=2) for a shallow tree when "
+    "view. SCOPE IT TO STAY CHEAP: pass `target` set to an element ref (e.g. "
+    "`e275`) OR a CSS selector (e.g. `.simplify-jobs-shadow-root`) to snapshot "
+    "only that subtree instead of the whole page, and pass a `depth` (e.g. "
+    "depth=2) for a shallow tree when "
     "you only need a section or a few controls. Omit both only when you need "
     "the complete page tree."
 )
@@ -220,6 +221,23 @@ def normalize_browser_arguments(
             entry.pop("ref", None)
             normalized_fields.append(entry)
         normalized["fields"] = normalized_fields
+
+    # Batched steps carry an ``action`` key; validate them here so a malformed
+    # step fails before the backend executes anything.
+    action = normalized.get("action")
+    if action == "fill_form" and normalized.get("fields") == []:
+        raise ToolException(
+            "fill_form step has an empty fields list; name at least one field target."
+        )
+    if action == "snapshot":
+        requested = (arguments or {}).get("target")
+        if requested is None:
+            requested = (arguments or {}).get("ref")
+        if isinstance(requested, str) and not requested.strip():
+            raise ToolException(
+                "snapshot step has an empty target; omit target for full page "
+                "or pass a ref/CSS selector."
+            )
     return normalized
 
 
