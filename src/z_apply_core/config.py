@@ -6,6 +6,10 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Gateway spec owns the opencodego default; this field only carries the
+# OPENCODEGO_MODEL env override.
+from z_apply_core.agents.providers.base import OPENCODEGO_DEFAULT_MODEL
+
 # Re-exported: scripts and tests import CORE_ROOT from config.
 from z_apply_core.paths import CORE_ROOT, resume_path  # noqa: F401
 
@@ -61,7 +65,7 @@ class Settings(BaseSettings):
         alias="OGW_MODEL",
     )
     opencodego_api_key: str = Field(default="", alias="OPENCODEGO_API_KEY")
-    opencodego_model: str = Field(default="muse-spark-1.2-contributor", alias="OPENCODEGO_MODEL")
+    opencodego_model: str = Field(default=OPENCODEGO_DEFAULT_MODEL, alias="OPENCODEGO_MODEL")
     orca_api_key: str = Field(default="", alias="ORCA_API_KEY")
     orca_model: str = Field(default="qwen/qwen3.8-27b-free", alias="ORCA_MODEL")
     orca_reasoning: bool = Field(default=True, alias="ORCA_REASONING")

@@ -120,6 +120,10 @@ class Gateway:
     wire_fixups: bool = False  # needs ZenGatewayChat payload surgery + cache fields
 
 
+# Single source of truth for the opencodego default model. config.py reads
+# this for its Settings field; OPENCODEGO_MODEL in .env overrides at runtime.
+OPENCODEGO_DEFAULT_MODEL = "mimo-v2.5"
+
 GATEWAYS: dict[str, Gateway] = {
     "opengateway": Gateway(
         name="opengateway",
@@ -205,14 +209,20 @@ GATEWAYS: dict[str, Gateway] = {
     "opencodego": Gateway(
         name="opencodego",
         description=(
-            "opencode Zen gateway (opencode.ai/zen/go/v1); Muse Spark 1.2 Contributor by default"
+            "opencode Zen gateway (opencode.ai/zen/go/v1); mimo-v2.5 by default"
         ),
         base_url="https://opencode.ai/zen/go/v1",
         env_key="OPENCODEGO_API_KEY",
         settings_attr="opencodego_api_key",
         model_attr="opencodego_model",
-        default_model="muse-spark-1.2-contributor",
-        suggested_models=("muse-spark-1.2-contributor", "mimo-v2.5", "deepseek-v4-flash"),
+        default_model=OPENCODEGO_DEFAULT_MODEL,
+        suggested_models=(
+            OPENCODEGO_DEFAULT_MODEL,
+            "muse-spark-1.2-contributor",
+            "deepseek-v4-flash",
+            "hy3",
+            "hy3-preview",
+        ),
         chat_cls="deepseek",
         temperatures=(0.3, 0.3),
         thinking=ZenThinking(),
