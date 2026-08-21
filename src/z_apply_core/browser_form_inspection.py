@@ -30,9 +30,15 @@ class FormControlBlocker:
         return f"{self.control}: {', '.join(self.reasons)}"
 
 
+MAX_UNRESOLVED_NAMES = 5
+
+UNNAMED_CONTROL = "unnamed control"
+
+
 async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
     controls = await _visible_enabled(page.locator(CONTROL_SELECTOR))
     unresolved = 0
+    unresolved_names: list[str] = []
     invalid = 0
     for control in controls:
         control_type = (await control.get_attribute("type") or "").lower()
@@ -42,6 +48,11 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
             has_value = await _has_value(control)
         if await _is_required(control) and not has_value:
             unresolved += 1
+            if len(unresolved_names) < MAX_UNRESOLVED_NAMES:
+                # Unnamed controls carry no signal for the agent context.
+                name = await _control_name(control)
+                if name != UNNAMED_CONTROL:
+                    unresolved_names.append(name)
         if await _is_invalid(page, control):
             invalid += 1
 
@@ -78,6 +89,7 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
     return BrowserCapabilities(
         editable_controls_visible=bool(controls),
         unresolved_required_controls=unresolved,
+        unresolved_names=tuple(unresolved_names),
         invalid_controls=invalid,
         auth_gate_visible=auth_gate,
         empty_file_upload_present=bool(empty_file_inputs),
@@ -223,7 +235,7 @@ async def _control_name(locator: Locator) -> str:
         value = await locator.get_attribute(attribute)
         if value and value.strip():
             return value.strip()
-    return "unnamed control"
+    return UNNAMED_CONTROL
 
 
 async def _control_role(locator: Locator) -> str:

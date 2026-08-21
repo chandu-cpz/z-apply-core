@@ -93,7 +93,11 @@ _AGENT_TOOL_DESCRIPTIONS["browser_evaluate"] = (
     "the input through the native setter, dispatch a bubbling `input`, and in the "
     "same evaluate click the option only if it is already in the DOM; otherwise "
     "return a follow-up signal so the next turn re-snapshots and clicks the "
-    "filtered option."
+    "filtered option. If options render without role=option or refs (some ATS "
+    "typeaheads render refless suggestion lists), STOP - do not fall back to "
+    "querySelectorAll('*') + dispatchEvent; synthetic clicks cannot commit "
+    "those selections. Use keyboard navigation instead once available, or "
+    "re-scope."
 )
 
 _AGENT_TOOL_DESCRIPTIONS["browser_snapshot"] = (
@@ -250,10 +254,15 @@ def normalize_browser_arguments(
             "pass a ref/CSS selector per field."
         )
     if action == "snapshot":
+        # Omitted and blank targets both mean full page; only an explicit
+        # ``None``/``null`` literal is the model mistake worth rejecting.
         requested = (arguments or {}).get("target")
         if requested is None:
             requested = (arguments or {}).get("ref")
-        if _is_blank_target(requested):
+        stripped = requested.strip() if isinstance(requested, str) else ""
+        if not stripped:
+            normalized.pop("target", None)
+        elif stripped.casefold() in {"none", "null"}:
             raise ToolException(
                 "snapshot step has an empty target; omit target for full page "
                 "or pass a ref/CSS selector."
@@ -437,6 +446,26 @@ class WaitForStep(_BatchStep):
     textGone: str = ""
 
 
+class PressStep(_BatchStep):
+    """A keyboard key press against the focused element; targets nothing, so
+    stray ref/target keys a model copies from the snapshot are dropped instead
+    of folded into a ``target`` the step cannot carry."""
+
+    action: Literal["press"]
+    key: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_stray_target_keys(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            return {
+                key: value
+                for key, value in data.items()
+                if key not in {"ref", "target", "element"}
+            }
+        return data
+
+
 class HandleDialogStep(_BatchStep):
     action: Literal["handle_dialog"]
     accept: bool
@@ -451,7 +480,11 @@ class EvaluateStep(_BatchStep):
 
 class SnapshotStep(_BatchStep):
     action: Literal["snapshot"]
-    target: str = ""
+
+    # ``None`` (not "") so an omitted target dumps as None, which
+    # normalize_browser_arguments pops: a full-page snapshot inside a batch
+    # must never materialize a blank target and trip the rejection.
+    target: str | None = None
     depth: int | None = None
 
 
@@ -462,6 +495,7 @@ BatchStep = Annotated[
     | FillFormStep
     | SelectOptionStep
     | WaitForStep
+    | PressStep
     | HandleDialogStep
     | EvaluateStep
     | SnapshotStep,
@@ -493,6 +527,8 @@ _BATCHED_TOOL_DESCRIPTION = (
     "- click: {target, element='control'} - click a control; never a file input "
     "(use browser_click_upload for uploads)\n"
     "- type: {target, text, submit=false} - type text, replacing existing text\n"
+    "- press: {key} - send a keyboard key (e.g. Enter, ArrowDown); use after "
+    "typing in a typeahead combobox to commit the highlighted option\n"
     "- fill_form: {fields: [{target, value, type?}]} - fill several controls at "
     "once\n"
     "- select_option: {target, values} - select values in a NATIVE <select> "
@@ -511,8 +547,10 @@ _BATCHED_TOOL_DESCRIPTION = (
     "click the trigger, snapshot the open listbox, then click the option by "
     "ref - a real click fires mousedown+mouseup, so React Select accepts it. "
     "SEARCHABLE/ASYNC combobox -> type the filter, wait_for the option text, "
-    "then click the option. Escalate to evaluate only when the option click "
-    "never registers or the option is not in the DOM.\n"
+    "re-snapshot, then click the option by ref. If the option renders with "
+    "no ref (refless typeahead), skip browser_evaluate fallbacks and note "
+    "the limitation in your narration. Escalate to evaluate only when the "
+    "option click never registers or the option is not in the DOM.\n"
     "evaluate recipes (only for a stubborn form control whose standard writes "
     "never land): when you pass a `target` ref, the resolved element is passed to "
     "your function as its FIRST argument - write `(el) => {...}` and use that "
@@ -560,7 +598,8 @@ _BATCHED_TOOL_DESCRIPTION = (
     "the input through the native setter, dispatch a bubbling `input`, and in the "
     "same evaluate click the option only if it is already in the DOM; otherwise "
     "return a follow-up signal so the next turn re-snapshots and clicks the "
-    "filtered option."
+    "filtered option. If the option carries no ref (refless typeahead), skip "
+    "browser_evaluate fallbacks; note the limitation in your narration."
 )
 
 

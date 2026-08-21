@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from z_apply_core.agents.no_progress_guard import _target_refs
 from z_apply_core.agents.specialists.submission_reviewer import REVIEWER_BROWSER_TOOLS
+from z_apply_core.browser_observation import BrowserControlState
 from z_apply_core.browser_session import (
     BrowserSession,
     BrowserToolExecutionError,
@@ -116,18 +117,57 @@ class BatchSchemaTests(unittest.TestCase):
         self.assertEqual(normalized[0]["target"], "e12")
         self.assertEqual(normalized[1]["fields"][0]["target"], "e34")
 
+    def test_press_step_validates_and_passes_through_normalize(self) -> None:
+        model = BrowserBatchArgs.model_validate(
+            {"steps": [{"action": "press", "key": "Enter"}]}
+        )
+        self.assertEqual(
+            model.steps[0].model_dump(), {"action": "press", "key": "Enter"}
+        )
+
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        self.assertEqual(
+            normalize_browser_arguments({"action": "press", "key": "Enter"}),
+            {"action": "press", "key": "Enter"},
+        )
+
+    def test_press_step_requires_key_and_rejects_unknown_keys(self) -> None:
+        with self.assertRaises(ValidationError):
+            BrowserBatchArgs.model_validate({"steps": [{"action": "press"}]})
+        with self.assertRaises(ValidationError):
+            BrowserBatchArgs.model_validate(
+                {"steps": [{"action": "press", "key": "Enter", "bogus": 1}]}
+            )
+
+    def test_press_step_drops_stray_ref_and_target_keys(self) -> None:
+        model = BrowserBatchArgs.model_validate(
+            {
+                "steps": [
+                    {"action": "press", "key": "Enter", "ref": "[ref=e12]"},
+                    {"action": "press", "key": "ArrowDown", "target": "e12"},
+                ]
+            }
+        )
+        dumped = [step.model_dump() for step in model.steps]
+        self.assertEqual(dumped[0], {"action": "press", "key": "Enter"})
+        self.assertEqual(dumped[1], {"action": "press", "key": "ArrowDown"})
+
     def test_empty_fill_form_step_is_rejected(self) -> None:
         from z_apply_core.browser_tools import normalize_browser_arguments
 
         with self.assertRaisesRegex(ToolException, "empty fields list"):
             normalize_browser_arguments({"action": "fill_form", "fields": []})
 
-    def test_blank_snapshot_step_target_is_rejected(self) -> None:
+    def test_blank_snapshot_step_target_means_full_page(self) -> None:
         from z_apply_core.browser_tools import normalize_browser_arguments
 
-        for blank in ("", "   "):
-            with self.assertRaisesRegex(ToolException, "empty target"):
-                normalize_browser_arguments({"action": "snapshot", "target": blank})
+        for blank in ("", "   ", None):
+            normalized = normalize_browser_arguments(
+                {"action": "snapshot", "target": blank, "depth": 2}
+            )
+            self.assertNotIn("target", normalized)
+            self.assertEqual(normalized["depth"], 2)
 
     def test_none_literal_snapshot_step_target_is_rejected(self) -> None:
         from z_apply_core.browser_tools import normalize_browser_arguments
@@ -163,6 +203,18 @@ class BatchSchemaTests(unittest.TestCase):
         from z_apply_core.browser_tools import normalize_browser_arguments
 
         normalized = normalize_browser_arguments({"action": "snapshot", "depth": 2})
+
+        self.assertNotIn("target", normalized)
+        self.assertEqual(normalized["depth"], 2)
+
+    def test_batch_schema_dump_feeds_normalize_without_raise(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        steps = BrowserBatchArgs.model_validate(
+            {"steps": [{"action": "snapshot", "depth": 2}]}
+        ).model_dump()["steps"]
+
+        normalized = normalize_browser_arguments(steps[0])
 
         self.assertNotIn("target", normalized)
         self.assertEqual(normalized["depth"], 2)
@@ -250,6 +302,23 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_tool.await_args_list[-1].args[1], {"target": "html"})
         self.assertEqual(session.last_observation_revision, 1)
 
+    async def test_press_step_dispatches_to_press_key_backend(self) -> None:
+        session, call_tool = self._session()
+        await session.run_action_batch(
+            [
+                {"action": "type", "target": "e12", "text": "eng"},
+                {"action": "wait_for", "text": "Engineering"},
+                {"action": "press", "key": "Enter"},
+            ]
+        )
+        press_calls = [
+            call
+            for call in call_tool.await_args_list
+            if call.args[0] == "browser_press_key"
+        ]
+        self.assertEqual(len(press_calls), 1)
+        self.assertEqual(press_calls[0].args[1], {"key": "Enter"})
+
     async def test_success_receipt_renders_markers_and_stamps_revision(self) -> None:
         session, _call_tool = self._session()
         tool = make_batched_tool(
@@ -277,6 +346,26 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("after_revision: 1", result.content)
         self.assertEqual(result.additional_kwargs["browser_revision"], 1)
         self.assertEqual(session.last_action_receipt.tool, "browser_batched")
+
+    async def test_receipt_includes_field_landing_section(self) -> None:
+        session, _call_tool = self._session()
+        session.inspect_control_state = AsyncMock(  # type: ignore[method-assign]
+            return_value=BrowserControlState(
+                value="Jane Doe",
+                has_value=True,
+                control_name="Full Name",
+                role="textbox",
+            )
+        )
+        session.inspect_form_blockers = AsyncMock(return_value=())  # type: ignore[method-assign]
+        receipt = await session.run_action_batch(
+            [{"action": "fill_form", "fields": [{"target": "e12", "value": "Jane Doe"}]}]
+        )
+        self.assertIn("FIELD LANDING:", receipt)
+        self.assertIn(
+            '- Full Name (textbox): requested "Jane Doe" -> committed "Jane Doe" -> landed',
+            receipt,
+        )
 
     async def test_stopped_batch_returns_error_status_without_stamp(self) -> None:
         async def call_tool(name: str, arguments: object | None = None, *, meta: object = None) -> str:
@@ -391,6 +480,48 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(backend.call_tool.await_count, 3)
         self.assertEqual(session.last_action_receipt.tool, "browser_batched")
+
+    async def test_press_step_dispatches_to_backend_press_key(self) -> None:
+        session, call_tool = self._session()
+        await session.run_action_batch(
+            [
+                {"action": "press", "key": "ArrowDown"},
+                {"action": "press", "key": "Enter"},
+            ]
+        )
+        names = [call.args[0] for call in call_tool.await_args_list]
+        self.assertEqual(
+            names,
+            ["browser_press_key", "browser_press_key", "browser_snapshot"],
+        )
+        self.assertEqual(call_tool.await_args_list[0].args[1], {"key": "ArrowDown"})
+        self.assertEqual(call_tool.await_args_list[1].args[1], {"key": "Enter"})
+        receipt = session.last_action_receipt
+        assert receipt is not None
+        self.assertIn("- 1 press ArrowDown ok", receipt.result)
+        self.assertIn("- 2 press Enter ok", receipt.result)
+
+    async def test_press_step_rejects_missing_blank_or_non_string_key(self) -> None:
+        for bad_arguments in ({}, {"key": ""}, {"key": "   "}, {"key": 13}, {"key": None}):
+            session, call_tool = self._session()
+            with self.assertRaises(BrowserToolExecutionError) as rejected:
+                await session.run_action_batch([{"action": "press", **bad_arguments}])
+            self.assertIn("non-empty string 'key'", str(rejected.exception))
+            self.assertIn("stopped_at: 1 (press)", str(rejected.exception))
+            names = [call.args[0] for call in call_tool.await_args_list]
+            # Only the post-batch evidence snapshot ran; no backend press call.
+            self.assertEqual(names, ["browser_snapshot"])
+
+    async def test_press_step_discovers_owned_popups(self) -> None:
+        session, _call_tool = self._session()
+        lease = SimpleNamespace(
+            owns_current_page=MagicMock(return_value=True),
+            focus=AsyncMock(),
+            discover_owned_popups=AsyncMock(),
+        )
+        session.bind_lease(lease)
+        await session.run_action_batch([{"action": "press", "key": "Enter"}])
+        lease.discover_owned_popups.assert_awaited()
 
 
 class BatchWiringTests(unittest.TestCase):

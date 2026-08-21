@@ -37,12 +37,17 @@ class BrowserCapabilities:
     enabled_form_submit_visible: bool = False
     disabled_form_submit_visible: bool = False
     visual_only_surface_visible: bool = False
+    unresolved_names: tuple[str, ...] = ()
 
     def render(self) -> str:
+        unresolved_line = f"unresolved_required_controls={self.unresolved_required_controls}"
+        if self.unresolved_names:
+            named = ", ".join(f"{name}*" for name in self.unresolved_names[:3])
+            unresolved_line = f"{unresolved_line} ({named})"
         return "\n".join(
             (
                 f"editable_controls_visible={str(self.editable_controls_visible).lower()}",
-                f"unresolved_required_controls={self.unresolved_required_controls}",
+                unresolved_line,
                 f"invalid_controls={self.invalid_controls}",
                 f"auth_gate_visible={str(self.auth_gate_visible).lower()}",
                 f"empty_file_upload_present={str(self.empty_file_upload_present).lower()}",

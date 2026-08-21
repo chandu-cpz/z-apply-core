@@ -87,6 +87,7 @@ _BATCH_DISPATCH_TOOL_NAMES = {
     "handle_dialog": "browser_handle_dialog",
     "evaluate": "browser_evaluate",
     "snapshot": "browser_snapshot",
+    "press": "browser_press_key",
 }
 
 
@@ -563,6 +564,7 @@ class BrowserSession:
         if stopped is not None:
             stopped_index, stopped_action = stopped
             stopped_note = f", stopped_at: {stopped_index + 1} ({stopped_action})"
+        landing_block = await self._batch_landing_block(steps)
         ok_count = sum(1 for marker in markers if marker.endswith(" ok"))
         header = (
             "BROWSER BATCH RECEIPT\n"
@@ -570,7 +572,10 @@ class BrowserSession:
             f"changed: {'true' if changed else 'false'}\n"
             f"after_revision: {after.revision}\n"
         )
-        rendered = f"{header}{''.join(marker + '\n' for marker in markers)}{evidence}{note}"
+        rendered = (
+            f"{header}{''.join(marker + '\n' for marker in markers)}"
+            f"{landing_block}{evidence}{note}"
+        )
         if stopped is not None:
             # A stopped batch is a failed script: surface it as a contained tool
             # error (no browser_revision stamp) so sibling mutations in the same
@@ -578,6 +583,47 @@ class BrowserSession:
             # matching how a failing standalone call behaves.
             raise BrowserToolExecutionError(rendered)
         return rendered
+
+    async def _batch_landing_block(self, steps: list[dict[str, Any]]) -> str:
+        """Render a FIELD LANDING section proving requested values committed.
+
+        Best-effort by construction: unreadable controls are skipped and any
+        unexpected failure collapses the whole section so receipt assembly
+        can never crash on landing checks.
+        """
+        try:
+            entries = _batch_landing_entries(steps)
+            if not entries:
+                return ""
+            try:
+                blockers = await self.inspect_form_blockers()
+            except Exception:  # noqa: BLE001 - landing evidence is best-effort
+                blockers = ()
+            blocker_names = {blocker.control for blocker in blockers}
+            lines = ["FIELD LANDING:"]
+            for target, requested in entries:
+                try:
+                    state = await self.inspect_control_state(target)
+                except Exception:  # noqa: BLE001 - skip unreadable controls silently
+                    continue
+                landed = state.has_value and _normalized_form_value(
+                    state.value
+                ) == _normalized_form_value(requested)
+                required = bool(state.control_name) and state.control_name in blocker_names
+                outcome = (
+                    "landed"
+                    if landed
+                    else ("NOT LANDED (required unresolved)" if required else "NOT LANDED")
+                )
+                lines.append(
+                    f"- {state.control_name} ({state.role}): "
+                    f'requested "{requested}" -> committed "{state.value}" -> {outcome}'
+                )
+            if len(lines) == 1:
+                return ""
+            return "\n".join(lines) + "\n"
+        except Exception:  # noqa: BLE001 - the receipt must never crash on landing checks
+            return ""
 
     async def _run_batch_step(
         self,
@@ -603,11 +649,18 @@ class BrowserSession:
             async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
                 result = await self._call_backend_tool(backend_name, arguments)
             return result, guarded_submit
+        if action == "press":
+            key = arguments.get("key")
+            if not isinstance(key, str) or not key.strip():
+                raise BrowserToolExecutionError(
+                    "press step requires a non-empty string 'key', for example "
+                    "'Enter' or 'ArrowDown'."
+                )
         if action == "wait_for":
             arguments = validate_bounded_wait_arguments(arguments)
         async with asyncio.timeout(_BATCH_STEP_TIMEOUT_SECONDS):
             result = await self._call_backend_tool(backend_name, arguments)
-        if backend_name in BROWSER_CHANGING_TOOL_NAMES:
+        if backend_name in BROWSER_CHANGING_TOOL_NAMES or action == "press":
             await self._discover_owned_popups()
         return result, False
 
@@ -1230,12 +1283,66 @@ class BrowserSession:
             await lease.discover_owned_popups()
 
 
+def _normalized_form_value(value: str) -> str:
+    """Whitespace- and case-insensitive form for landing comparisons."""
+    return " ".join(str(value).split()).casefold()
+
+
+def _batch_landing_entries(steps: list[dict[str, Any]]) -> list[tuple[str, str]]:
+    """Collect deduped ``(target, requested value)`` pairs from value-committing steps.
+
+    Covers ``type``, ``fill_form`` (one entry per field) and ``select_option``,
+    preserving first-seen order and capping at 10 entries.
+    """
+    entries: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for raw_step in steps:
+        if not isinstance(raw_step, Mapping):
+            continue
+        action = str(raw_step.get("action", ""))
+        arguments = normalize_browser_arguments(raw_step)
+        if action == "type":
+            candidates: list[tuple[Any, Any]] = [
+                (arguments.get("target"), arguments.get("text"))
+            ]
+        elif action == "select_option":
+            values = arguments.get("values")
+            joined = (
+                ",".join(str(value) for value in values) if isinstance(values, list) else ""
+            )
+            candidates = [(arguments.get("target"), joined)]
+        elif action == "fill_form":
+            fields = arguments.get("fields")
+            candidates = [
+                (field.get("target"), field.get("value"))
+                for field in (fields if isinstance(fields, list) else [])
+                if isinstance(field, Mapping)
+            ]
+        else:
+            continue
+        for target, requested in candidates:
+            if (
+                isinstance(target, str)
+                and target
+                and target not in seen
+                and isinstance(requested, str)
+            ):
+                seen.add(target)
+                entries.append((target, requested))
+    return entries[:10]
+
+
 def _batch_step_label(action: str, arguments: dict[str, Any]) -> str:
     if action == "navigate":
         url = arguments.get("url")
         if isinstance(url, str) and url:
             return f"navigate {url}"
         return "navigate"
+    if action == "press":
+        key = arguments.get("key")
+        if isinstance(key, str) and key:
+            return f"press {key}"
+        return "press"
     target = arguments.get("target")
     if isinstance(target, str) and target:
         return f"{action} {target}"
