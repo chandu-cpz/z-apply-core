@@ -14,6 +14,8 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
+from z_apply_core.agents.delegation_guard import DelegationFailureLadder
+
 _log = logging.getLogger(__name__)
 
 _HUMAN_CHALLENGE_REASONS = frozenset({"human_challenge"})
@@ -31,9 +33,11 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
         self,
         *,
         allowed_reasons: frozenset[str] | None = None,
+        delegation_ladder: DelegationFailureLadder | None = None,
     ) -> None:
         super().__init__()
         self._allowed_reasons = allowed_reasons or _VALID_REASONS
+        self._ladder = delegation_ladder
 
     async def awrap_tool_call(
         self,
@@ -66,19 +70,33 @@ class HumanEscalationGuardMiddleware(AgentMiddleware[AgentState[ResponseT], Cont
             )
 
         if reason not in self._allowed_reasons:
-            allowed = ", ".join(sorted(self._allowed_reasons))
+            # Escalation ladder: when the delegate path has demonstrably failed
+            # enough times, direct asking for candidate facts becomes legal —
+            # a deny that survives proven delegation failure is a deadlock.
+            if not (
+                reason == "missing_candidate_fact"
+                and self._ladder is not None
+                and self._ladder.tripped
+            ):
+                allowed = ", ".join(sorted(self._allowed_reasons))
+                _log.info(
+                    "HumanEscalationGuard: rejecting ask_human reason=%r for this agent",
+                    reason,
+                )
+                return ToolMessage(
+                    content=(
+                        "Human escalation denied for this agent. "
+                        f"Allowed reason here: {allowed}. Delegate candidate-field questions "
+                        "to AnswerWriter. If delegations keep failing, ask_human with "
+                        "reason missing_candidate_fact becomes permitted."
+                    ),
+                    name="ask_human",
+                    tool_call_id=str(request.tool_call.get("id", "")),
+                )
             _log.info(
-                "HumanEscalationGuard: rejecting ask_human reason=%r for this agent",
-                reason,
-            )
-            return ToolMessage(
-                content=(
-                    "Human escalation denied for this agent. "
-                    f"Allowed reason here: {allowed}. Delegate candidate-field questions "
-                    "to AnswerWriter."
-                ),
-                name="ask_human",
-                tool_call_id=str(request.tool_call.get("id", "")),
+                "HumanEscalationGuard: delegation ladder open (%d failures); allowing "
+                "direct ask_human reason=missing_candidate_fact",
+                self._ladder.count,
             )
 
         if reason in _HUMAN_CHALLENGE_REASONS:
