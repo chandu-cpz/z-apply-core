@@ -14,6 +14,10 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from z_apply_core.agents.authentication import captcha_artifact_path
 from z_apply_core.agents.context_inbox import ContextInbox
+from z_apply_core.agents.delegation_guard import (
+    DelegationFailureLadder,
+    DelegationResultMiddleware,
+)
 from z_apply_core.agents.goal_runner import (
     ActiveGoalExhausted,
     ActiveGoalMiddleware,
@@ -354,6 +358,11 @@ async def run_orchestrator(
     orchestrator_human_guard = HumanEscalationGuardMiddleware(
         allowed_reasons=frozenset({"human_challenge"})
     )
+    # One ladder per run, shared by the delegation-result middleware (records
+    # failures) and the AnswerWriter's guard (opens direct asking once the
+    # delegate path has failed enough times).
+    delegation_ladder = DelegationFailureLadder()
+    delegation_result_middleware = DelegationResultMiddleware(delegation_ladder)
     orchestrator_browser_tools = [
         tool for tool in browser_tools if tool.name != "browser_take_screenshot"
     ]
@@ -400,6 +409,7 @@ async def run_orchestrator(
             context_inbox=context_inbox,
             router_middleware=router_middleware,
             orchestrator_human_guard=orchestrator_human_guard,
+            delegation_result_middleware=delegation_result_middleware,
             active_goal_middleware=active_goal_middleware,
             mutation_lock=mutation_lock,
         ),
@@ -417,7 +427,8 @@ async def run_orchestrator(
             ),
             answer_writer_middleware=[
                 HumanEscalationGuardMiddleware(
-                    allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"})
+                    allowed_reasons=frozenset({"missing_candidate_fact", "ambiguous_field"}),
+                    delegation_ladder=delegation_ladder,
                 )
             ],
             authentication_tools=[
@@ -601,6 +612,7 @@ def build_orchestrator_middleware(
     context_inbox: ContextInbox | None,
     router_middleware: ModelRouter,
     orchestrator_human_guard: HumanEscalationGuardMiddleware,
+    delegation_result_middleware: DelegationResultMiddleware | None = None,
     active_goal_middleware: ActiveGoalMiddleware,
     mutation_lock: asyncio.Lock | None = None,
 ) -> list[AgentMiddleware]:
@@ -632,7 +644,12 @@ def build_orchestrator_middleware(
             SubagentDispatchMiddleware(
                 ["AnswerWriter", "AuthenticationSpecialist", "SubmissionReviewer", "VisionSpecialist"],
                 browser=active_browser,
-            )
+            ),
+            *(
+                [delegation_result_middleware]
+                if delegation_result_middleware is not None
+                else []
+            ),
         ],
         mutation_lock=mutation_lock,
     )

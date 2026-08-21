@@ -57,7 +57,11 @@ ROLE_POLICY: dict[str, dict[str, Any]] = {
         "reasoning_effort": "low",
     },
     "BrowserSpecialist": {"priority": "balanced", "reasoning": True},
-    "AnswerWriter": {"priority": "quality", "reasoning": True},
+    # Output cap: structured field answers need far fewer tokens than the
+    # provider ceiling. A model that burns to 128K (FAIL-003: exactly 131072
+    # output tokens over 894s, empty result) now fails fast instead of
+    # stalling the run for quarter-hours.
+    "AnswerWriter": {"priority": "quality", "reasoning": True, "max_tokens": 8192},
     "VisionSpecialist": {"priority": "balanced", "reasoning": True, "force_vision": True},
 }
 
@@ -343,7 +347,14 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
         # The graph's bound model is fixed at construction; always hand the
         # gateway's current client to the downstream handler so live switches
         # actually drive calls.
-        call_request = request.override(model=llm)
+        # Role output ceiling: bind max_tokens per call (clients are cached and
+        # shared across roles, so the cap cannot live in the client itself).
+        capped_llm = (
+            llm.bind(max_tokens=self._policy["max_tokens"])
+            if "max_tokens" in self._policy
+            else llm
+        )
+        call_request = request.override(model=capped_llm)  # type: ignore[arg-type]
         input_tokens_estimate = estimate_messages_tokens(call_request.messages)
         await self._emit(
             "model_call_start",
