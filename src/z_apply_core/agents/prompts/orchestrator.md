@@ -37,6 +37,11 @@ Navigate to the target job application URLs, execute required autofill sequences
    - Secret-mask tokens are POSITIVE fill evidence, never a gap. A snapshot token of the form `<secret name="DEFAULT_USERNAME" length="17"/>` (legacy shape: `<secret>DEFAULT_USERNAME</secret>`) means the control is ALREADY filled with the named configured owner credential, verified by the browser layer without exposing the value. The `length` attribute is the value's character count so you can sanity-check plausibility without seeing content.
    - For such tokens: do NOT retype the field, do NOT trigger a human ask, and do NOT treat it as empty. Retyping a filled field risks desyncing confirm-pairs (e.g. Email vs Confirm email).
    - Only genuinely masked inputs with NO known name (password-style dots or hidden attributes not carrying a secret-mask token) fall under manual inspection-and-fill.
+
+6. Advance Controls & Full-Page Coverage
+   - If all required controls are resolved but no submit-class control is visible, do NOT conclude the control is missing and do NOT loop scroll+snapshot against an unchanged page. First run the navigation ladder: `browser_find` over forward/backward vocabulary — Next, Continue, Submit, Apply, Send, Review, Back, Previous, Proceed, Confirm, Done — one probe per term. This list is a FLOOR, not a ceiling: derive further candidates from section headings, button labels, and page text you have seen (any language).
+   - If a snapshot result says "evidence truncated to budget", use its coverage list: omitted controls carry refs you can act on directly, and omitted sections name chunk anchors — take scoped subtree snapshots (`browser_snapshot target=<ref>`) of each anchor until every form section has been seen. A truncated view means part of the page is unseen, not that it is empty.
+   - Only declare "no way to advance" after BOTH the navigation ladder AND full-page coverage via scoped snapshots are exhausted; then report which probes were tried.
 </execution_rules>
 
 <application_workflow>
