@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Sequence
-from typing import cast
+from collections.abc import Callable, Coroutine, Sequence
+from typing import Any, cast
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
@@ -40,6 +40,11 @@ from z_apply_core.agents.router_middleware import (
 )
 from z_apply_core.agents.specialists import build_specialists
 from z_apply_core.agents.subagent_dispatch import SubagentDispatchMiddleware
+from z_apply_core.agents.summarization_observability import (
+    install_summarization_observability,
+    reset_summarization_observer,
+    set_summarization_observer,
+)
 from z_apply_core.application_artifacts import ApplicationArtifactPublisher
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.call_ledger import RunCallLedger
@@ -57,6 +62,7 @@ from z_apply_core.memory.tools import make_candidate_memory_tools
 from z_apply_core.paths import CORE_ROOT, run_context_dir
 from z_apply_core.stream_events import (
     FrameworkEventSink,
+    FrameworkTraceEvent,
     SequencedEventSink,
 )
 from z_apply_core.text_utils import clean_job_metadata
@@ -64,6 +70,21 @@ from z_apply_core.text_utils import clean_job_metadata
 logger = logging.getLogger(__name__)
 
 GOAL_STALL_LIMIT = 2
+
+
+def _make_summarization_observer(
+    sink: FrameworkEventSink | None,
+) -> Callable[[str, dict[str, Any]], Coroutine[Any, Any, None]]:
+    """Route summarizer model-call telemetry into the run's sequenced sink."""
+
+    async def observe(event_name: str, data: dict[str, Any]) -> None:
+        if sink is None:
+            return
+        await sink.accept(
+            FrameworkTraceEvent(event=event_name, name="summarization", data=data, raw={})
+        )
+
+    return observe
 
 
 def decide_goal_stall(
@@ -96,7 +117,8 @@ def decide_goal_stall(
 
 
 def build_escalation_stack(
-    *, ladder_threshold: int = 2,
+    *,
+    ladder_threshold: int = 2,
 ) -> tuple[
     HumanEscalationGuardMiddleware,
     HumanEscalationGuardMiddleware,
@@ -135,6 +157,7 @@ def make_report_job_metadata(
     The reporter is bound by the service layer to ``run.view``; when absent
     (CLI runs) the tool still validates and reports that it cannot persist.
     """
+
     @tool
     async def report_job_metadata(company: str, role: str, location: str | None = None) -> str:
         """Record the company and role for this application on the run view.
@@ -219,6 +242,14 @@ async def run_orchestrator(
         artifact_publisher.browser if artifact_publisher is not None else None
     )
     event_sink = SequencedEventSink(sink, run_id=run_id)
+    # FAIL-006: deepagents' summarizer makes full-history LLM calls OUTSIDE our
+    # middleware chain; without this seam those minutes of wall clock emit zero
+    # events. Install once, then route its model-call telemetry into the run's
+    # own sequenced sink for the duration of the graph execution.
+    install_summarization_observability()
+    summarization_observer_token = set_summarization_observer(
+        _make_summarization_observer(event_sink)
+    )
     # Subagents get their own ask_human instance with the browser
     # challenge-capture path stripped: a subagent (e.g. AnswerWriter) must
     # never be able to drive the browser through ask_human internals, even
@@ -343,6 +374,7 @@ async def run_orchestrator(
             )
             if tool.name == "ask_human"
         ]
+
     @tool(return_direct=True)
     async def application_submitted(confirmation: str) -> str:
         """Finish after approval, final submit, and visible submission confirmation."""
@@ -413,7 +445,9 @@ async def run_orchestrator(
         if active_browser is not None
         else []
     )
-    deepagent_backend = FilesystemBackend(root_dir=CORE_ROOT, virtual_mode=True)  # repo root for virtual FS
+    deepagent_backend = FilesystemBackend(
+        root_dir=CORE_ROOT, virtual_mode=True
+    )  # repo root for virtual FS
     # One lock shared by the orchestrator and every specialist so browser
     # mutations never overlap even when a subagent and the orchestrator act in
     # the same response.
@@ -532,6 +566,8 @@ async def run_orchestrator(
             router_middleware.last_model_id,
             "failed",
         )
+    finally:
+        reset_summarization_observer(summarization_observer_token)
 
     if terminal is None:
         return OrchestratorRun(
@@ -669,14 +705,15 @@ def build_orchestrator_middleware(
         },
         extra_middleware=[
             SubagentDispatchMiddleware(
-                ["AnswerWriter", "AuthenticationSpecialist", "SubmissionReviewer", "VisionSpecialist"],
+                [
+                    "AnswerWriter",
+                    "AuthenticationSpecialist",
+                    "SubmissionReviewer",
+                    "VisionSpecialist",
+                ],
                 browser=active_browser,
             ),
-            *(
-                [delegation_result_middleware]
-                if delegation_result_middleware is not None
-                else []
-            ),
+            *([delegation_result_middleware] if delegation_result_middleware is not None else []),
         ],
         mutation_lock=mutation_lock,
     )
