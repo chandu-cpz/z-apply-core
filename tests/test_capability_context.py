@@ -67,6 +67,12 @@ def lookup_candidate_memory() -> str:
     return "found"
 
 
+@tool
+def report_job_metadata(company: str, role: str) -> str:
+    """Record structured run metadata."""
+    return "recorded"
+
+
 class CapabilityContextTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tools = [
@@ -79,6 +85,7 @@ class CapabilityContextTests(unittest.TestCase):
             application_submitted,
             ls,
             lookup_candidate_memory,
+            report_job_metadata,
         ]
 
     def test_browser_state_does_not_hide_safe_agent_actions(self) -> None:
@@ -91,6 +98,7 @@ class CapabilityContextTests(unittest.TestCase):
             "task",
             "application_submitted",
             "lookup_candidate_memory",
+            "report_job_metadata",
         ]
         states = (
             BrowserCapabilities(auth_gate_visible=True),
@@ -120,6 +128,58 @@ class CapabilityContextTests(unittest.TestCase):
         )
 
         self.assertIn("lookup_candidate_memory", [tool.name for tool in tools])
+
+    def test_app_level_tools_survive_framework_scaffolding_trim(self) -> None:
+        """FAIL-005: app-level orchestrator tools must never be silently dropped.
+
+        The capability filter exists to trim framework scaffolding (deepagents
+        filesystem/task tools), not to whitelist browser actions. Any tool the
+        service layer wires into create_deep_agent is intentional and must stay
+        visible to the model regardless of browser capability state.
+        """
+        states = (
+            BrowserCapabilities(auth_gate_visible=True),
+            BrowserCapabilities(editable_controls_visible=True),
+            BrowserCapabilities(editable_controls_visible=False),
+            None,
+        )
+
+        for state in states:
+            with self.subTest(state=state):
+                tools = CapabilityContextMiddleware._filter_tools(self.tools, state)
+                self.assertIn("report_job_metadata", [tool.name for tool in tools])
+
+    def test_framework_scaffolding_still_trimmed(self) -> None:
+        """The blocklist keeps trimming deepagents filesystem/search tools."""
+        tools = CapabilityContextMiddleware._filter_tools(
+            self.tools,
+            BrowserCapabilities(editable_controls_visible=True),
+        )
+
+        names = [tool.name for tool in tools]
+        for scaffolded in ("ls", "read_file", "write_file", "edit_file", "glob", "grep", "delete"):
+            self.assertNotIn(scaffolded, names)
+
+    def test_browserless_middleware_leaves_toolset_untouched(self) -> None:
+        """Specialists run browserless; their toolsets must never be filtered."""
+        middleware = CapabilityContextMiddleware(None)
+
+        async def handler(request):
+            return [tool.name for tool in request.tools]
+
+        import asyncio
+
+        from langchain.agents.middleware.types import ModelRequest
+        from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+        from langchain_core.messages import AIMessage
+
+        request = ModelRequest(
+            model=GenericFakeChatModel(messages=iter([AIMessage(content="ok")])),
+            messages=[HumanMessage(content="probe")],
+            tools=list(self.tools),
+        )
+        seen = asyncio.run(middleware.awrap_model_call(request, handler))
+        self.assertEqual(seen, [tool.name for tool in self.tools])
 
     def test_compact_observation_bounds_repeated_model_context(self) -> None:
         evidence = "\n".join(
