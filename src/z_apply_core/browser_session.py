@@ -268,8 +268,7 @@ class BrowserSession:
         if self._submission.active:
             if name == "browser_click":
                 guarded_submit = (
-                    await self._classify_submit_control(arguments)
-                    is SubmitControlKind.FORM_SUBMIT
+                    await self._classify_submit_control(arguments) is SubmitControlKind.FORM_SUBMIT
                 )
             elif name == "browser_type" and arguments.get("submit") is True:
                 guarded_submit = True
@@ -530,9 +529,7 @@ class BrowserSession:
                         self._submission.consume()
                     markers.append(f"- {index + 1} {label} ok")
                 except Exception as exc:  # noqa: BLE001 - contained per-step like a standalone call
-                    markers.append(
-                        f"- {index + 1} {label} failed: " f"{_truncate(str(exc))}"
-                    )
+                    markers.append(f"- {index + 1} {label} failed: {_truncate(str(exc))}")
                     stopped = (index, action)
                     break
             after, note = await self._batch_evidence(before, stopped)
@@ -573,8 +570,7 @@ class BrowserSession:
             f"after_revision: {after.revision}\n"
         )
         rendered = (
-            f"{header}{''.join(marker + '\n' for marker in markers)}"
-            f"{landing_block}{evidence}{note}"
+            f"{header}{''.join(marker + '\n' for marker in markers)}{landing_block}{evidence}{note}"
         )
         if stopped is not None:
             # A stopped batch is a failed script: surface it as a contained tool
@@ -1302,14 +1298,10 @@ def _batch_landing_entries(steps: list[dict[str, Any]]) -> list[tuple[str, str]]
         action = str(raw_step.get("action", ""))
         arguments = normalize_browser_arguments(raw_step)
         if action == "type":
-            candidates: list[tuple[Any, Any]] = [
-                (arguments.get("target"), arguments.get("text"))
-            ]
+            candidates: list[tuple[Any, Any]] = [(arguments.get("target"), arguments.get("text"))]
         elif action == "select_option":
             values = arguments.get("values")
-            joined = (
-                ",".join(str(value) for value in values) if isinstance(values, list) else ""
-            )
+            joined = ",".join(str(value) for value in values) if isinstance(values, list) else ""
             candidates = [(arguments.get("target"), joined)]
         elif action == "fill_form":
             fields = arguments.get("fields")

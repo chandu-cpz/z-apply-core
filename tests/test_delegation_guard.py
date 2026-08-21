@@ -121,9 +121,7 @@ class ProductionEscalationStackTests(unittest.TestCase):
                 }
             )
             for _ in range(2):
-                out = await result_mw.awrap_tool_call(
-                    task_request, AsyncMock(return_value=empty)
-                )
+                out = await result_mw.awrap_tool_call(task_request, AsyncMock(return_value=empty))
                 self.assertIn("Delegation failed", out.content)
 
             # ...and the ORCHESTRATOR's guard now permits the ask.
@@ -144,8 +142,10 @@ class ProductionEscalationStackTests(unittest.TestCase):
         dispatch = SubagentDispatchMiddleware(["AnswerWriter"])
         final = ToolMessage(content="", tool_call_id="t9", name="task")
         inner = AsyncMock(return_value=final)
+
         async def outer(req):
             return await result_mw.awrap_tool_call(req, inner)
+
         request = SimpleNamespace(
             tool_call={
                 "name": "task",

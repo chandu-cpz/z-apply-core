@@ -1,4 +1,5 @@
 """Probe the Simplify panel on the greenhouse job page (form NOT open)."""
+
 import asyncio
 import contextlib
 import re
@@ -46,9 +47,7 @@ async def main() -> None:
         await asyncio.sleep(12)
         # What does the Simplify shadow root show on the JOB page (form NOT open)?
         snap = str(
-            await backend.call_tool(
-                "browser_snapshot", {"target": ".simplify-jobs-shadow-root"}
-            )
+            await backend.call_tool("browser_snapshot", {"target": ".simplify-jobs-shadow-root"})
         )
         m = re.search(r"### Snapshot\s*```yaml(.*?)```", snap, re.S)
         print("=== SIMPLIFY SHADOW ROOT ON JOB PAGE ===")

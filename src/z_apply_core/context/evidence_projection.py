@@ -232,9 +232,7 @@ def _truncation_marker(
     """
     omitted = [entry for entry in classified if entry[0] not in tier_of_selected]
     dropped_controls = [
-        (index, line)
-        for index, line, tier_of in reversed(omitted)
-        if tier_of == "interactive"
+        (index, line) for index, line, tier_of in reversed(omitted) if tier_of == "interactive"
     ]
     dropped_headings = [
         (index, line)

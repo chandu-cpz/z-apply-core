@@ -82,9 +82,7 @@ class DelegationResultMiddleware(AgentMiddleware[AgentState[ResponseT], ContextT
             return await handler(request)
 
         arguments = request.tool_call.get("args", {})
-        subagent_type = (
-            arguments.get("subagent_type") if isinstance(arguments, dict) else None
-        )
+        subagent_type = arguments.get("subagent_type") if isinstance(arguments, dict) else None
         result = await handler(request)
         if subagent_type != self._role or not isinstance(result, ToolMessage):
             return result

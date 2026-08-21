@@ -10,6 +10,7 @@ from z_apply_core.agents.orchestrator import (
     _resume_profile_facts,
     build_orchestrator_middleware,
 )
+from z_apply_core.agents.stage_timing import unwrap_stage_timing
 from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.evidence_store import EvidenceStore
 from z_apply_core.context.run_context import RunContext
@@ -50,7 +51,7 @@ def _build(
 
 
 def test_chain_order_metric_outermost(tmp_path: Path) -> None:
-    chain = _build(tmp_path)
+    chain = [unwrap_stage_timing(m) for m in _build(tmp_path)]
     # CapabilityContext must be outermost so evidence is injected before TokenMetric measures
     assert isinstance(chain[0], CapabilityContextMiddleware)
     assert isinstance(chain[1], TokenMetricMiddleware)
@@ -62,7 +63,7 @@ def test_serializer_uses_shared_mutation_lock(tmp_path: Path) -> None:
     import asyncio
 
     lock = asyncio.Lock()
-    chain = _build(tmp_path, mutation_lock=lock)
+    chain = [unwrap_stage_timing(m) for m in _build(tmp_path, mutation_lock=lock)]
     serializer = next(
         middleware
         for middleware in chain
@@ -73,7 +74,7 @@ def test_serializer_uses_shared_mutation_lock(tmp_path: Path) -> None:
 
 def test_token_metric_and_capability_carry_run_context(tmp_path: Path) -> None:
     run_context = RunContext(run_id="test")
-    chain = _build(tmp_path, run_context=run_context)
+    chain = [unwrap_stage_timing(m) for m in _build(tmp_path, run_context=run_context)]
     assert chain[0]._run_context is run_context
     assert chain[1]._run_context is run_context
     # TokenMetric after CapabilityContext so estimate includes injected evidence
@@ -84,7 +85,10 @@ def test_token_metric_and_capability_carry_run_context(tmp_path: Path) -> None:
 def test_capability_context_carries_wiring(tmp_path: Path) -> None:
     run_context = RunContext(run_id="test")
     evidence_store = EvidenceStore(tmp_path)
-    chain = _build(tmp_path, run_context=run_context, evidence_store=evidence_store)
+    chain = [
+        unwrap_stage_timing(m)
+        for m in _build(tmp_path, run_context=run_context, evidence_store=evidence_store)
+    ]
     capability = next(
         middleware for middleware in chain if isinstance(middleware, CapabilityContextMiddleware)
     )

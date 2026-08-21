@@ -112,7 +112,10 @@ class GatewayResolutionTests(unittest.TestCase):
 
     def test_default_models_come_from_the_table(self) -> None:
         expected = {
-            "opengateway": ("inclusionai/ling-3.0-flash:free", "https://opengateway.gitlawb.com/v1"),
+            "opengateway": (
+                "inclusionai/ling-3.0-flash:free",
+                "https://opengateway.gitlawb.com/v1",
+            ),
             "groq": ("qwen/qwen3.6-27b", "https://api.groq.com/openai/v1"),
             "orca": ("qwen/qwen3.8-27b-free", "https://api.orcarouter.ai/v1"),
             "agnes": ("agnes-2.0-flash", "https://apihub.agnes-ai.com/v1"),
@@ -555,4 +558,3 @@ class AgnesMessageCompatTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

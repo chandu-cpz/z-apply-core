@@ -92,6 +92,7 @@ _JOB_TITLE_SEPARATORS = (" | ", " – ", " — ", " - ")
 
 def _metadata_reporter(run: _Run) -> Callable[[str, str, str | None], None]:
     """Bind the orchestrator's report_job_metadata tool to one run's live view."""
+
     def report(company: str, role: str, location: str | None = None) -> None:
         run.view = replace(run.view, company=company, role=role)
 
@@ -332,9 +333,7 @@ class CoreRunHandle:
     async def set_reasoning(
         self, reasoning: str, reasoning_effort: str | None = None
     ) -> CoreRunView:
-        return await self._service.set_run_reasoning(
-            self._run_id, reasoning, reasoning_effort
-        )
+        return await self._service.set_run_reasoning(self._run_id, reasoning, reasoning_effort)
 
 
 class ZApplyCore:
@@ -505,7 +504,11 @@ class ZApplyCore:
         focused = None
         if self._focused_run_id is not None:
             focused = self._workspace.lease(self._focused_run_id)
-        if focused is not None and focused.live_view is not None and focused.live_view.port is not None:
+        if (
+            focused is not None
+            and focused.live_view is not None
+            and focused.live_view.port is not None
+        ):
             return CoreLiveView(
                 True,
                 "127.0.0.1",
@@ -550,14 +553,14 @@ class ZApplyCore:
         run = self._require_run(run_id)
         if run.view.status is RunStatus.TERMINAL:
             raise InvalidRunTransition("terminal runs cannot switch model")
-        resolved_model = model or (
-            GATEWAYS[provider].default_model if provider in GATEWAYS else ""
-        )
+        resolved_model = model or (GATEWAYS[provider].default_model if provider in GATEWAYS else "")
         if run.provider is None:
             run.provider = get_model_gateway(provider, model)
         else:
             run.provider.switch(provider, model)
-        run.view = replace(run.view, current_model=resolved_model or None, current_provider=provider)
+        run.view = replace(
+            run.view, current_model=resolved_model or None, current_provider=provider
+        )
         await self._emit(
             run,
             "model.switched",

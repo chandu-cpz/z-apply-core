@@ -208,9 +208,7 @@ GATEWAYS: dict[str, Gateway] = {
     ),
     "opencodego": Gateway(
         name="opencodego",
-        description=(
-            "opencode Zen gateway (opencode.ai/zen/go/v1); mimo-v2.5 by default"
-        ),
+        description=("opencode Zen gateway (opencode.ai/zen/go/v1); mimo-v2.5 by default"),
         base_url="https://opencode.ai/zen/go/v1",
         env_key="OPENCODEGO_API_KEY",
         settings_attr="opencodego_api_key",

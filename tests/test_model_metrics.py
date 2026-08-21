@@ -40,7 +40,6 @@ def test_extract_cost_returns_none_when_field_absent() -> None:
     assert extract_cost(response) is None
 
 
-
 def test_extract_usage_tokens_reads_chatopenai_keys() -> None:
     response = ModelResponse(
         result=[

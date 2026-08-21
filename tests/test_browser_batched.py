@@ -72,9 +72,7 @@ class BatchSchemaTests(unittest.TestCase):
                     "steps": [
                         {
                             "action": "fill_form",
-                            "fields": [
-                                {"target": "e1", "value": "x", "element": "textbox"}
-                            ],
+                            "fields": [{"target": "e1", "value": "x", "element": "textbox"}],
                         }
                     ]
                 }
@@ -118,12 +116,8 @@ class BatchSchemaTests(unittest.TestCase):
         self.assertEqual(normalized[1]["fields"][0]["target"], "e34")
 
     def test_press_step_validates_and_passes_through_normalize(self) -> None:
-        model = BrowserBatchArgs.model_validate(
-            {"steps": [{"action": "press", "key": "Enter"}]}
-        )
-        self.assertEqual(
-            model.steps[0].model_dump(), {"action": "press", "key": "Enter"}
-        )
+        model = BrowserBatchArgs.model_validate({"steps": [{"action": "press", "key": "Enter"}]})
+        self.assertEqual(model.steps[0].model_dump(), {"action": "press", "key": "Enter"})
 
         from z_apply_core.browser_tools import normalize_browser_arguments
 
@@ -193,9 +187,7 @@ class BatchSchemaTests(unittest.TestCase):
     def test_nonetype_string_target_is_not_blank(self) -> None:
         from z_apply_core.browser_tools import normalize_browser_arguments
 
-        normalized = normalize_browser_arguments(
-            {"action": "snapshot", "target": "NoneType"}
-        )
+        normalized = normalize_browser_arguments({"action": "snapshot", "target": "NoneType"})
 
         self.assertEqual(normalized["target"], "NoneType")
 
@@ -248,7 +240,9 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
         *,
         snapshot: str = "snapshot: form open",
     ) -> tuple[BrowserSession, AsyncMock]:
-        async def call_tool(name: str, arguments: object | None = None, *, meta: object = None) -> str:
+        async def call_tool(
+            name: str, arguments: object | None = None, *, meta: object = None
+        ) -> str:
             del meta
             if name == "browser_snapshot":
                 return snapshot
@@ -312,9 +306,7 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
             ]
         )
         press_calls = [
-            call
-            for call in call_tool.await_args_list
-            if call.args[0] == "browser_press_key"
+            call for call in call_tool.await_args_list if call.args[0] == "browser_press_key"
         ]
         self.assertEqual(len(press_calls), 1)
         self.assertEqual(press_calls[0].args[1], {"key": "Enter"})
@@ -368,7 +360,9 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_stopped_batch_returns_error_status_without_stamp(self) -> None:
-        async def call_tool(name: str, arguments: object | None = None, *, meta: object = None) -> str:
+        async def call_tool(
+            name: str, arguments: object | None = None, *, meta: object = None
+        ) -> str:
             del meta
             if name == "browser_click" and arguments and arguments.get("target") == "eBAD":
                 raise RuntimeError("actionability: element detached")
@@ -380,7 +374,9 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
             call_tool=AsyncMock(side_effect=call_tool),
             _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
         )
-        session = BrowserSession(None, run_id="batched-stop", backend=backend, tools=[], owns_backend=False)
+        session = BrowserSession(
+            None, run_id="batched-stop", backend=backend, tools=[], owns_backend=False
+        )
         session._last_snapshot = "snapshot: v1"
         session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
         tool = make_batched_tool(
@@ -412,7 +408,9 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
         session._is_file_upload_trigger = AsyncMock(  # type: ignore[method-assign]
             side_effect=lambda arguments: arguments.get("target") == "eUpload"
         )
-        with self.assertRaisesRegex(BrowserToolExecutionError, "Native file chooser click rejected"):
+        with self.assertRaisesRegex(
+            BrowserToolExecutionError, "Native file chooser click rejected"
+        ):
             await session.run_action_batch(
                 [
                     {"action": "click", "target": "e1"},
@@ -456,7 +454,9 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_tool.await_count, 2)
 
     async def test_mid_batch_failure_preserves_earlier_steps_and_raises(self) -> None:
-        async def call_tool(name: str, arguments: object | None = None, *, meta: object = None) -> str:
+        async def call_tool(
+            name: str, arguments: object | None = None, *, meta: object = None
+        ) -> str:
             del meta
             if name == "browser_click" and arguments and arguments.get("target") == "eBAD":
                 raise RuntimeError("boom")
@@ -468,7 +468,9 @@ class BrowserBatchExecutionTests(unittest.IsolatedAsyncioTestCase):
             call_tool=AsyncMock(side_effect=call_tool),
             _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
         )
-        session = BrowserSession(None, run_id="batched-stop2", backend=backend, tools=[], owns_backend=False)
+        session = BrowserSession(
+            None, run_id="batched-stop2", backend=backend, tools=[], owns_backend=False
+        )
         session._last_snapshot = "snapshot: v1"
         session._is_file_upload_trigger = AsyncMock(return_value=False)  # type: ignore[method-assign]
         with self.assertRaisesRegex(BrowserToolExecutionError, "stopped_at: 2"):
@@ -530,12 +532,16 @@ class BatchWiringTests(unittest.TestCase):
             call_tool=AsyncMock(return_value="ok"),
             _ensure_tab=AsyncMock(return_value=SimpleNamespace(page=MagicMock())),
         )
-        session = BrowserSession(None, run_id="wiring", backend=backend, tools=[], owns_backend=False)
+        session = BrowserSession(
+            None, run_id="wiring", backend=backend, tools=[], owns_backend=False
+        )
         return _agent_browser_tools(session)
 
     def test_batch_mode_exposes_batched_tool_without_legacy_mutations(self) -> None:
         with patch("z_apply_core.nodes.setup_browser.load_settings") as settings:
-            settings.return_value = SimpleNamespace(browser_batch_tools=True, default_resume_path=Path("/tmp/resume.pdf"))
+            settings.return_value = SimpleNamespace(
+                browser_batch_tools=True, default_resume_path=Path("/tmp/resume.pdf")
+            )
             names = {getattr(tool, "name", "") for tool in self._session_tools()}
         self.assertIn("browser_batched", names)
         self.assertNotIn("browser_navigate", names)
@@ -546,7 +552,9 @@ class BatchWiringTests(unittest.TestCase):
 
     def test_legacy_mode_restores_legacy_mutations(self) -> None:
         with patch("z_apply_core.nodes.setup_browser.load_settings") as settings:
-            settings.return_value = SimpleNamespace(browser_batch_tools=False, default_resume_path=Path("/tmp/resume.pdf"))
+            settings.return_value = SimpleNamespace(
+                browser_batch_tools=False, default_resume_path=Path("/tmp/resume.pdf")
+            )
             names = {getattr(tool, "name", "") for tool in self._session_tools()}
         self.assertNotIn("browser_batched", names)
         self.assertIn("browser_observe", names)

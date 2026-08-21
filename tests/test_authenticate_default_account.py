@@ -63,13 +63,13 @@ LOGIN_PAGE = "\n".join(
     [
         "- document [ref=e1]:",
         "  - main [ref=e4]:",
-        "    - heading \"Login to your account\" [level=1] [ref=e40]",
-        "    - textbox \"Email Address\" [ref=e70]:",
+        '    - heading "Login to your account" [level=1] [ref=e40]',
+        '    - textbox "Email Address" [ref=e70]:',
         "      - /placeholder: Email Address",
-        "    - textbox \"Password\" [ref=e78]",
+        '    - textbox "Password" [ref=e78]',
         "    - iframe [ref=e81]:",
         "      - text: protected by",
-        "    - button \"Sign in\" [ref=e92] [cursor=pointer]",
+        '    - button "Sign in" [ref=e92] [cursor=pointer]',
     ]
 )
 
@@ -77,8 +77,8 @@ JOB_PAGE = "\n".join(
     [
         "- document [ref=j1]:",
         "  - main [ref=j4]:",
-        "    - heading \"Associate-Software-Developer\" [level=1] [ref=j40]",
-        "    - button \"Apply\" [ref=j92] [cursor=pointer]",
+        '    - heading "Associate-Software-Developer" [level=1] [ref=j40]',
+        '    - button "Apply" [ref=j92] [cursor=pointer]',
     ]
 )
 
@@ -86,9 +86,9 @@ WELCOME_PAGE = "\n".join(
     [
         "- document [ref=w1]:",
         "  - main [ref=w4]:",
-        "    - heading \"Welcome\" [level=1] [ref=w40]",
-        "    - heading \"Your job search\" [level=2] [ref=w41]",
-        "    - link \"Saved jobs\" [ref=w50] [cursor=pointer]:",
+        '    - heading "Welcome" [level=1] [ref=w40]',
+        '    - heading "Your job search" [level=2] [ref=w41]',
+        '    - link "Saved jobs" [ref=w50] [cursor=pointer]:',
         "      - /url: /dashboard/saved",
     ]
 )

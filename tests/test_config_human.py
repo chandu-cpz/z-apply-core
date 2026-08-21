@@ -295,7 +295,9 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
     async def test_run_artifacts_are_sent_in_the_bound_topic(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            channel = TelegramHumanChannel(token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs")
+            channel = TelegramHumanChannel(
+                token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs"
+            )
             bot = FakeBot()
             channel.bot = bot  # type: ignore[assignment]
             channel._app = SimpleNamespace()
@@ -317,7 +319,9 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
     async def test_artifacts_outside_the_runs_root_are_not_sent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            channel = TelegramHumanChannel(token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs")
+            channel = TelegramHumanChannel(
+                token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs"
+            )
             bot = FakeBot()
             channel.bot = bot  # type: ignore[assignment]
             channel._app = SimpleNamespace()
@@ -421,7 +425,9 @@ class TelegramHumanChannelTests(unittest.IsolatedAsyncioTestCase):
     async def test_captcha_image_is_attached_and_created_topics_are_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            channel = TelegramHumanChannel(token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs")
+            channel = TelegramHumanChannel(
+                token="token", chat_id="-100", artifact_root=root / ".z-apply" / "runs"
+            )
             bot = FakeBot()
             channel.bot = bot  # type: ignore[assignment]
             channel._app = SimpleNamespace()

@@ -350,9 +350,7 @@ class ModelRouter(AgentMiddleware[AgentState[ResponseT], ContextT, ResponseT]):
         # Role output ceiling: bind max_tokens per call (clients are cached and
         # shared across roles, so the cap cannot live in the client itself).
         capped_llm = (
-            llm.bind(max_tokens=self._policy["max_tokens"])
-            if "max_tokens" in self._policy
-            else llm
+            llm.bind(max_tokens=self._policy["max_tokens"]) if "max_tokens" in self._policy else llm
         )
         call_request = request.override(model=capped_llm)  # type: ignore[arg-type]
         input_tokens_estimate = estimate_messages_tokens(call_request.messages)

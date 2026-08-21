@@ -60,10 +60,21 @@ def _dummy(name: str):
 
 
 BROWSER_TOOLS = [
-    "browser_batched", "browser_click", "browser_click_upload", "browser_evaluate",
-    "browser_file_upload", "browser_fill_form", "browser_find", "browser_handle_dialog",
-    "browser_navigate", "browser_revision", "browser_select_option", "browser_snapshot",
-    "browser_tabs", "browser_type", "browser_wait_for",
+    "browser_batched",
+    "browser_click",
+    "browser_click_upload",
+    "browser_evaluate",
+    "browser_file_upload",
+    "browser_fill_form",
+    "browser_find",
+    "browser_handle_dialog",
+    "browser_navigate",
+    "browser_revision",
+    "browser_select_option",
+    "browser_snapshot",
+    "browser_tabs",
+    "browser_type",
+    "browser_wait_for",
 ]
 
 

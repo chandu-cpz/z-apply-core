@@ -83,7 +83,9 @@ def _read_jobs(path: Path) -> list[dict[str, str]]:
 
 def _http_json(method: str, url: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        url, data=data, method=method, headers={"Content-Type": "application/json"}
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -212,16 +214,21 @@ def main(argv: list[str] | None = None) -> int:
     jobs_file = Path(args.jobs_file)
     state_path = Path(args.state_file)
     state = _load_state(state_path)
-    attempted_by_url = {entry.get("url"): run_id for run_id, entry in state["attempted"].items() if entry.get("url")}
+    attempted_by_url = {
+        entry.get("url"): run_id for run_id, entry in state["attempted"].items() if entry.get("url")
+    }
     forced_once = False
     # Single concurrency authority: the backend's Z_APPLY_MAX_ACTIVE_RUNS
     # (unless the operator overrides with --max-active).
     max_active = args.max_active or _backend_max_active(args.api)
 
-    print(f"continuous: api={args.api} jobs={jobs_file} max_active={max_active} "
-          f"watch={not args.once}")
-    print(f"continuous: total spent so far ${float(state.get('total_cost_usd') or 0.0):.4f} "
-          f"({len(state['attempted'])} runs attempted)")
+    print(
+        f"continuous: api={args.api} jobs={jobs_file} max_active={max_active} watch={not args.once}"
+    )
+    print(
+        f"continuous: total spent so far ${float(state.get('total_cost_usd') or 0.0):.4f} "
+        f"({len(state['attempted'])} runs attempted)"
+    )
 
     while True:
         total = _drain_finished(args.api, state)
@@ -240,7 +247,11 @@ def main(argv: list[str] | None = None) -> int:
         # already in flight.
         if args.resume_interrupted:
             rows = _http_json("GET", f"{args.api}/api/v1/runs?limit=100") or []
-            active_urls_now = {str(r.get("job_url", "")) for r in rows if r.get("status") in ("queued", "starting", "running", "waiting_human")}
+            active_urls_now = {
+                str(r.get("job_url", ""))
+                for r in rows
+                if r.get("status") in ("queued", "starting", "running", "waiting_human")
+            }
             for row in rows:
                 if row.get("outcome") != "interrupted":
                     continue
@@ -279,8 +290,10 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         active = _active_runs(args.api)
-        print(f"continuous: {len(pending)} pending job(s), {len(active)} active run(s) "
-              f"(cost so far ${total:.4f})")
+        print(
+            f"continuous: {len(pending)} pending job(s), {len(active)} active run(s) "
+            f"(cost so far ${total:.4f})"
+        )
         for job in pending:
             if len(_active_runs(args.api)) >= max_active:
                 print("continuous: capacity full; waiting for a slot…")
@@ -291,10 +304,15 @@ def main(argv: list[str] | None = None) -> int:
                 # Transient POST failure: leave the URL pending (do NOT mark it
                 # attempted) so the next interval loop re-tries it. The interval
                 # provides natural backoff.
-                print(f"continuous: failed to start {job['url']}: {exc}; will retry", file=sys.stderr)
+                print(
+                    f"continuous: failed to start {job['url']}: {exc}; will retry", file=sys.stderr
+                )
                 continue
             run_id = str(run.get("id", ""))
-            state["attempted"][run_id] = {"url": job["url"], "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+            state["attempted"][run_id] = {
+                "url": job["url"],
+                "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            }
             attempted_by_url[job["url"]] = run_id
             print(f"continuous: queued {job['url']} -> run {run_id}")
             _save_state(state_path, state)
@@ -306,8 +324,10 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(args.interval)
             total = _drain_finished(args.api, state)
             _save_state(state_path, state)
-            print(f"continuous: batch finished; total spent ${total:.4f} across "
-                  f"{len(state['attempted'])} runs.")
+            print(
+                f"continuous: batch finished; total spent ${total:.4f} across "
+                f"{len(state['attempted'])} runs."
+            )
             return 0
 
         time.sleep(args.interval)

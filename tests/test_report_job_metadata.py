@@ -51,11 +51,14 @@ async def test_report_job_metadata_without_reporter_still_succeeds() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("payload", [
-    {"company": "   ", "role": "Engineer"},
-    {"company": "Acme", "role": ""},
-    {"company": "", "role": ""},
-])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"company": "   ", "role": "Engineer"},
+        {"company": "Acme", "role": ""},
+        {"company": "", "role": ""},
+    ],
+)
 async def test_report_job_metadata_returns_guidance_for_blank_values(
     payload: dict[str, str],
 ) -> None:
@@ -92,15 +95,18 @@ async def test_prompt_instructs_metadata_before_any_filling() -> None:
     assert workflow.index("report_job_metadata") < workflow.index("Autofill this page")
 
 
-@pytest.mark.parametrize("title, expected", [
-    ("Senior Engineer | Acme Corp", ("Senior Engineer", "Acme Corp")),
-    ("Senior Engineer – Acme Corp", ("Senior Engineer", "Acme Corp")),
-    ("Senior Engineer — Acme Corp", ("Senior Engineer", "Acme Corp")),
-    ("Senior Engineer - Acme Corp", ("Senior Engineer", "Acme Corp")),
-    ("Full-Stack Engineer | Acme Corp", ("Full-Stack Engineer", "Acme Corp")),
-    ("Just A Page Title", None),
-    ("Role |   ", None),
-])
+@pytest.mark.parametrize(
+    "title, expected",
+    [
+        ("Senior Engineer | Acme Corp", ("Senior Engineer", "Acme Corp")),
+        ("Senior Engineer – Acme Corp", ("Senior Engineer", "Acme Corp")),
+        ("Senior Engineer — Acme Corp", ("Senior Engineer", "Acme Corp")),
+        ("Senior Engineer - Acme Corp", ("Senior Engineer", "Acme Corp")),
+        ("Full-Stack Engineer | Acme Corp", ("Full-Stack Engineer", "Acme Corp")),
+        ("Just A Page Title", None),
+        ("Role |   ", None),
+    ],
+)
 def test_role_company_from_title(title: str, expected: tuple[str, str] | None) -> None:
     assert _role_company_from_title(title) == expected
 

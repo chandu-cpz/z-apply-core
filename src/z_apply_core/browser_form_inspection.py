@@ -36,6 +36,9 @@ UNNAMED_CONTROL = "unnamed control"
 
 
 async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
+    import time as _time
+
+    started = _time.monotonic()
     controls = await _visible_enabled(page.locator(CONTROL_SELECTOR))
     unresolved = 0
     unresolved_names: list[str] = []
@@ -97,6 +100,8 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
         enabled_form_submit_visible=enabled_submit > 0,
         disabled_form_submit_visible=disabled_submit > 0,
         visual_only_surface_visible=visual_only,
+        inspection_ms=int((_time.monotonic() - started) * 1000),
+        controls_scanned=len(controls),
     )
 
 

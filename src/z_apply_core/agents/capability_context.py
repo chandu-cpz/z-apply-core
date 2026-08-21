@@ -61,6 +61,30 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         self._evidence_store = evidence_store
         self._last_injected_revision: int | None = None
         self._last_playbook_text: str | None = None
+        self._last_capabilities_signature: str | None = None
+
+    def _note_capabilities(self, capabilities: Any) -> bool:
+        """Record whether the capability snapshot changed since the last turn.
+
+        DEC-010 cache-invalidation capture: capability thrash across turns is a
+        candidate explanation for repeated slow inspections and contradictory
+        agent context; the flag lands in the injected context where the run's
+        persistence already captures it.
+        """
+        if capabilities is None:
+            return False
+        signature = (
+            f"{capabilities.editable_controls_visible}|{capabilities.unresolved_required_controls}"
+            f"|{capabilities.invalid_controls}|{capabilities.auth_gate_visible}"
+            f"|{capabilities.empty_file_upload_present}|{capabilities.required_file_upload_pending}"
+            f"|{capabilities.enabled_form_submit_visible}|{capabilities.disabled_form_submit_visible}"
+            f"|{capabilities.visual_only_surface_visible}"
+        )
+        changed = self._last_capabilities_signature is not None and (
+            signature != self._last_capabilities_signature
+        )
+        self._last_capabilities_signature = signature
+        return changed
 
     async def awrap_model_call(
         self,
@@ -75,6 +99,13 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
             capabilities = await browser.inspect_capabilities()
         except Exception:
             capabilities = None
+        changed = self._note_capabilities(capabilities)
+        if capabilities is not None and capabilities.inspection_ms >= 1000:
+            logger.warning(
+                "capability inspection slow: %dms for %d controls",
+                capabilities.inspection_ms,
+                capabilities.controls_scanned,
+            )
 
         pending_upload_target = browser.pending_atomic_upload_target
         tools = self._filter_tools(
@@ -154,6 +185,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
             content=(
                 "CURRENT BROWSER ACTION CONTEXT\n"
                 f"browser_revision={revision}\n"
+                f"capabilities_changed={str(changed).lower()}\n"
                 f"{capabilities.render() if capabilities is not None else 'capability_inspection=unavailable'}\n"
                 f"available_tools={available or '(none)'}\n"
                 f"{upload_context}"

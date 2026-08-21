@@ -38,6 +38,10 @@ class BrowserCapabilities:
     disabled_form_submit_visible: bool = False
     visual_only_surface_visible: bool = False
     unresolved_names: tuple[str, ...] = ()
+    # DEC-010 observability: cost + coverage of the inspection that produced
+    # this snapshot. Defaults keep hand-built test instances valid.
+    inspection_ms: int = 0
+    controls_scanned: int = 0
 
     def render(self) -> str:
         unresolved_line = f"unresolved_required_controls={self.unresolved_required_controls}"

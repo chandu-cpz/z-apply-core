@@ -250,8 +250,7 @@ def normalize_browser_arguments(
         for field in normalized.get("fields") or []
     ):
         raise ToolException(
-            "fill_form step has a field with an empty target; "
-            "pass a ref/CSS selector per field."
+            "fill_form step has a field with an empty target; pass a ref/CSS selector per field."
         )
     if action == "snapshot":
         # Omitted and blank targets both mean full page; only an explicit
@@ -459,9 +458,7 @@ class PressStep(_BatchStep):
     def _drop_stray_target_keys(cls, data: Any) -> Any:
         if isinstance(data, dict):
             return {
-                key: value
-                for key, value in data.items()
-                if key not in {"ref", "target", "element"}
+                key: value for key, value in data.items() if key not in {"ref", "target", "element"}
             }
         return data
 
@@ -625,8 +622,7 @@ def make_batched_tool(
         if not isinstance(steps, list):
             raise ToolException("browser_batched requires a list of action steps.")
         raw_steps = [
-            step.model_dump() if hasattr(step, "model_dump") else dict(step)
-            for step in steps
+            step.model_dump() if hasattr(step, "model_dump") else dict(step) for step in steps
         ]
         try:
             result = await runner(raw_steps)
@@ -661,7 +657,6 @@ def make_batched_tool(
         infer_schema=False,
         handle_tool_error=True,
     )
-
 
 
 def make_click_upload_tool(

@@ -180,12 +180,18 @@ async def test_browser_workspace_opens_per_run_instances_from_the_pool(tmp_path:
     ]
     backends = [object(), object()]
     servers = [
-        SimpleNamespace(backend_pool=SimpleNamespace(tools=(), backend_for=AsyncMock(return_value=backends[0]))),
-        SimpleNamespace(backend_pool=SimpleNamespace(tools=(), backend_for=AsyncMock(return_value=backends[1]))),
+        SimpleNamespace(
+            backend_pool=SimpleNamespace(tools=(), backend_for=AsyncMock(return_value=backends[0]))
+        ),
+        SimpleNamespace(
+            backend_pool=SimpleNamespace(tools=(), backend_for=AsyncMock(return_value=backends[1]))
+        ),
     ]
     launcher_calls = []
 
-    async def fake_launcher(run_id: str, profile_dir: Path, display: str | None = None) -> tuple[Any, Any, Any]:
+    async def fake_launcher(
+        run_id: str, profile_dir: Path, display: str | None = None
+    ) -> tuple[Any, Any, Any]:
         launcher_calls.append((run_id, profile_dir))
         idx = len(launcher_calls) - 1
         return servers[idx], backends[idx], contexts[idx]
@@ -194,9 +200,11 @@ async def test_browser_workspace_opens_per_run_instances_from_the_pool(tmp_path:
     (master / "storage" / "default" / "moz-extension+++addon-1").mkdir(parents=True)
     (master / "extensions").mkdir()
     (master / "extensions" / "sabre@simplify.jobs.xpi").write_bytes(b"xpi")
-    (master / "extensions.json").write_text(json.dumps({
-        "addons": [{"id": "sabre@simplify.jobs", "active": True, "location": "app-profile"}]
-    }))
+    (master / "extensions.json").write_text(
+        json.dumps(
+            {"addons": [{"id": "sabre@simplify.jobs", "active": True, "location": "app-profile"}]}
+        )
+    )
     (master / "prefs.js").write_text("user_pref('x', true);")
     (master / "cookies.sqlite").write_bytes(b"cookies")
 

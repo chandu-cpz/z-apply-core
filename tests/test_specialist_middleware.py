@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 from z_apply_core.agents.browser_mutation_serializer import SerializeBrowserMutationsMiddleware
 from z_apply_core.agents.specialists import build_specialists
+from z_apply_core.agents.stage_timing import unwrap_stage_timing
 
 
 async def _specialist_chains(lock: asyncio.Lock) -> list[list[object]]:
@@ -38,9 +39,11 @@ class SpecialistMutationLockWiring(unittest.IsolatedAsyncioTestCase):
         ):
             with self.subTest(role=role):
                 serializers = [
-                    middleware
+                    unwrap_stage_timing(middleware)
                     for middleware in chain
-                    if isinstance(middleware, SerializeBrowserMutationsMiddleware)
+                    if isinstance(
+                        unwrap_stage_timing(middleware), SerializeBrowserMutationsMiddleware
+                    )
                 ]
                 self.assertEqual(len(serializers), 1)
                 self.assertIs(serializers[0]._mutation_lock, lock)

@@ -100,7 +100,9 @@ def _bake_simplify_xpi(profile_dir: Path, addon_dir: Path) -> Path:
     with zipfile.ZipFile(xpi, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(addon_dir.rglob("*")):
             if path.is_file():
-                info = zipfile.ZipInfo(str(path.relative_to(addon_dir)), date_time=(2020, 1, 1, 0, 0, 0))
+                info = zipfile.ZipInfo(
+                    str(path.relative_to(addon_dir)), date_time=(2020, 1, 1, 0, 0, 0)
+                )
                 info.compress_type = zipfile.ZIP_DEFLATED
                 archive.writestr(info, path.read_bytes())
     logger.info("baked Simplify sideload: %s", xpi)
@@ -179,8 +181,12 @@ def _verify_addons(profile_dir: Path) -> list[str]:
 async def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dir", default=str(CORE_ROOT / ".z-apply" / "browser-profile.new"))
-    parser.add_argument("--from", dest="seed_from", default=None,
-                        help="existing profile to seed from (keeps login session + baked consent)")
+    parser.add_argument(
+        "--from",
+        dest="seed_from",
+        default=None,
+        help="existing profile to seed from (keeps login session + baked consent)",
+    )
     parser.add_argument("--wait-for", default="/tmp/z-apply-provision-done")
     parser.add_argument("--timeout", type=int, default=1800)
     args = parser.parse_args()
@@ -208,7 +214,9 @@ async def main() -> int:
 
     from playwright_python_mcp.mcp import create_connection
 
-    logger.info("launching provisioning browser on %s (DISPLAY=%s)", profile_dir, os.environ["DISPLAY"])
+    logger.info(
+        "launching provisioning browser on %s (DISPLAY=%s)", profile_dir, os.environ["DISPLAY"]
+    )
     server = await create_connection(config)
     backend = await server.backend_pool.backend_for("__provision__")
     await backend._ensure_context(cwd=Path.cwd(), roots=None)
@@ -249,10 +257,18 @@ async def main() -> int:
             )
 
     manifest = _seal(profile_dir)
-    logger.info("SEALED %s — %d file(s), %d addon storage dir(s)",
-                profile_dir, len(manifest["files"]), len(
-                    [p for p in profile_dir.rglob("storage/default/*") if p.name.startswith("moz-extension")]
-                ))
+    logger.info(
+        "SEALED %s — %d file(s), %d addon storage dir(s)",
+        profile_dir,
+        len(manifest["files"]),
+        len(
+            [
+                p
+                for p in profile_dir.rglob("storage/default/*")
+                if p.name.startswith("moz-extension")
+            ]
+        ),
+    )
     return 0
 
 
