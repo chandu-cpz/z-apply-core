@@ -118,7 +118,7 @@ class GatewayResolutionTests(unittest.TestCase):
             "agnes": ("agnes-2.0-flash", "https://apihub.agnes-ai.com/v1"),
             "inferx": ("deepseek-v4-flash-0731", "https://model.inferx.net/endpoints/v1"),
             "opencodego": (
-                "muse-spark-1.2-contributor",
+                "mimo-v2.5",
                 "https://opencode.ai/zen/go/v1",
             ),
         }
@@ -155,13 +155,16 @@ class ClientCachingTests(unittest.TestCase):
 
     def _gateway(self, name: str = "groq") -> ModelGateway:
         gw = GATEWAYS[name]
-        return ModelGateway(
+        gateway = ModelGateway(
             gateway=gw,
             api_key="k",
             model=gw.default_model,
             default_thinking=True,
             default_effort=None,
         )
+        # Per-call effort only steers client choice in auto mode.
+        gateway.set_reasoning("auto")
+        return gateway
 
     def test_same_config_returns_same_client(self) -> None:
         gateway = self._gateway()
@@ -207,7 +210,11 @@ class ThinkingDialectTests(unittest.TestCase):
             "default_effort": None,
         }
         params.update(overrides)
-        return ModelGateway(**params)  # type: ignore[arg-type]
+        gateway = ModelGateway(**params)  # type: ignore[arg-type]
+        # Dialect tests exercise the auto path (role policy drives the wire);
+        # the product default is now "on"/"high".
+        gateway.set_reasoning("auto")
+        return gateway
 
     def test_agnes_chat_template_kwargs(self) -> None:
         llm = self._gateway("agnes").get_model()
@@ -278,6 +285,19 @@ class ThinkingDialectTests(unittest.TestCase):
         gateway = self._gateway("opencodego", default_thinking=False)
         with patch.dict("os.environ", {"OPENCODEGO_THINKING": "1"}, clear=False):
             extra = dict(gateway.get_model().extra_body or {})
+        self.assertEqual(extra.get("thinking"), {"type": "enabled"})
+        self.assertEqual(extra.get("reasoning_effort"), "high")
+
+    def test_new_gateway_defaults_to_thinking_on_high(self) -> None:
+        gw = GATEWAYS["opencodego"]
+        gateway = ModelGateway(
+            gateway=gw,
+            api_key="k",
+            model=gw.default_model,
+            default_thinking=False,
+            default_effort=None,
+        )
+        extra = dict(gateway.get_model().extra_body or {})
         self.assertEqual(extra.get("thinking"), {"type": "enabled"})
         self.assertEqual(extra.get("reasoning_effort"), "high")
 
