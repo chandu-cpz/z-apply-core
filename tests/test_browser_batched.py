@@ -129,6 +129,36 @@ class BatchSchemaTests(unittest.TestCase):
             with self.assertRaisesRegex(ToolException, "empty target"):
                 normalize_browser_arguments({"action": "snapshot", "target": blank})
 
+    def test_none_literal_snapshot_step_target_is_rejected(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        for literal in ("None", "null", "NULL", " None "):
+            with self.assertRaisesRegex(ToolException, "empty target"):
+                normalize_browser_arguments({"action": "snapshot", "target": literal})
+
+    def test_none_literal_fill_form_field_target_is_rejected(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        with self.assertRaisesRegex(ToolException, "empty target"):
+            normalize_browser_arguments(
+                {
+                    "action": "fill_form",
+                    "fields": [
+                        {"target": "e1", "value": "x"},
+                        {"target": "None", "value": "y"},
+                    ],
+                }
+            )
+
+    def test_nonetype_string_target_is_not_blank(self) -> None:
+        from z_apply_core.browser_tools import normalize_browser_arguments
+
+        normalized = normalize_browser_arguments(
+            {"action": "snapshot", "target": "NoneType"}
+        )
+
+        self.assertEqual(normalized["target"], "NoneType")
+
     def test_snapshot_step_without_target_stays_full_page(self) -> None:
         from z_apply_core.browser_tools import normalize_browser_arguments
 

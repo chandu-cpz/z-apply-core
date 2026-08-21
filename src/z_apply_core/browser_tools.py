@@ -188,6 +188,18 @@ RECEIPT_RESULT_TOOL_NAMES = frozenset(
 )
 
 
+def _is_blank_target(value: Any) -> bool:
+    """True for empty strings and Python-style ``None``/``null`` literals.
+
+    Models sometimes emit ``{"target": "None"}`` instead of omitting the key;
+    those strings would otherwise reach the backend as a bogus selector.
+    """
+    if not isinstance(value, str):
+        return False
+    stripped = value.strip()
+    return not stripped or stripped.casefold() in {"none", "null"}
+
+
 def normalize_browser_arguments(
     arguments: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
@@ -229,11 +241,19 @@ def normalize_browser_arguments(
         raise ToolException(
             "fill_form step has an empty fields list; name at least one field target."
         )
+    if action == "fill_form" and any(
+        isinstance(field, Mapping) and _is_blank_target(field.get("target"))
+        for field in normalized.get("fields") or []
+    ):
+        raise ToolException(
+            "fill_form step has a field with an empty target; "
+            "pass a ref/CSS selector per field."
+        )
     if action == "snapshot":
         requested = (arguments or {}).get("target")
         if requested is None:
             requested = (arguments or {}).get("ref")
-        if isinstance(requested, str) and not requested.strip():
+        if _is_blank_target(requested):
             raise ToolException(
                 "snapshot step has an empty target; omit target for full page "
                 "or pass a ref/CSS selector."
