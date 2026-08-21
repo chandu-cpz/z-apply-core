@@ -16,8 +16,7 @@ def default_owner_values() -> dict[str, str]:
     """Map the browser-layer redaction names to the real owner identity.
 
     Only the fixed owner credentials known at build time are returned; empty
-    values are filtered out. ``load_settings`` is lru-cached by ``config``,
-    so this resolves the settings once per process.
+    values are filtered out.
     """
     settings = load_settings()
     return {

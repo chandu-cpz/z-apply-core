@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from functools import lru_cache
 from pathlib import Path
 
 from pydantic import Field
@@ -87,6 +86,7 @@ class Settings(BaseSettings):
         return bool(self.telegram_bot_token and self.telegram_group_chat_id)
 
 
-@lru_cache
+# Deliberately uncached: each call re-reads env + .env so edits show up
+# without a process restart.
 def load_settings() -> Settings:
     return Settings()

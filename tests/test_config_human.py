@@ -106,7 +106,6 @@ class SettingsTests(unittest.TestCase):
                 "TELEGRAM_GROUP_CHAT_ID": "-100",
             },
         ):
-            load_settings.cache_clear()
             settings = load_settings()
 
         self.assertTrue(settings.has_default_credentials)
