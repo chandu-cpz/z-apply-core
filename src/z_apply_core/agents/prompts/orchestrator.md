@@ -34,7 +34,9 @@ Navigate to the target job application URLs, execute required autofill sequences
    - Complex Inputs & Typeahead Comboboxes: For custom dropdowns with searchable typeahead (e.g., city/location fields): click or type into the combobox ref, `wait_for` the option text to appear, then take a fresh scoped snapshot — if the option now has a ref, click it by ref; otherwise use keyboard select (press ArrowDown to highlight, then Enter). NEVER synthesize option clicks with `browser_evaluate` — synthetic events do not commit typeahead selections.
 
 5. Masked Fields
-   - Do not assume masked inputs (e.g., password-style fields or hidden attributes) contain valid user data. Inspect and populate them explicitly if required.
+   - Secret-mask tokens are POSITIVE fill evidence, never a gap. A snapshot token of the form `<secret name="DEFAULT_USERNAME" length="17"/>` (legacy shape: `<secret>DEFAULT_USERNAME</secret>`) means the control is ALREADY filled with the named configured owner credential, verified by the browser layer without exposing the value. The `length` attribute is the value's character count so you can sanity-check plausibility without seeing content.
+   - For such tokens: do NOT retype the field, do NOT trigger a human ask, and do NOT treat it as empty. Retyping a filled field risks desyncing confirm-pairs (e.g. Email vs Confirm email).
+   - Only genuinely masked inputs with NO known name (password-style dots or hidden attributes not carrying a secret-mask token) fall under manual inspection-and-fill.
 </execution_rules>
 
 <application_workflow>

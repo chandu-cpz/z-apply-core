@@ -60,6 +60,28 @@ class SanitizeHumanTextTests(unittest.TestCase):
         )
         self.assertEqual(out, "owner@x.test")
 
+    def test_enriched_token_known_name_is_substituted(self) -> None:
+        out = sanitize_human_text(
+            'Email: <secret name="DEFAULT_USERNAME" length="17"/>',
+            known_values={"DEFAULT_USERNAME": "user@example.test"},
+        )
+        self.assertEqual(out, "Email: user@example.test")
+
+    def test_enriched_token_unknown_name_is_neutralized(self) -> None:
+        settings = SimpleNamespace(default_username="", default_password="")
+        with patch("z_apply_core.human.sanitize.load_settings", return_value=settings):
+            out = sanitize_human_text('field: <secret name="BOGUS" length="3"/>')
+        self.assertNotIn("<secret", out)
+        self.assertNotIn("BOGUS", out)
+        self.assertEqual(out, f"field: {_NEUTRAL_PLACEHOLDER}")
+
+    def test_legacy_and_enriched_tokens_mix(self) -> None:
+        known = {"A": "a@x.test", "B": "b@x.test"}
+        out = sanitize_human_text(
+            '<secret>A</secret> then <secret name="B" length="7"/>', known_values=known
+        )
+        self.assertEqual(out, "a@x.test then b@x.test")
+
     def test_module_exposes_expected_symbols(self) -> None:
         self.assertTrue(callable(sanitize.default_owner_values))
         self.assertTrue(callable(sanitize.sanitize_human_text))
