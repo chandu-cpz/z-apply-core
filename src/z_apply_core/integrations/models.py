@@ -148,8 +148,8 @@ class CoreRunView:
     started_at: datetime | None
     finished_at: datetime | None
     # Runtime reasoning override: "auto"/"off"/"on" plus an optional effort.
-    current_reasoning: str = "auto"
-    current_reasoning_effort: str | None = None
+    current_reasoning: str = "on"
+    current_reasoning_effort: str | None = "high"
 
 
 @dataclass(frozen=True, slots=True)

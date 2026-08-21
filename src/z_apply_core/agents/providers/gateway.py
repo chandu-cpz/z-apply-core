@@ -106,8 +106,8 @@ class ModelGateway:
         # Runtime reasoning override: "auto" keeps the gateway's configured
         # behavior; "off"/"on" force thinking regardless of role policy. The
         # override survives switches so user intent carries over.
-        self._reasoning_mode: str = "auto"
-        self._reasoning_effort: str | None = None
+        self._reasoning_mode: str = "on"
+        self._reasoning_effort: str | None = "high"
         self._clients: dict[tuple[bool, str | None], BaseChatModel] = {}
 
     @property
