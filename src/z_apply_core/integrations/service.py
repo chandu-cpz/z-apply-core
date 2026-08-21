@@ -82,7 +82,9 @@ RETAINED_BROWSER_TTL_SECONDS = 600
 # via REST so high-frequency snapshot payloads stay small.
 SNAPSHOT_SUMMARY_LIMIT = 280
 
-_LIVE_ONLY_EVENTS = frozenset({"agent.message.delta", "model.tool_call.delta", "stream.metrics"})
+_LIVE_ONLY_EVENTS = frozenset(
+    {"agent.message.delta", "model.tool_call.delta", "stream.metrics", "model.phase"}
+)
 
 # Page-title shapes the passive metadata fallback understands: "Role | Company"
 # and "Role – Company" (en/em dash or spaced hyphen). A bare hyphen without
@@ -1222,6 +1224,7 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "model_failed": "model.failed",
         "model_rotated": "model.rotated",
         "model_rate_limited": "model.rate_limited",
+        "model_phase": "model.phase",
         "token_usage": "model.usage",
         "agent_turn": "agent.turn.completed",
         "recovery_started": "recovery.started",
