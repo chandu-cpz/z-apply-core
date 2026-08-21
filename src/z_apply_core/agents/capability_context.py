@@ -62,6 +62,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         self._last_injected_revision: int | None = None
         self._last_playbook_text: str | None = None
         self._last_capabilities_signature: str | None = None
+        self._last_capability_record: dict[str, Any] | None = None
 
     def _note_capabilities(self, capabilities: Any) -> bool:
         """Record whether the capability snapshot changed since the last turn.
@@ -72,7 +73,17 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         persistence already captures it.
         """
         if capabilities is None:
+            self._last_capability_record = None
             return False
+        import hashlib
+
+        rendered = capabilities.render()
+        result_hash = hashlib.sha1(rendered.encode()).hexdigest()[:12]
+        self._last_capability_record = {
+            "result_hash": result_hash,
+            "inspection_ms": capabilities.inspection_ms,
+            "controls_scanned": capabilities.controls_scanned,
+        }
         signature = (
             f"{capabilities.editable_controls_visible}|{capabilities.unresolved_required_controls}"
             f"|{capabilities.invalid_controls}|{capabilities.auth_gate_visible}"
@@ -85,6 +96,32 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         )
         self._last_capabilities_signature = signature
         return changed
+
+    def _log_capability_probe(
+        self,
+        capabilities: Any,
+        revision: int | None,
+        *,
+        injected: bool,
+    ) -> None:
+        """Emit the per-turn tuple OPT-DEC-010's fix designs need.
+
+        H1 memoization keys on (observation signature → capability result hash);
+        H2 sizing reads inspection_ms + control count. One structured line per
+        model call keeps the whole series replayable from run logs.
+        """
+        if capabilities is None:
+            return
+        record = self._last_capability_record or {}
+        logger.info(
+            "capability_probe revision=%s result_hash=%s inspection_ms=%d "
+            "controls_scanned=%d injected=%s",
+            revision,
+            record.get("result_hash", "?"),
+            record.get("inspection_ms", 0),
+            record.get("controls_scanned", 0),
+            injected,
+        )
 
     async def awrap_model_call(
         self,
@@ -117,11 +154,13 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         revision = observation.revision if observation is not None else None
         available = ", ".join(_tool_name(tool) for tool in tools)
         last_carries_evidence = _last_tool_message_carries_revision(request.messages, revision)
-        skip_evidence = (
+        skip_candidate = (
             revision is not None
             and self._last_injected_revision == revision
             and last_carries_evidence
         )
+        skip_evidence = skip_candidate
+        self._log_capability_probe(capabilities, revision, injected=not skip_evidence)
         if skip_evidence:
             if self._evidence_store is not None and observation is not None:
                 self._evidence_store.save(observation)
