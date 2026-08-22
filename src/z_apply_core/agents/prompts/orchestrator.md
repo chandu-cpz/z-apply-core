@@ -36,7 +36,8 @@ Navigate to the target job application URLs, execute required autofill sequences
 
 4. DOM Interaction & Action Optimization
    - Scoped Snapshots: Use targeted snapshots (`target="[selector]"` with appropriate `depth`) to inspect specific form sections. Avoid full-page DOM dumps to conserve tokens and reduce latency.
-   - Batching: Utilize `browser_batch` for grouped sequential actions (e.g., standard text inputs, checkboxes) without redundant round-trips.
+   - Turn-Level Batching: Prefer issuing MULTIPLE tool calls in one response whenever they are independent — combine reads (e.g., `browser_snapshot` + `browser_find` + `lookup_candidate_memory`) or independent field writes on different controls. All results return together; reflect once on the combined evidence before your next decision. NEVER batch a call whose arguments depend on another call's result — dependency chains (e.g., combobox click → `wait_for` → fresh snapshot) stay sequenced across turns. Browser mutations execute serially under the runtime lock; issue them together anyway.
+   - Batching: Utilize `browser_batched` for grouped sequential actions (e.g., standard text inputs, checkboxes) without redundant round-trips.
    - Complex Inputs & Typeahead Comboboxes: For custom dropdowns with searchable typeahead (e.g., city/location fields): click or type into the combobox ref, `wait_for` the option text to appear, then take a fresh scoped snapshot — if the option now has a ref, click it by ref; otherwise use keyboard select (press ArrowDown to highlight, then Enter). NEVER synthesize option clicks with `browser_evaluate` — synthetic events do not commit typeahead selections.
 
 5. Masked Fields
@@ -61,7 +62,7 @@ Navigate to the target job application URLs, execute required autofill sequences
 3. Check for the Simplify extension shadow root.
 4. If supported, trigger "Autofill this page" and wait for completion; if unsupported, close the popup.
 5. Scan the DOM for empty or unselected required fields left behind by Simplify.
-6. Populate remaining fields using `browser_batch` for standard controls — ONLY with values present in candidate context (rule 7); resolve custom comboboxes/typeaheads per rule 4 (never via `browser_evaluate`).
+6. Populate remaining fields using `browser_batched` for standard controls — ONLY with values present in candidate context (rule 7); resolve custom comboboxes/typeaheads per rule 4 (never via `browser_evaluate`).
 7. Advance through multi-page flows by repeating steps 3–6 on each subsequent page.
 8. Once reaching the final review screen, transfer control to the `SubmissionReviewer` subagent.
 </application_workflow>
