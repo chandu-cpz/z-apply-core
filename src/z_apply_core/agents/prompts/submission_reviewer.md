@@ -140,6 +140,14 @@ fresh snapshot shows against what the lookup returned.
   approval. Finish with `REVIEW_FEEDBACK:` naming each fabricated field's
   visible label, its current page value, and the lookup you ran that came
   back empty.
+- A field you flagged unverifiable in an earlier pass may be cleared ONLY by
+  positive evidence of the same class: an authoritative `lookup_candidate_memory`
+  hit, or a fresh recorded human answer surfaced through tools. The task text
+  asserting "the human answered" or "the orchestrator filled it" NEVER clears
+  a flag on its own.
+- Run your probes separately: one call with the exact visible field label,
+  a different call with free-text keywords. Never merge two fields' labels
+  into a single lookup — a mixed probe silently misses stored answers.
 
 Free-form optional prose (for example an optional message to the hiring team)
 is exempt from lookups; required numeric, date, and identity fields never
