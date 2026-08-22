@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -19,6 +20,14 @@ from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 logger = logging.getLogger(__name__)
 
 __all__ = ["CapabilityContextMiddleware"]
+
+#: DEC-017: per-run capability-context mode. full (default) injects the
+#: complete snapshot; no-counters strips aggregate count lines while keeping
+#: per-field rows and upload state; off skips capability injection entirely.
+#: Read once at middleware construction; set Z_APPLY_CAPABILITY_CONTEXT_MODE
+#: before the run starts.
+CONTEXT_MODE_ENV = "Z_APPLY_CAPABILITY_CONTEXT_MODE"
+_VALID_CONTEXT_MODES = frozenset({"full", "no-counters", "off"})
 
 CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
 
@@ -55,6 +64,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         evidence_store: EvidenceStore | None = None,
         event_sink: FrameworkEventSink | None = None,
         role: str = "orchestrator",
+        context_mode: str | None = None,
     ) -> None:
         super().__init__()
         self._browser = browser
@@ -64,6 +74,16 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         self._event_sink = event_sink
         self._role = role
         self._evidence_store = evidence_store
+        mode = (context_mode or os.environ.get(CONTEXT_MODE_ENV, "full")).strip().lower()
+        if mode not in _VALID_CONTEXT_MODES:
+            logger.warning(
+                "Invalid %s=%r; falling back to 'full' (valid: %s)",
+                CONTEXT_MODE_ENV,
+                mode,
+                sorted(_VALID_CONTEXT_MODES),
+            )
+            mode = "full"
+        self._context_mode = mode
         self._last_injected_revision: int | None = None
         self._last_playbook_text: str | None = None
         self._last_capabilities_signature: str | None = None
@@ -189,7 +209,8 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         handler: Callable[[ModelRequest[ContextT]], Awaitable[ModelResponse[ResponseT]]],
     ) -> ModelResponse[ResponseT]:
         browser = self._browser
-        if browser is None:
+        if browser is None or self._context_mode == "off":
+            # off: skip capability inspection, filtering, and injection entirely.
             return await handler(request)
         capabilities: BrowserCapabilities | None
         capabilities = await self._capabilities_for_turn()
@@ -282,7 +303,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
                 "CURRENT BROWSER ACTION CONTEXT\n"
                 f"browser_revision={revision}\n"
                 f"capabilities_changed={str(changed).lower()}\n"
-                f"{capabilities.render() if capabilities is not None else 'capability_inspection=unavailable'}\n"
+                f"{capabilities.render(include_counts=self._context_mode != 'no-counters') if capabilities is not None else 'capability_inspection=unavailable'}\n"
                 f"available_tools={available or '(none)'}\n"
                 f"{upload_context}"
                 "Use current browser evidence and choose one legal native action. "
