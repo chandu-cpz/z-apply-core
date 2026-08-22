@@ -171,11 +171,17 @@ class _GraphSink(FrameworkEventSink):
         self._last_graph_payload: dict[str, Any] | None = None
         self._model_by_agent: dict[str, str] = {}
         self._last_usage: dict[str, Any] | None = None
+        # DEC-019/P1 outcome gate: set only by a real submission.completed event.
+        self.submission_completed = False
 
     async def accept(self, event: FrameworkTraceEvent) -> None:
         name = _public_agent_name(event.name or event.event)
         payload = _framework_payload(event)
         event_type = _typed_framework_event(event.event, payload)
+        if event_type == "submission.completed":
+            self.submission_completed = True
+        if event_type == "submission.failed":
+            payload = {**payload, "submission_failed": True}
         if event_type == "graph.event" and event.event not in {"values", "updates", "error"}:
             return
         if event_type == "graph.event":
@@ -715,17 +721,19 @@ class ZApplyCore:
             )
             if run.provider is None:
                 run.provider = get_model_gateway(run.request.provider, run.request.model)
+            graph_sink = _GraphSink(self, run)
             state, result = await run_job(
                 run.request.job_url,
                 task=run.request.task or DEFAULT_TASK,
                 live_view=run.request.live_view,
-                sink=_GraphSink(self, run),
+                sink=graph_sink,
                 provider=run.provider,
                 resources=run.resources,
                 cleanup_resources=False,
                 context_inbox=run.context_inbox,
                 prepared_runtime=runtime,
                 call_ledger=run.call_ledger,
+                capability_context_mode=getattr(run.request, "capability_context_mode", None),
             )
             status = str(state.get("run_status", "failed"))
             outcome = {
@@ -735,6 +743,14 @@ class ZApplyCore:
                 "failed": RunOutcome.FAILED,
             }.get(status, RunOutcome.FAILED)
             summary = str(state.get("orchestrator_summary") or state.get("auth_summary") or status)
+            # DEC-019/P1 outcome gate: a verified submission requires a real
+            # submission.completed event; narration alone can never produce it.
+            if outcome is RunOutcome.SUBMITTED_VERIFIED and not graph_sink.submission_completed:
+                outcome = RunOutcome.BLOCKED
+                summary = (
+                    "unverified submission: agent reported completion but no "
+                    "guarded submit click completed. " + summary
+                )
             browser_state = (
                 BrowserTabState.CLOSED
                 if outcome is RunOutcome.SUBMITTED_VERIFIED
@@ -1224,6 +1240,9 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "model_rate_limited": "model.rate_limited",
         "model_phase": "model.phase",
         "capability_probe": "capability.probe",
+        "memory_stored": "memory.stored",
+        "submission_failed": "submission.failed",
+        "submission_completed": "submission.completed",
         "token_usage": "model.usage",
         "agent_turn": "agent.turn.completed",
         "recovery_started": "recovery.started",

@@ -57,6 +57,7 @@ from z_apply_core.browser_value_provenance import (
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.paths import PROFILES_ROOT, runs_root
+from z_apply_core.stream_events import FrameworkTraceEvent
 from z_apply_core.text_utils import collapsed_label
 
 logger = logging.getLogger(__name__)
@@ -152,6 +153,7 @@ class BrowserSession:
         self.run_context = run_context
         self.evidence_store = evidence_store
         self._submission = SubmissionGuard()
+        self._event_sink: Any = None
         self._screenshot_seq = 0
         self._last_snapshot = ""
         self._last_observation: BrowserObservation | None = None
@@ -236,6 +238,15 @@ class BrowserSession:
     def bind_evidence_store(self, evidence_store: EvidenceStore) -> None:
         self.evidence_store = evidence_store
 
+    def bind_event_sink(self, event_sink: Any) -> None:
+        """Attach the run's event sink (DEC-019/P1 submission truth events).
+
+        Emission happens at THIS layer, not the agent turn pipeline: recovery
+        turns bypass turn-pipeline events, so executor-layer emission is the
+        only path that stays visible for every submit attempt.
+        """
+        self._event_sink = event_sink
+
     async def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> str:
         normalized = normalize_browser_arguments(arguments)
         if name == "browser_snapshot" and "target" not in normalized:
@@ -269,9 +280,7 @@ class BrowserSession:
         body = str(arguments.get("function") or "")
         reason = first_form_write(body)
         if reason is not None:
-            raise BrowserToolExecutionError(
-                EVALUATE_WRITE_REJECTION.format(reason=reason)
-            )
+            raise BrowserToolExecutionError(EVALUATE_WRITE_REJECTION.format(reason=reason))
 
     async def _guard_click_or_type(self, name: str, arguments: dict[str, Any]) -> bool:
         """Apply the upload + submission guards shared by standalone calls and
@@ -607,9 +616,7 @@ class BrowserSession:
         if receipt.written:
             provenance = "\n".join(entry.render() for entry in receipt.written)
             written_block = f"written_controls (value provenance):\n{provenance}\n"
-        rendered = (
-            f"{header}{''.join(marker + '\n' for marker in markers)}{written_block}{landing_block}{evidence}{note}"
-        )
+        rendered = f"{header}{''.join(marker + '\n' for marker in markers)}{written_block}{landing_block}{evidence}{note}"
         if stopped is not None:
             # A stopped batch is a failed script: surface it as a contained tool
             # error (no browser_revision stamp) so sibling mutations in the same
@@ -1144,10 +1151,13 @@ class BrowserSession:
                 chosen = index
                 break
         if chosen is None:
-            raise BrowserToolExecutionError(
-                "No enabled form submit control is visible. Complete form "
-                "validation first, then request the submission review again."
-            )
+            chosen_selector = await self._reconcile_js_submit_target(page)
+            if chosen_selector is None:
+                raise BrowserToolExecutionError(
+                    "No enabled form submit control is visible. Complete form "
+                    "validation first, then request the submission review again."
+                )
+            return chosen_selector
         selector = f"{SUBMIT_SELECTOR} >> nth={chosen}"
         result = await self.call_tool("browser_snapshot", {"target": selector})
         _raise_for_tool_error("browser_snapshot", result)
@@ -1158,6 +1168,58 @@ class BrowserSession:
             )
         return match.group(1)
 
+    async def _reconcile_js_submit_target(self, page: Any) -> str | None:
+        """Reconcile a zero-candidate resolver against fresh DOM (DEC-019/P4).
+
+        Fires ONLY when no native candidate classified AND exactly ONE enabled
+        button with a submit-intent name exists in fresh evidence. The ref is
+        re-classified through the widened classifier before being returned;
+        the armed one-use guard remains the safety boundary.
+        """
+        import re
+
+        from z_apply_core.browser_targeting import SUBMIT_NAME_VOCABULARY
+
+        pattern = "|".join(re.escape(word) for word in SUBMIT_NAME_VOCABULARY)
+        candidates = page.get_by_role("button", name=re.compile(pattern, re.IGNORECASE))
+        total = await candidates.count()
+        visible: list[Any] = []
+        for index in range(total):
+            item = candidates.nth(index)
+            try:
+                if await item.is_visible() and await item.is_enabled():
+                    visible.append(item)
+            except Exception:  # noqa: BLE001 - detached controls are skipped
+                continue
+        if len(visible) != 1:
+            return None
+        element = visible[0]
+        try:
+            kind, _control = await classify_submit_control(page, element)
+        except Exception:  # noqa: BLE001 - reconciliation never invents a target
+            return None
+        if kind != "form_submit":
+            return None
+        result = await self.call_tool("browser_snapshot", {"target": "html"})
+        evidence = _text_content(result)
+        refs: list[str] = []
+        for line in evidence.splitlines():
+            if "button" not in line.casefold():
+                continue
+            if not re.search(pattern, line, re.IGNORECASE):
+                continue
+            match = REF_TAG_RE.search(line)
+            if match is not None:
+                refs.append(match.group(1))
+        if len(set(refs)) != 1:
+            return None
+        logger.warning(
+            "submit gate reconciled: zero native candidates but fresh evidence "
+            "shows exactly one enabled vocabulary-matching button (%s); using it.",
+            refs[0],
+        )
+        return refs[0]
+
     async def submit_approved_application(self) -> str:
         """Resolve and click the current form-submit control under the armed guard.
 
@@ -1167,11 +1229,40 @@ class BrowserSession:
         while the human's approval is armed. The click is one-use; the caller
         (Submission Reviewer) reads the returned fresh evidence to judge the
         outcome.
+
+        DEC-019/P1: every attempt emits submission.failed / submission.completed
+        at THIS executor layer — recovery turns bypass turn-pipeline events, so
+        executor emission is the only always-visible path. Precondition
+        failures never consume the armed approval.
         """
-        target = await self.resolve_submit_control_target()
-        result = await self.call_tool("browser_click", {"target": target})
+        try:
+            target = await self.resolve_submit_control_target()
+            result = await self.call_tool("browser_click", {"target": target})
+        except Exception as exc:
+            await self._emit_submission_event("submission_failed", error=str(exc)[:300])
+            raise
         evidence = await self.observe()
+        await self._emit_submission_event("submission_completed")
         return f"{result}\n{evidence}"
+
+    async def _emit_submission_event(self, event: str, *, error: str = "") -> None:
+        if self._event_sink is None:
+            return
+        import asyncio
+
+        data: dict[str, Any] = {"phase": "resolve_or_click"}
+        if error:
+            data["error"] = error
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.info("%s %s", event, data)
+            return
+        loop.create_task(
+            self._event_sink.accept(
+                FrameworkTraceEvent(event=event, name="orchestrator", data=data, raw={})
+            )
+        )
 
     async def _require_submission_capability_locked(
         self,

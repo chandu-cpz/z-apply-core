@@ -90,8 +90,13 @@ def test_capabilities_from_records_counts_and_caps_names() -> None:
             for i in range(8)
         ],
         "submits": [
-            {"tag": "button", "type": "submit", "formPresent": True, "formIsSearch": False,
-             "disabled": False},
+            {
+                "tag": "button",
+                "type": "submit",
+                "formPresent": True,
+                "formIsSearch": False,
+                "disabled": False,
+            },
         ],
         "actionsVisibleEnabled": True,
         "authGateVisible": False,
@@ -207,9 +212,7 @@ def test_fallback_degrades_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
     async def run() -> Any:
-        return await inspect_page_capabilities_with_fallback(
-            _HangingEvaluatePage(), timeout_s=0.05
-        )
+        return await inspect_page_capabilities_with_fallback(_HangingEvaluatePage(), timeout_s=0.05)
 
     result = asyncio.run(run())
 

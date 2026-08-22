@@ -65,6 +65,9 @@ class StartRunRequest:
     live_view: bool = True
     provider: str | None = None
     model: str | None = None
+    # DEC-017 per-run capability-context mode override (full|no-counters|off).
+    # None falls back to Z_APPLY_CAPABILITY_CONTEXT_MODE env / "full".
+    capability_context_mode: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

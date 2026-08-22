@@ -39,6 +39,7 @@ def build_agent_middleware(
     no_progress_kwargs: dict[str, Any] | None = None,
     extra_middleware: Sequence[AgentMiddleware[Any, Any, Any]] = (),
     mutation_lock: asyncio.Lock | None = None,
+    capability_context_mode: str | None = None,
 ) -> list[AgentMiddleware[Any, Any, Any]]:
     """Single source of truth for model-call middleware ordering.
 
@@ -69,6 +70,7 @@ def build_agent_middleware(
             evidence_store=evidence_store,
             event_sink=event_sink,
             role=role,
+            context_mode=capability_context_mode,
         )
     )
     # Now measure what the model will actually receive

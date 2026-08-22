@@ -16,6 +16,11 @@ NATIVE_SUBMIT_XPATH = (
     "(self::input and (@type='submit' or @type='image'))][1]"
 )
 
+#: Submit-intent accessible-name vocabulary (DEC-019/P3). Shared semantics with
+#: rule 6's navigation ladder but restricted to final-submit intent words;
+#: extend per observed boards — never per board.
+SUBMIT_NAME_VOCABULARY = ("submit", "send", "apply", "confirm", "proceed", "done")
+
 
 async def resolve_file_input(page: Page, target: Locator) -> Locator | None:
     direct = target.and_(page.locator('input[type="file"]'))
@@ -51,10 +56,9 @@ async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Loc
     is_proxy = False
     if await control.count() != 1:
         proxy = await _form_submit_proxy(page, target)
-        if proxy is None:
-            return "not_submit", None
-        control = proxy
-        is_proxy = True
+        if proxy is not None:
+            control = proxy
+            is_proxy = True
 
     tag = await _tag_hint(control)
     control_type = (await control.get_attribute("type") or "").lower()
@@ -62,6 +66,12 @@ async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Loc
     if tag == "button" and control_type not in {"", "submit"} and not is_proxy:
         return "not_submit", None
     if tag == "button" and not control_type and form is None:
+        # DEC-019/P3 (FAIL-009): SPAs render final submits as bare typeless
+        # buttons with no <form> ancestor, handled entirely in JS. Two
+        # independent signals (position + vocabulary) must agree.
+        fallback = await _js_submit_fallback(page, target)
+        if fallback is not None:
+            return "form_submit", fallback
         return "not_submit", None
     if tag == "input" and control_type not in {"submit", "image"}:
         return "not_submit", None
@@ -72,6 +82,52 @@ async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Loc
     ):
         return "reversible_search", control
     return "form_submit", control
+
+
+async def _js_submit_fallback(page: Page, target: Locator) -> Locator | None:
+    """Classify a form-less typeless JS-handled button as the submit control.
+
+    DEC-019/P3 (FAIL-009): SPAs commonly render the final action as a bare
+    `<button>` with no native `<form>` ancestor and no `type` attribute —
+    invisible to both SUBMIT_SELECTOR and the native classification path.
+    Two independent signals must agree before trusting it:
+      1. position: it is the LAST visible enabled button within its nearest
+         action container (fieldset/section/dialog/article/body);
+      2. name: its accessible name contains submit-intent vocabulary.
+    Computed in ONE page.evaluate — no per-element auto-wait round-trips.
+    """
+    control = target.locator("xpath=ancestor-or-self::button[1]")
+    if await control.count() != 1:
+        return None
+    try:
+        verdict = await control.evaluate(
+            """(el) => {
+                const type = el.getAttribute('type') || '';
+                if (type !== '') return {skip: true};
+                if (el.closest('form')) return {skip: true};
+                const name = (
+                    el.getAttribute('aria-label') ||
+                    (el.textContent || '')
+                ).trim().toLowerCase();
+                const words = name.split(/[^a-z]+/).filter(Boolean);
+                const vocab = ['submit', 'send', 'apply', 'confirm', 'proceed', 'done'];
+                if (!vocab.some((w) => words.includes(w))) return {skip: true};
+                const scope =
+                    el.closest('fieldset, section, dialog, article') || document.body;
+                const enabled = [...scope.querySelectorAll('button')].filter((b) => {
+                    if (b.disabled) return false;
+                    const rect = b.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                });
+                if (!enabled.length) return {skip: true};
+                return {ok: enabled[enabled.length - 1] === el};
+            }"""
+        )
+    except Exception:  # noqa: BLE001 - a misbehaving page never breaks classification
+        return None
+    if isinstance(verdict, dict) and verdict.get("ok") is True:
+        return control
+    return None
 
 
 async def _form_submit_proxy(page: Page, target: Locator) -> Locator | None:

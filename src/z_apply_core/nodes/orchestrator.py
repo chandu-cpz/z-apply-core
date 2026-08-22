@@ -24,6 +24,9 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
     sink = sink_from_config(config)
     provider = provider_from_config(config)
     runtime = _runtime(state)
+    capability_context_mode = (
+        str((config.get("configurable") or {}).get("capability_context_mode") or "").strip() or None
+    )
     initial_snapshot = str(state.get("snapshot", ""))
     if runtime is not None:
         try:
@@ -51,6 +54,7 @@ async def orchestrator(state: RunState, config: RunnableConfig) -> dict[str, str
         context_inbox=(runtime.context_inbox if runtime is not None else None),
         browser=(runtime.browser if runtime is not None else None),
         metadata_reporter=(runtime.metadata_reporter if runtime is not None else None),
+        capability_context_mode=capability_context_mode,
     )
     snapshot = await _fresh_snapshot(state)
     return {

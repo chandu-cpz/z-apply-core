@@ -204,6 +204,7 @@ async def run_orchestrator(
     browser: BrowserSession | None = None,
     call_ledger: RunCallLedger | None = None,
     metadata_reporter: Callable[[str, str, str | None], None] | None = None,
+    capability_context_mode: str | None = None,
 ) -> OrchestratorRun:
     """Run one persistent job-application agent against one shared browser."""
     configure_z_apply_harness_profile()
@@ -339,11 +340,13 @@ async def run_orchestrator(
 
         @tool
         async def submit_approved_application() -> str:
-            """Click the final submit control under the approved guard.
+            """Click the final submit control under the armed guard.
 
             The runtime resolves the control from live DOM, verifies it is a
             real form submit, and performs the one-use guarded click. Returns
-            fresh post-click evidence; read it to judge the outcome.
+            fresh post-click evidence; read it to judge the outcome. Truth
+            events emit at the executor layer (browser_session), which stays
+            visible even through recovery turns.
             """
             return await active_browser.submit_approved_application()
 
@@ -412,6 +415,7 @@ async def run_orchestrator(
     if active_browser is not None:
         active_browser.bind_run_context(run_context)
         active_browser.bind_evidence_store(evidence_store)
+        active_browser.bind_event_sink(event_sink)
     router_middleware = build_router_middleware(
         provider,
         role="orchestrator",
@@ -482,6 +486,7 @@ async def run_orchestrator(
             delegation_result_middleware=delegation_result_middleware,
             active_goal_middleware=active_goal_middleware,
             mutation_lock=mutation_lock,
+            capability_context_mode=capability_context_mode,
         ),
         subagents=await build_specialists(
             provider,
@@ -682,6 +687,7 @@ def build_orchestrator_middleware(
     delegation_result_middleware: DelegationResultMiddleware | None = None,
     active_goal_middleware: ActiveGoalMiddleware,
     mutation_lock: asyncio.Lock | None = None,
+    capability_context_mode: str | None = None,
 ) -> list[AgentMiddleware]:
     """Build the orchestrator middleware chain via single factory.
 
@@ -720,6 +726,7 @@ def build_orchestrator_middleware(
             *([delegation_result_middleware] if delegation_result_middleware is not None else []),
         ],
         mutation_lock=mutation_lock,
+        capability_context_mode=capability_context_mode,
     )
     # ActiveGoal is innermost, after human guard
     return [*base, active_goal_middleware]

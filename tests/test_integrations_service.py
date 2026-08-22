@@ -134,6 +134,20 @@ async def test_service_limits_concurrent_runs_without_serializing_the_queue(
         maximum = max(maximum, active)
         await release.wait()
         active -= 1
+        # DEC-019/P1: a completed run must carry a real submission.completed
+        # event through its sink for the outcome gate to verify it.
+        from z_apply_core.stream_events import FrameworkTraceEvent
+
+        sink = kwargs.get("sink")
+        if sink is not None:
+            await sink.accept(
+                FrameworkTraceEvent(
+                    event="submission_completed",
+                    name="orchestrator",
+                    data={},
+                    raw={},
+                )
+            )
         return {"run_status": "completed", "orchestrator_summary": "verified"}, V3RunResult(
             event_count=4
         )

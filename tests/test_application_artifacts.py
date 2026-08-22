@@ -35,6 +35,6 @@ async def test_application_artifacts_capture_before_publishing(tmp_path: Path) -
     )
     assert browser.call_tool.await_args_list[1].args == (
         "browser_take_screenshot",
-        {"filename": "submission-confirmation.png", "type": "png", "scale": "css"},
+        {"filename": "submission-confirmation.png", "fullPage": True, "type": "png", "scale": "css"},
     )
     assert channel.send_artifact.await_count == 2

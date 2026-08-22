@@ -66,9 +66,7 @@ class ProvenanceEntryTests(unittest.TestCase):
         select = provenance_entries_for(
             "browser_select_option", {"target": "e9", "values": ["India"]}
         )
-        assert select == (
-            ProvenanceEntry("e9", value_digest("India"), "browser_select_option"),
-        )
+        assert select == (ProvenanceEntry("e9", value_digest("India"), "browser_select_option"),)
         assert provenance_entries_for("browser_click", {"target": "e1"}) == ()
 
     def test_entry_render_carries_hash_not_value(self) -> None:
@@ -196,9 +194,7 @@ class ReceiptProvenanceTests(unittest.IsolatedAsyncioTestCase):
     async def test_click_receipt_has_no_written_section(self) -> None:
         session, _backend = _SessionHarness.build()
 
-        receipt = await session.call_tool_with_inline_snapshot(
-            "browser_click", {"target": "e12"}
-        )
+        receipt = await session.call_tool_with_inline_snapshot("browser_click", {"target": "e12"})
 
         self.assertNotIn("written_controls", receipt)
 

@@ -53,7 +53,7 @@ class ApplicationArtifactPublisher:
         path = self._browser.artifact_path("submission-confirmation.png")
         await self._browser.call_tool(
             "browser_take_screenshot",
-            {"filename": path.name, "type": "png", "scale": "css"},
+            {"filename": path.name, "fullPage": True, "type": "png", "scale": "css"},
         )
         if not path.is_file():
             raise RuntimeError("The browser did not create the submission artifact.")

@@ -62,6 +62,7 @@ async def run_job(
     context_inbox: ContextInbox | None = None,
     prepared_runtime: RunRuntime | None = None,
     call_ledger: Any | None = None,
+    capability_context_mode: str | None = None,
 ) -> tuple[RunState, V3RunResult]:
     graph = build_graph()
     run_resources = resources or RunResources()
@@ -81,6 +82,7 @@ async def run_job(
                     "context_inbox": context_inbox,
                     "prepared_runtime": prepared_runtime,
                     "call_ledger": call_ledger,
+                    "capability_context_mode": capability_context_mode,
                 }
             },
             version="v3",
