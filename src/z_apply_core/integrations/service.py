@@ -1225,6 +1225,8 @@ def _typed_framework_event(event: str, payload: dict[str, Any]) -> str:
         "model_phase": "model.phase",
         "capability_probe": "capability.probe",
         "memory_stored": "memory.stored",
+        "summarization_model_call_started": "summarization.call.started",
+        "summarization_model_call_completed": "summarization.call.completed",
         "token_usage": "model.usage",
         "agent_turn": "agent.turn.completed",
         "recovery_started": "recovery.started",
