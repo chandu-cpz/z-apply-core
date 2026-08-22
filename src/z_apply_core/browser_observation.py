@@ -5,6 +5,8 @@ import warnings
 from dataclasses import dataclass
 from typing import Any
 
+from z_apply_core.browser_value_provenance import ProvenanceEntry
+
 # Shared evidence budget: every caller renders observations through the same
 # 8k tiered projection so repeated context injection stays predictable.
 # Defined here (base layer) because the projection modules sit above this one
@@ -195,8 +197,13 @@ class ActionReceipt:
     after: BrowserObservation
     changed: bool
     result: str = ""
+    written: tuple[ProvenanceEntry, ...] = ()
 
     def render(self) -> str:
+        written_lines = ""
+        if self.written:
+            provenance = "\n".join(entry.render() for entry in self.written)
+            written_lines = f"written_controls (value provenance):\n{provenance}\n"
         return (
             "BROWSER ACTION RECEIPT\n"
             f"action: {self.tool}\n"
@@ -205,5 +212,6 @@ class ActionReceipt:
             f"after_revision: {self.after.revision}\n"
             f"changed: {'true' if self.changed else 'false'}\n"
             f"executor_result: {self.result or '(no separate result)'}\n"
+            f"{written_lines}"
             f"{self.after.bounded_render(budget_chars=DEFAULT_EVIDENCE_BUDGET_CHARS)}"
         )
