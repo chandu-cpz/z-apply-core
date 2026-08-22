@@ -88,9 +88,9 @@ class LiveParityTests(unittest.TestCase):
                 await page.set_content(FIXTURE)
                 await page.wait_for_timeout(200)
                 legacy, batched = await _both_paths(page)
-                # Second page WITHOUT file inputs: pins the mirrored legacy
-                # quirk where empty_file_upload_present is unconditionally
-                # True (the flag is computed from the function object).
+                # Second page WITHOUT file inputs: pins the corrected
+                # empty_file_upload_present semantics (False when no file
+                # controls exist) on both paths.
                 await page.set_content("<html><body><input name='x'></body></html>")
                 await page.wait_for_timeout(100)
                 legacy2, batched2 = await _both_paths(page)

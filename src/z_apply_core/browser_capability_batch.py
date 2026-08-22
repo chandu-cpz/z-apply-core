@@ -242,20 +242,13 @@ def capabilities_from_records(
             enabled_submit += 1
 
     visual_only = not records["actionsVisibleEnabled"] and records["bigSurface"]
-    # NOTE (mirrored legacy quirk, do not "fix" in isolation): the legacy path
-    # computes `empty_file_upload_present=bool(empty_file_inputs)` where
-    # empty_file_inputs is the FUNCTION, so the flag is unconditionally True
-    # on trunk today. H2 is a pure performance refactor: the batch mirrors
-    # that behavior bit-for-bit until a reviewed DEC changes the semantics.
-    from z_apply_core.browser_targeting import empty_file_inputs as _empty_file_inputs_fn
-
     return BrowserCapabilities(
         editable_controls_visible=bool(controls),
         unresolved_required_controls=unresolved,
         unresolved_names=tuple(unresolved_names),
         invalid_controls=invalid,
         auth_gate_visible=bool(records["authGateVisible"]),
-        empty_file_upload_present=bool(_empty_file_inputs_fn),
+        empty_file_upload_present=any(f["empty"] for f in records["files"]),
         required_file_upload_pending=required_upload,
         enabled_form_submit_visible=enabled_submit > 0,
         disabled_form_submit_visible=disabled_submit > 0,

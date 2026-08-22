@@ -145,6 +145,26 @@ def test_upload_and_visual_only_flags() -> None:
     assert caps.visual_only_surface_visible is True
 
 
+def test_upload_flag_false_when_no_file_inputs() -> None:
+    """Regression for the function-object bug: a form without any file input
+    must report empty_file_upload_present=False (trunk historically reported
+    unconditionally True because the flag was computed from the imported
+    function object, not its result)."""
+    records = {
+        "controls": [_control()],
+        "submits": [],
+        "actionsVisibleEnabled": True,
+        "authGateVisible": False,
+        "files": [],
+        "bigSurface": False,
+    }
+
+    caps = capabilities_from_records(records)
+
+    assert caps.empty_file_upload_present is False
+    assert caps.required_file_upload_pending is False
+
+
 class _ExplodingEvaluatePage:
     async def evaluate(self, *_args: Any, **_kwargs: Any) -> Any:
         raise RuntimeError("page closed")
