@@ -27,6 +27,9 @@ def test_embeddings_settings_plumb_through(monkeypatch: Any) -> None:
     assert client.model == "nvidia/nemotron-3-embed-1b"
     assert "integrate.api.nvidia.com" in str(client.openai_api_base)
     assert client.openai_api_key is not None
+    # NVIDIA rejects token arrays ("invalid type: sequence"): with an explicit
+    # model configured, raw strings must reach the endpoint untokenized.
+    assert client.check_embedding_ctx_length is False
 
 
 def test_openai_fallbacks_still_apply(monkeypatch: Any) -> None:
