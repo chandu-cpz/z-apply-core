@@ -4,6 +4,10 @@ cockpit answers so the user NEVER re-answers those two questions.
 Run ONLY after the embedding-provider fix is live (backend relaunched with
 EMBEDDINGS_* env): the replay needs a working embed endpoint.
 
+Honest outcome reporting: remember_human_answer returns False when storage
+fails (e.g. embeddings endpoint unreachable); the script prints STORED/FAILED
+per answer and exits non-zero if any failed.
+
 Usage: uv run python scripts/replay_attempt12_answers.py
 """
 
@@ -16,9 +20,7 @@ from pathlib import Path
 
 from z_apply_core.memory.applicant_memory import CandidateMemory
 
-REQUESTS_PATH = Path(
-    "/home/chandu/z-apply/.pi/fleet/evidence/attempt12-data/human-requests.json"
-)
+REQUESTS_PATH = Path("/home/chandu/z-apply/.pi/fleet/evidence/attempt12-data/human-requests.json")
 
 
 async def main() -> int:
@@ -35,16 +37,27 @@ async def main() -> int:
         return 1
 
     memory = CandidateMemory()
+    failures = 0
     for request in resolvable:
         field_label = (request.get("field_label") or "").strip() or (
             request["question"][:80].strip()
         )
-        await memory.remember_human_answer(
+        stored = await memory.remember_human_answer(
             field_label=field_label,
             question=request["question"],
             answer=request["answer"],
         )
-        print(f"stored: {field_label!r} -> {request['answer']!r}")
+        if stored:
+            print(f"STORED: {field_label!r} -> {request['answer']!r}")
+        else:
+            failures += 1
+            print(
+                f"FAILED: {field_label!r} (remember_human_answer returned False; "
+                "check EMBEDDINGS_* config and endpoint reachability)"
+            )
+    if failures:
+        print(f"\n{failures} of {len(resolvable)} answers FAILED to store.")
+        return 1
 
     print("\nverify lookups:")
     for request in resolvable:
