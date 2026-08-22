@@ -1,4 +1,4 @@
-"""Readout for DEC-010 capability_probe telemetry (OPT-DEC-010 verification).
+"""Readout for capability_probe telemetry verification.
 
 Parses ``capability_probe`` log lines from one or more text files (backend
 stdout captures, run logs) and reports:

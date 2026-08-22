@@ -1,4 +1,4 @@
-"""DEC-015: embedding provider env plumbing for CandidateMemory.
+"""Embedding provider env plumbing for CandidateMemory.
 
 Root cause of the virgin store: the default client sent a "local" key to
 whatever endpoint was configured and 401'd forever, so no collection could
@@ -23,7 +23,7 @@ def test_embeddings_model_env_plumbs_through(monkeypatch: Any) -> None:
     client = _default_embeddings()
 
     assert client.model == "nvidia/nemotron-3-embed-1b"
-    # DEC-015 amendment: NVIDIA rejects token-array input, so the ctx-length
+    # NVIDIA rejects token-array input, so the ctx-length
     # check MUST be disabled to send plain strings.
     assert client.check_embedding_ctx_length is False
     assert "integrate.api.nvidia.com" in str(client.openai_api_base)

@@ -1,4 +1,4 @@
-"""Single-roundtrip capability inspection (OPT-DEC-010 H2).
+"""Single-roundtrip capability inspection.
 
 The legacy per-control path in :mod:`z_apply_core.browser_form_inspection`
 spends 4-6 sequential playwright RPCs per matched control; a 30-60-control
@@ -287,7 +287,7 @@ async def inspect_page_capabilities_with_fallback(
 ) -> BrowserCapabilities:
     """Batch-first inspection that degrades to the legacy path, never fails.
 
-    Binding acceptance criterion (lead review of OPT-DEC-010): a hanging or
+    Binding acceptance criterion: a hanging or
     failing batch must log once and degrade — it must never take the turn
     down with it.
     """

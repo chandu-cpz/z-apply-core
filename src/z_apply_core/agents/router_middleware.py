@@ -58,8 +58,8 @@ ROLE_POLICY: dict[str, dict[str, Any]] = {
     },
     "BrowserSpecialist": {"priority": "balanced", "reasoning": True},
     # Output cap: structured field answers need far fewer tokens than the
-    # provider ceiling. A model that burns to 128K (FAIL-003: exactly 131072
-    # output tokens over 894s, empty result) now fails fast instead of
+    # provider ceiling. A model that burns to 128K (observed once at exactly
+    # 131072 output tokens over 894s, empty result) now fails fast instead of
     # stalling the run for quarter-hours.
     "AnswerWriter": {"priority": "quality", "reasoning": True, "max_tokens": 8192},
     "VisionSpecialist": {"priority": "balanced", "reasoning": True, "force_vision": True},

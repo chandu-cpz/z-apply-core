@@ -1,4 +1,4 @@
-"""Value-provenance enforcement for browser writes (PROP-005 S2 / FAIL-007).
+"""Value-provenance enforcement for browser writes.
 
 Two mechanisms:
 

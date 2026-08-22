@@ -1,4 +1,4 @@
-"""Live parity harness for the capability batch (OPT-DEC-010 H2 acceptance).
+"""Live parity harness for the capability batch acceptance.
 
 Runs BOTH inspection paths against real DOM under Xvfb Firefox and asserts
 field-for-field equality of every semantic BrowserCapabilities field.

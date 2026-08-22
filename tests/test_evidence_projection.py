@@ -162,7 +162,7 @@ def test_real_format_lines_classify_by_leading_role() -> None:
 
 
 def test_truncated_long_form_keeps_advance_control() -> None:
-    """The FAIL-004 shape: long pre-filled profile pushes the view past the
+    """Regression shape: long pre-filled profile pushes the view past the
     budget; the single advance control at the bottom must survive anyway."""
     projected = _project(_real_page(profile_entries=25))
 

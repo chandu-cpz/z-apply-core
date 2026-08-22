@@ -1,4 +1,4 @@
-"""DEC-017: Z_APPLY_CAPABILITY_CONTEXT_MODE — full | no-counters | off.
+"""Z_APPLY_CAPABILITY_CONTEXT_MODE — full | no-counters | off.
 
 Default must be byte-identical to the historical rendering; no-counters strips
 only aggregate count lines; off skips inspection/injection entirely.

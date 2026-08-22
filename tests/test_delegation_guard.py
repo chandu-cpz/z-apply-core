@@ -93,7 +93,7 @@ class EscalationLadderTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProductionEscalationStackTests(unittest.TestCase):
-    """Wire DEC-002 through the SAME construction path run_orchestrator uses."""
+    """Wire the delegation guard through the SAME construction path run_orchestrator uses."""
 
     def test_orchestrator_guard_opens_only_after_production_wiring(self):
         from z_apply_core.agents.orchestrator import build_escalation_stack

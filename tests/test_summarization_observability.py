@@ -1,4 +1,4 @@
-"""FAIL-006 / DEC-007-B: silent summarization LLM calls must emit run events.
+"""Silent summarization LLM calls must emit run events.
 
 The deepagents summarizer sits OUTSIDE z-apply-core's middleware chain, so its
 full-history LLM calls used to be invisible (minutes of zero-event dead air).

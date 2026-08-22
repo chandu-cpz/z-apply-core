@@ -1,4 +1,4 @@
-"""PROP-005 S2: provenance ledger + evaluate bypass block."""
+"""Provenance ledger + evaluate bypass block."""
 
 from __future__ import annotations
 

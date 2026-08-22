@@ -1,4 +1,4 @@
-"""DEC-015 post-landing replay: seed CandidateMemory with attempt-12's resolved
+"""Replay helper: seed CandidateMemory with a prior run's resolved
 cockpit answers so the user NEVER re-answers those two questions.
 
 Run ONLY after the embedding-provider fix is live (backend relaunched with

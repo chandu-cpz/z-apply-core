@@ -1,4 +1,4 @@
-"""Cache-first capability rider pinning tests (OPT-DEC-010 H1).
+"""Cache-first capability rider pinning tests.
 
 The binding acceptance criterion: `_filter_tools` consumes a capability
 object on EVERY turn, including dedupe-skipped ones. The signature-keyed

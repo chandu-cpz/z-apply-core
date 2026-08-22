@@ -1,4 +1,4 @@
-"""DEC-002 amendment proofs for the human-channel layer.
+"""Escalation-ladder amendment proofs for the human-channel layer.
 
 A1: a broker request must reach BOTH channels — the web cockpit hook and the
 Telegram transport. A2: an unanswered request must block its asker until it is

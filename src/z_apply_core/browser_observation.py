@@ -40,7 +40,7 @@ class BrowserCapabilities:
     disabled_form_submit_visible: bool = False
     visual_only_surface_visible: bool = False
     unresolved_names: tuple[str, ...] = ()
-    # DEC-010 observability: cost + coverage of the inspection that produced
+    # Observability: cost + coverage of the inspection that produced
     # this snapshot. Defaults keep hand-built test instances valid.
     inspection_ms: int = 0
     controls_scanned: int = 0
@@ -48,7 +48,7 @@ class BrowserCapabilities:
     def render(self, *, include_counts: bool = True) -> str:
         """Render the capability snapshot for the model context.
 
-        ``include_counts=False`` (DEC-017 no-counters mode) strips aggregate
+        ``include_counts=False`` (no-counters mode) strips aggregate
         count lines (unresolved/invalid totals) while keeping per-field rows,
         upload state, and submit visibility — an A/B arm testing whether the
         counters anchor the model on deficits instead of actionable rows.

@@ -1,4 +1,4 @@
-"""FAIL-006 inter-turn hole probe v2: time EVERY middleware in the fully
+"""Inter-turn hole probe v2: time EVERY middleware in the fully
 assembled create_deep_agent stack — including deepagents-internal stages our
 chain probe bypassed (Filesystem, SubAgent, Summarization count, PatchToolCalls,
 prompt caching) — across multiple turns through the real langgraph loop.

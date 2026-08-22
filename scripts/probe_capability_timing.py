@@ -1,4 +1,4 @@
-"""FAIL-006 addendum probe: time inspect_page_capabilities against the REAL
+"""Probe: time inspect_page_capabilities against the REAL
 Nielsen SmartRecruiters page in an isolated headless browser.
 
 Measures total wall clock + per-phase breakdown to attribute the 58-96s

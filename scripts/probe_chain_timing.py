@@ -1,4 +1,4 @@
-"""FAIL-006 addendum probe: per-stage monotonic timing of the REAL orchestrator
+"""Per-stage monotonic timing probe of the REAL orchestrator
 middleware chain between tool completion and router emission.
 
 Wraps every middleware instance from build_orchestrator_middleware (+ the

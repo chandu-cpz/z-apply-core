@@ -1,4 +1,4 @@
-"""DEC-010 dark-instrumentation regression: model_phase must reach the run sink.
+"""Dark-instrumentation regression: model_phase must reach the run sink.
 
 The emitter (StageTimingMiddleware) worked, but service.accept() dropped
 "model_phase" because _typed_framework_event mapped it to "graph.event" and

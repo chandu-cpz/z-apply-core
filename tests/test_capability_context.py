@@ -130,7 +130,7 @@ class CapabilityContextTests(unittest.TestCase):
         self.assertIn("lookup_candidate_memory", [tool.name for tool in tools])
 
     def test_app_level_tools_survive_framework_scaffolding_trim(self) -> None:
-        """FAIL-005: app-level orchestrator tools must never be silently dropped.
+        """App-level orchestrator tools must never be silently dropped.
 
         The capability filter exists to trim framework scaffolding (deepagents
         filesystem/task tools), not to whitelist browser actions. Any tool the
