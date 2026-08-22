@@ -142,6 +142,12 @@ def _default_embeddings() -> EmbeddingClient:
         kwargs["base_url"] = base_url
     if model:
         kwargs["model"] = model
+        # DEC-015 amendment: langchain's default path tokenizes input and sends
+        # TOKEN ARRAYS; NVIDIA's endpoint rejects sequences ("invalid type:
+        # sequence, expected a string"). Disabling the ctx-length check sends
+        # plain strings, which NVIDIA accepts. Coordinator-verified live:
+        # 2048-dim vectors returned.
+        kwargs["check_embedding_ctx_length"] = False
     return cast(EmbeddingClient, OpenAIEmbeddings(**kwargs))
 
 

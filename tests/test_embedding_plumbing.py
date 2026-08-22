@@ -23,6 +23,9 @@ def test_embeddings_model_env_plumbs_through(monkeypatch: Any) -> None:
     client = _default_embeddings()
 
     assert client.model == "nvidia/nemotron-3-embed-1b"
+    # DEC-015 amendment: NVIDIA rejects token-array input, so the ctx-length
+    # check MUST be disabled to send plain strings.
+    assert client.check_embedding_ctx_length is False
     assert "integrate.api.nvidia.com" in str(client.openai_api_base)
     # The key is carried as a SecretStr; only presence is asserted, never value.
     assert client.openai_api_key is not None
