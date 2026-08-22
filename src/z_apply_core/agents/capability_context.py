@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["CapabilityContextMiddleware"]
 
-#: DEC-017: per-run capability-context mode. full (default) injects the
+#: Per-run capability-context mode. full (default) injects the
 #: complete snapshot; no-counters strips aggregate count lines while keeping
 #: per-field rows and upload state; off skips capability injection entirely.
 #: Read once at middleware construction; set Z_APPLY_CAPABILITY_CONTEXT_MODE
@@ -35,8 +35,8 @@ CAPABILITY_CONTEXT_SOURCE = "browser_capability_controller"
 # generic coding-agent filesystem/search tools injected by create_deep_agent,
 # not application capabilities; this agent works through live browser evidence.
 # The filter BLOCKLISTS scaffolding instead of ALLOWLISTING browser actions so
-# any app-level tool wired into create_deep_agent (e.g. report_job_metadata,
-# FAIL-005) stays visible to the model by default.
+# any app-level tool wired into create_deep_agent stays visible to the
+# model by default (e.g. report_job_metadata).
 _FRAMEWORK_SCAFFOLDING_TOOLS = frozenset(
     {
         "read_file",
@@ -88,7 +88,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         self._last_playbook_text: str | None = None
         self._last_capabilities_signature: str | None = None
         self._last_capability_record: dict[str, Any] | None = None
-        # OPT-DEC-010 H1 rider: signature-keyed capability cache. _filter_tools
+        # Signature-keyed capability cache. _filter_tools
         # consumes a capability object on EVERY turn (dedupe-skipped ones
         # included), so the cache — not a skip — is what removes redundant
         # browser scans. Any control-state change alters the observation
@@ -100,7 +100,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
     def _note_capabilities(self, capabilities: Any) -> bool:
         """Record whether the capability snapshot changed since the last turn.
 
-        DEC-010 cache-invalidation capture: capability thrash across turns is a
+        Cache-invalidation capture: capability thrash across turns is a
         candidate explanation for repeated slow inspections and contradictory
         agent context; the flag lands in the injected context where the run's
         persistence already captures it.
@@ -137,7 +137,7 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         *,
         injected: bool,
     ) -> None:
-        """Emit the per-turn tuple OPT-DEC-010's fix designs need.
+        """Emit the per-turn tuple the cache diagnostics need.
 
         H1 memoization keys on (observation signature → capability result hash);
         H2 sizing reads inspection_ms + control count. Routed through the run's

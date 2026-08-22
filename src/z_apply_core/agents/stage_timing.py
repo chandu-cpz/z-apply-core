@@ -1,6 +1,6 @@
-"""DEC-010: per-stage model-call phase timing between tool and model turns.
+"""Per-stage model-call phase timing between tool and model turns.
 
-FAIL-006 showed 58-96s silent gaps upstream of the router on every turn. This
+Run history showed 58-96s silent gaps upstream of the router on every turn. This
 wrapper times each middleware stage's ``awrap_model_call`` and emits a
 ``model_phase`` event whenever a stage crosses a duration threshold, making the
 sink visible in the run event stream without changing any behavior.

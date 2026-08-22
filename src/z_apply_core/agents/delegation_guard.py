@@ -27,8 +27,8 @@ class DelegationFailureLadder:
     That deny is correct for the normal path, but it must become conditional
     once the delegate path demonstrably cannot resolve a fact: without this
     ladder an empty-output pathology leaves the orchestrator zero legal moves
-    (can't ask, can't invent, delegation returns nothing) and the run stalls
-    (observed as FAIL-003). One instance is shared per run between the
+    (can't ask, can't invent, delegation returns nothing) and the run stalls.
+    One instance is shared per run between the
     delegation-result middleware that records failures and the orchestrator's
     HumanEscalationGuardMiddleware that consults them.
     """

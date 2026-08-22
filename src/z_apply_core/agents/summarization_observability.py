@@ -1,6 +1,6 @@
 """Make deepagents' silent summarization LLM calls visible in the run event stream.
 
-FAIL-006: create_deep_agent auto-adds SummarizationMiddleware OUTSIDE
+create_deep_agent auto-adds SummarizationMiddleware OUTSIDE
 z-apply-core's middleware chain. When the conversation history crosses the
 token trigger, that middleware makes a full LLM call carrying the whole
 history BEFORE any lower middleware (including our event-emitting router)

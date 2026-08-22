@@ -1,4 +1,4 @@
-"""DEC-015 fixes: embedding settings via pydantic Settings + memory.stored events.
+"""Embedding settings via pydantic Settings + memory.stored events.
 
 1. _default_embeddings reads EMBEDDINGS_* through load_settings (so .env works
    without process-env injection hacks), with OPENAI_* fallbacks preserved.

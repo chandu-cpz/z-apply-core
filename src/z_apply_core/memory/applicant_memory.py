@@ -125,7 +125,7 @@ class EmbeddingClient(Protocol):
 def _default_embeddings() -> EmbeddingClient:
     """Resolve the default OpenAI-compatible embedding client.
 
-    Env contract (DEC-015): EMBEDDINGS_API_KEY/EMBEDDINGS_BASE_URL select the
+    Env contract: EMBEDDINGS_API_KEY/EMBEDDINGS_BASE_URL select the
     provider endpoint; EMBEDDINGS_MODEL selects the embedding model (e.g.
     nvidia/nemotron-3-embed-1b against NVIDIA's OpenAI-compatible build API).
     Settings are read through pydantic ``load_settings`` so the .env file works
@@ -148,7 +148,7 @@ def _default_embeddings() -> EmbeddingClient:
         kwargs["base_url"] = base_url
     if model:
         kwargs["model"] = model
-        # DEC-015 amendment: langchain's default path tokenizes input and sends
+        # langchain's default path tokenizes input and sends
         # TOKEN ARRAYS; NVIDIA's endpoint rejects sequences ("invalid type:
         # sequence, expected a string"). Disabling the ctx-length check sends
         # plain strings, which NVIDIA accepts. Coordinator-verified live:
@@ -233,7 +233,7 @@ class CandidateMemory:
     def _emit_stored(self, source: str, field_label: str, answer: str) -> None:
         """Emit a persisted ``memory.stored`` event after a successful write.
 
-        DEC-010-style observability: successful memory writes were invisible,
+        Stage-timing-style observability: successful memory writes were invisible,
         so a silently-failing embedding endpoint looked identical to success.
         The event carries the write outcome without ever carrying the answer
         value itself.

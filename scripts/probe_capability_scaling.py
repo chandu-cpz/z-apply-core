@@ -1,4 +1,4 @@
-"""FAIL-006 addendum probe v3: inspect_page_capabilities scaling vs control
+"""Probe v3: inspect_page_capabilities scaling vs control
 count and main-thread jank, over a REAL playwright browser.
 
 Question: can capability inspection plausibly reach 58-96s/turn at production

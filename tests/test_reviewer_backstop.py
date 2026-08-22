@@ -1,4 +1,4 @@
-"""PROP-005 S3: reviewer fabrication backstop (value provenance via lookup)."""
+"""Reviewer fabrication backstop (value correctness via candidate-memory lookup)."""
 
 from __future__ import annotations
 

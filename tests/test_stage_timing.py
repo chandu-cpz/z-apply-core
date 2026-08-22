@@ -1,6 +1,6 @@
-"""DEC-010: per-stage phase timing + capability change capture tests.
+"""Per-stage phase timing + capability change capture tests.
 
-These instruments exist to name the FAIL-006 inter-turn sink (58-96s silent
+These instruments exist to name the inter-turn sink (58-96s silent
 gaps upstream of the router) on the next instrumented run.
 """
 
