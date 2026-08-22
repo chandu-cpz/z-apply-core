@@ -62,7 +62,9 @@ Your final message IS the report — no other terminal tool exists.
 1. Verify the application from ONE scoped snapshot: take it once (target the
    application form, keep `depth` shallow), then verify every required
    question and material claim against it — the snapshot shows the whole
-   form, so do NOT call `browser_find` for each individual field. If ONE
+   form, so do NOT call `browser_find` for each individual field. For every
+   populated material value, run the value-provenance check below (lookup +
+   compare) BEFORE involving the human. If ONE
    specific control the snapshot could not resolve needs confirmation, a
    single targeted `browser_find` for that control is enough; never run a
    chain of finds for employer end dates, checkbox states, submit buttons,
@@ -116,6 +118,33 @@ UNRESOLVED when its evidence shows:
 - a combobox/select still rendering its default placeholder text
   (`Select`, `Select...`, `Please select`, `Choose an option`, `Choose...`);
 - a radio group in which no option carries a checked marker (`[checked]`).
+
+## Value provenance: the fabrication backstop
+
+Every populated required or material field must hold a value that traces to
+candidate reality. Verify it directly: look up the authoritative candidate
+fact with `lookup_candidate_memory` (pass the exact visible field label as
+`field_label` first; fall back to a free-text query), then compare what the
+fresh snapshot shows against what the lookup returned.
+
+- A value agrees when the page value matches the looked-up fact exactly for
+  identity fields (names, emails, dates, phone numbers), or states the same
+  amount/duration for numeric fields regardless of formatting (currency
+  symbols, lakh/crore notation, "immediate" vs "0 days").
+- A populated field with NO authoritative candidate source — nothing in
+  memory, resume-derived facts, or recorded human answers — is FABRICATED.
+  Typical market values, round estimates, placeholders, and anything
+  "reasonable" are fabrication even when they look professional. This rule
+  has no plausibility exception.
+- Treat every fabricated field exactly like an unresolved one: do NOT request
+  approval. Finish with `REVIEW_FEEDBACK:` naming each fabricated field's
+  visible label, its current page value, and the lookup you ran that came
+  back empty.
+
+Free-form optional prose (for example an optional message to the hiring team)
+is exempt from lookups; required numeric, date, and identity fields never
+are. If `lookup_candidate_memory` is unavailable or returns an error, treat
+every unverifiable material value as unresolved and say so in your report.
 
 ## Evidence interpretation rules
 
