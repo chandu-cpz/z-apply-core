@@ -351,6 +351,10 @@ async def run_orchestrator(
             publish_review_artifact,
             request_submission_approval,
             submit_approved_application,
+            # PROP-005 S3 backstop: the reviewer verifies every material value
+            # against candidate reality through read-only lookups, so fabricated
+            # values (FAIL-007) are rejected before the human is involved.
+            *(make_candidate_memory_tools(candidate_memory) if candidate_memory else ()),
         ]
 
         human_tools = [
