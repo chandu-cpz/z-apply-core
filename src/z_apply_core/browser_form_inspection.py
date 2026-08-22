@@ -95,7 +95,10 @@ async def inspect_page_capabilities(page: Page) -> BrowserCapabilities:
         unresolved_names=tuple(unresolved_names),
         invalid_controls=invalid,
         auth_gate_visible=auth_gate,
-        empty_file_upload_present=bool(empty_file_inputs),
+        # An empty upload exists only when an enabled file input currently
+        # holds no file. (Historical bug: this flag was computed from the
+        # FUNCTION object and was therefore unconditionally True.)
+        empty_file_upload_present=bool(empty_uploads),
         required_file_upload_pending=required_upload,
         enabled_form_submit_visible=enabled_submit > 0,
         disabled_form_submit_visible=disabled_submit > 0,
