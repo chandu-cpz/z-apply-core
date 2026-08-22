@@ -45,16 +45,31 @@ class BrowserCapabilities:
     inspection_ms: int = 0
     controls_scanned: int = 0
 
-    def render(self) -> str:
+    def render(self, *, include_counts: bool = True) -> str:
+        """Render the capability snapshot for the model context.
+
+        ``include_counts=False`` (DEC-017 no-counters mode) strips aggregate
+        count lines (unresolved/invalid totals) while keeping per-field rows,
+        upload state, and submit visibility — an A/B arm testing whether the
+        counters anchor the model on deficits instead of actionable rows.
+        """
         unresolved_line = f"unresolved_required_controls={self.unresolved_required_controls}"
         if self.unresolved_names:
             named = ", ".join(f"{name}*" for name in self.unresolved_names[:3])
             unresolved_line = f"{unresolved_line} ({named})"
-        return "\n".join(
+        lines: list[str] = [
+            f"editable_controls_visible={str(self.editable_controls_visible).lower()}",
+        ]
+        if include_counts:
+            lines.append(unresolved_line)
+            lines.append(f"invalid_controls={self.invalid_controls}")
+        elif self.unresolved_names:
+            # no-counters keeps the per-field rows an agent can act on,
+            # dropping only the aggregate numbers.
+            named = ", ".join(f"{name}*" for name in self.unresolved_names[:3])
+            lines.append(f"unresolved_fields: {named}")
+        lines.extend(
             (
-                f"editable_controls_visible={str(self.editable_controls_visible).lower()}",
-                unresolved_line,
-                f"invalid_controls={self.invalid_controls}",
                 f"auth_gate_visible={str(self.auth_gate_visible).lower()}",
                 f"empty_file_upload_present={str(self.empty_file_upload_present).lower()}",
                 f"required_file_upload_pending={str(self.required_file_upload_pending).lower()}",
@@ -63,6 +78,7 @@ class BrowserCapabilities:
                 f"visual_only_surface_visible={str(self.visual_only_surface_visible).lower()}",
             )
         )
+        return "\n".join(lines)
 
 
 @dataclass(frozen=True, slots=True)
