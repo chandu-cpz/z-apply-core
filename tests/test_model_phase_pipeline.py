@@ -58,12 +58,13 @@ class _SlowBrowser:
 
     pending_atomic_upload_target = None
 
-    def __init__(self) -> None:
+    def __init__(self, caps: Any = None) -> None:
         self.current_observation = _StubObservation()
+        self._caps = caps
 
     async def inspect_capabilities(self):
         await asyncio.sleep(0.35)
-        return None
+        return self._caps
 
 
 def test_model_phase_reaches_production_chain_sink(tmp_path: Path) -> None:
@@ -131,7 +132,7 @@ class _RecordingService:
     async def _emit_live(self, run, event_type, payload, source=None):
         self.live.append((event_type, payload))
 
-    async def _emit(self, run, event_type, payload):
+    async def _emit(self, run, event_type, payload, source=None):
         self.emitted.append((event_type, payload))
 
 
@@ -160,5 +161,60 @@ def test_service_adapter_maps_model_phase_instead_of_dropping() -> None:
     )
     asyncio.run(adapter.accept(event))
 
-    assert service.live and service.live[0][0] == "model.phase"
-    assert service.live[0][1]["duration_ms"] == 61000
+    # model.phase is NOT live-only: it must land on the persisted event path.
+    assert service.emitted and service.emitted[-1][0] == "model.phase"
+    assert service.emitted[-1][1]["duration_ms"] == 61000
+    assert not any(live_type == "model.phase" for live_type, _ in service.live)
+
+
+def test_capability_probe_reaches_sink_and_persists(tmp_path: Path) -> None:
+    from z_apply_core.agents.capability_context import CapabilityContextMiddleware
+
+    collecting = _CollectingSink()
+    from z_apply_core.browser_observation import BrowserCapabilities as _Caps
+
+    middleware = CapabilityContextMiddleware(
+        _SlowBrowser(_Caps()),
+        evidence_store=EvidenceStore(tmp_path),
+        event_sink=SequencedEventSink(collecting, run_id="probe"),
+        role="orchestrator",
+    )
+
+    async def handler(req):
+        return "done"
+
+    probe_request = ModelRequest(
+        model=GenericFakeChatModel(messages=iter([AIMessage(content="ok")])),
+        messages=[HumanMessage(content="probe")],
+        tools=[],
+    )
+    asyncio.run(middleware.awrap_model_call(probe_request, handler))
+    await_flush = asyncio.sleep(0.05)
+    asyncio.run(await_flush)
+
+    probes = [e for e in collecting.events if e.event == "capability_probe"]
+    assert probes, "capability_probe never reached the sink"
+    probe = probes[-1]
+    assert probe.data["controls_scanned"] >= 0
+    assert probe.data["result_hash"] != "?"
+    assert isinstance(probe.data["injected"], bool)
+
+    # And the adapter persists it as capability.probe (not live-only).
+    from types import SimpleNamespace
+
+    service = _RecordingService()
+    run = SimpleNamespace(
+        view=None,
+        task=None,
+        retention_release=None,
+        done=None,
+        human_requests={},
+        artifacts=[],
+        context_inbox=None,
+        human_broker=None,
+        call_ledger=None,
+    )
+    adapter = _GraphSink(service, run)
+    asyncio.run(adapter.accept(probe))
+    persisted = [etype for etype, _ in service.emitted]
+    assert "capability.probe" in persisted

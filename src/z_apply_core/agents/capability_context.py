@@ -14,6 +14,7 @@ from z_apply_core.browser_session import BrowserSession
 from z_apply_core.context.evidence_store import EvidenceStore, render_bounded
 from z_apply_core.context.run_context import RunContext
 from z_apply_core.memory.platform_playbooks import PlatformPlaybooks
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +53,16 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         job_url: str = "",
         run_context: RunContext | None = None,
         evidence_store: EvidenceStore | None = None,
+        event_sink: FrameworkEventSink | None = None,
+        role: str = "orchestrator",
     ) -> None:
         super().__init__()
         self._browser = browser
         self._platform_playbooks = platform_playbooks
         self._job_url = job_url
         self._run_context = run_context
+        self._event_sink = event_sink
+        self._role = role
         self._evidence_store = evidence_store
         self._last_injected_revision: int | None = None
         self._last_playbook_text: str | None = None
@@ -115,22 +120,42 @@ class CapabilityContextMiddleware(AgentMiddleware[AgentState[ResponseT], Context
         """Emit the per-turn tuple OPT-DEC-010's fix designs need.
 
         H1 memoization keys on (observation signature → capability result hash);
-        H2 sizing reads inspection_ms + control count. One structured line per
-        model call keeps the whole series replayable from run logs.
+        H2 sizing reads inspection_ms + control count. Routed through the run's
+        event sink as a persisted ``capability.probe`` event so the whole series
+        is replayable from the REST event stream regardless of log levels.
         """
         if capabilities is None:
             return
         record = self._last_capability_record or {}
-        logger.info(
-            "capability_probe revision=%s result_hash=%s inspection_ms=%d "
-            "controls_scanned=%d injected=%s cache=%s",
-            revision,
-            record.get("result_hash", "?"),
-            record.get("inspection_ms", 0),
-            record.get("controls_scanned", 0),
-            injected,
-            self._last_capability_lookup,
-        )
+        data = {
+            "role": self._role,
+            "revision": revision,
+            "result_hash": record.get("result_hash", "?"),
+            "inspection_ms": record.get("inspection_ms", 0),
+            "controls_scanned": record.get("controls_scanned", 0),
+            "injected": injected,
+            "cache": self._last_capability_lookup,
+        }
+        if self._event_sink is not None:
+            import asyncio
+
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                logger.info("capability_probe %s", data)
+                return
+            loop.create_task(
+                self._event_sink.accept(
+                    FrameworkTraceEvent(
+                        event="capability_probe",
+                        name="CapabilityContextMiddleware",
+                        data=data,
+                        raw={},
+                    )
+                )
+            )
+        else:
+            logger.info("capability_probe %s", data)
 
     async def _capabilities_for_turn(self) -> BrowserCapabilities | None:
         """Cache-first capability lookup keyed by observation signature."""
