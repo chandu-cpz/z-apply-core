@@ -13,6 +13,7 @@ from typing import Any, Protocol, cast
 from qdrant_client import QdrantClient, models
 
 from z_apply_core.paths import qdrant_path
+from z_apply_core.stream_events import FrameworkEventSink, FrameworkTraceEvent
 from z_apply_core.text_utils import alnum_key
 
 logger = logging.getLogger(__name__)
@@ -127,16 +128,21 @@ def _default_embeddings() -> EmbeddingClient:
     Env contract (DEC-015): EMBEDDINGS_API_KEY/EMBEDDINGS_BASE_URL select the
     provider endpoint; EMBEDDINGS_MODEL selects the embedding model (e.g.
     nvidia/nemotron-3-embed-1b against NVIDIA's OpenAI-compatible build API).
-    OPENAI_* variables remain as fallbacks for existing local setups. Without a
-    real endpoint the client 401s on first use — memory stays empty and every
-    lookup reports unavailable rather than fabricating matches.
+    Settings are read through pydantic ``load_settings`` so the .env file works
+    without process-env injection; OPENAI_* variables remain as fallbacks for
+    existing local setups. Without a real endpoint the client 401s on first
+    use — memory stays empty and every lookup reports unavailable rather than
+    fabricating matches.
     """
     from langchain_openai import OpenAIEmbeddings
     from pydantic import SecretStr
 
-    api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("EMBEDDINGS_API_KEY") or "local"
-    base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("EMBEDDINGS_BASE_URL")
-    model = os.environ.get("EMBEDDINGS_MODEL")
+    from z_apply_core.config import load_settings
+
+    settings = load_settings()
+    api_key = settings.embeddings_api_key or os.environ.get("OPENAI_API_KEY") or "local"
+    base_url = settings.embeddings_base_url or os.environ.get("OPENAI_BASE_URL") or ""
+    model = settings.embeddings_model
     kwargs: dict[str, Any] = {"api_key": SecretStr(api_key)}
     if base_url:
         kwargs["base_url"] = base_url
@@ -160,10 +166,12 @@ class CandidateMemory:
         client: QdrantClient | None = None,
         embeddings: EmbeddingClient | None = None,
         collection_name: str = MEMORY_COLLECTION,
+        event_sink: FrameworkEventSink | None = None,
     ) -> None:
         self._client = client or QdrantClient(path=str(MEMORY_PATH))
         self._embeddings = embeddings or _default_embeddings()
         self._collection_name = collection_name
+        self._event_sink = event_sink
         self._lock = asyncio.Lock()
         self._closed = False
         init_options = getattr(self._client, "_init_options", {})
@@ -189,6 +197,7 @@ class CandidateMemory:
         except Exception as exc:  # noqa: BLE001 - memory must not discard a human answer
             logger.warning("Candidate-memory ingestion failed: %s", exc)
             return False
+        self._emit_stored("human_answer", field_label, answer)
         return True
 
     async def remember_resume_fact(
@@ -217,7 +226,41 @@ class CandidateMemory:
         except Exception as exc:  # noqa: BLE001 - memory must not block a run
             logger.warning("Candidate-memory resume ingestion failed: %s", exc)
             return False
+        if stored:
+            self._emit_stored("resume", field_label, answer)
         return bool(stored)
+
+    def _emit_stored(self, source: str, field_label: str, answer: str) -> None:
+        """Emit a persisted ``memory.stored`` event after a successful write.
+
+        DEC-010-style observability: successful memory writes were invisible,
+        so a silently-failing embedding endpoint looked identical to success.
+        The event carries the write outcome without ever carrying the answer
+        value itself.
+        """
+        if self._event_sink is None:
+            return
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.info("memory.stored source=%s label=%r", source, field_label)
+            return
+        loop.create_task(
+            self._event_sink.accept(
+                FrameworkTraceEvent(
+                    event="memory_stored",
+                    name="CandidateMemory",
+                    data={
+                        "source": source,
+                        "field_label": field_label,
+                        "answer_chars": len(answer or ""),
+                    },
+                    raw={},
+                )
+            )
+        )
 
     async def lookup(
         self,

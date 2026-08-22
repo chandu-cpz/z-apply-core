@@ -167,6 +167,47 @@ def test_service_adapter_maps_model_phase_instead_of_dropping() -> None:
     assert not any(live_type == "model.phase" for live_type, _ in service.live)
 
 
+def test_service_adapter_maps_summarization_calls_instead_of_dropping() -> None:
+    """The summarizer's observed-model seam emits summarization_model_call_*
+    trace events, but the adapter map had no entry for them, so they fell
+    through to graph.event and were dropped before persistence — the third
+    instance of the silent-drop class (model_phase, capability_probe and
+    memory_stored, summarization names). Pin BOTH names on the persisted
+    path."""
+    from types import SimpleNamespace
+
+    service = _RecordingService()
+    run = SimpleNamespace(
+        view=None,
+        task=None,
+        retention_release=None,
+        done=None,
+        human_requests={},
+        artifacts=[],
+        context_inbox=None,
+        human_broker=None,
+        call_ledger=None,
+    )
+    adapter = _GraphSink(service, run)
+
+    for name, mapped in (
+        ("summarization_model_call_started", "summarization.call.started"),
+        ("summarization_model_call_completed", "summarization.call.completed"),
+    ):
+        event = FrameworkTraceEvent(
+            event=name,
+            name="summarization",
+            data={"duration_ms": 4321, "est_tokens": 9001, "n_messages": 42},
+            raw={},
+        )
+        asyncio.run(adapter.accept(event))
+
+        assert service.emitted, f"{name} was dropped before persistence"
+        assert service.emitted[-1][0] == mapped
+        assert service.emitted[-1][1]["duration_ms"] == 4321
+        assert not any(live_type == mapped for live_type, _ in service.live)
+
+
 def test_capability_probe_reaches_sink_and_persists(tmp_path: Path) -> None:
     from z_apply_core.agents.capability_context import CapabilityContextMiddleware
 
