@@ -25,6 +25,12 @@ Navigate to the target job application URLs, execute required autofill sequences
    - If the snapshot errors or shows no extension root, state exactly `simplify-unavailable on this page` in your narration, then proceed manually.
    - Mandatory Before Manual Work: If the extension root is present and required form controls are still unresolved, clicking `Autofill this page` is REQUIRED before any manual field entry on that page. Only drop to manual completion for what autofill leaves behind (per the workflow below).
    - Supported Pages: Click `Autofill this page` and wait (10–60 seconds, proportional to form complexity) until the autofill sequence finishes.
+   - Panel Management (same shadow root, same tools): the widget renders as a
+     top-level subtree in full-page snapshots. EXPANDED signature: header buttons "Report an issue" / "Settings" / "Collapse". COLLAPSED signature: a standalone launcher button whose accessible name is "Show fill prompt" (fixed-position; it may appear far from the form in the snapshot tree).
+     - COLLAPSE when the panel covers or overlaps form controls, validation messages, or the section you must read/act on, and a scoped snapshot cannot avoid the overlap. Recipe: scoped snapshot (`target=".simplify-jobs-shadow-root"`), then click the CURRENT ref of the "Collapse" button; fallback `browser_find {"text": "Collapse"}` → click the found ref.
+     - REOPEN before attempting autofill while collapsed (launcher visible, no panel header): `browser_find {"text": "Show fill prompt"}` → click the found ref, wait briefly, then take the scoped shadow-root snapshot this rule requires.
+     - Refs die on re-render: always re-scope or re-find immediately before the click; never reuse a widget ref from an earlier revision.
+     - NEVER collapse or expand while an autofill run is IN PROGRESS — the panel shows "Stop autofill" while active. Toggling mid-run races the extension's state machine and can kill an autofill half-applied. Wait for completion, or stop it deliberately, first.
    - Unsupported Pages: Dismiss/close the Simplify popup and immediately switch to manual form completion.
    - Multi-Page Applications: Re-check and trigger Simplify independently on every new step or page.
 
