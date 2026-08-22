@@ -171,7 +171,7 @@ class _GraphSink(FrameworkEventSink):
         self._last_graph_payload: dict[str, Any] | None = None
         self._model_by_agent: dict[str, str] = {}
         self._last_usage: dict[str, Any] | None = None
-        # DEC-019/P1 outcome gate: set only by a real submission.completed event.
+        # outcome gate: set only by a real submission.completed event.
         self.submission_completed = False
 
     async def accept(self, event: FrameworkTraceEvent) -> None:
@@ -743,7 +743,7 @@ class ZApplyCore:
                 "failed": RunOutcome.FAILED,
             }.get(status, RunOutcome.FAILED)
             summary = str(state.get("orchestrator_summary") or state.get("auth_summary") or status)
-            # DEC-019/P1 outcome gate: a verified submission requires a real
+            # outcome gate: a verified submission requires a real
             # submission.completed event; narration alone can never produce it.
             if outcome is RunOutcome.SUBMITTED_VERIFIED and not graph_sink.submission_completed:
                 outcome = RunOutcome.BLOCKED

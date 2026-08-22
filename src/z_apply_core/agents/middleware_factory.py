@@ -106,6 +106,6 @@ def build_agent_middleware(
     chain.append(ProseToolCallGuardMiddleware())
     if human_guard is not None:
         chain.append(human_guard)
-    # DEC-010: time each awrap_model_call stage; emit model_phase events when a
-    # stage crosses the threshold (FAIL-006 inter-turn hole observability).
+    # time each awrap_model_call stage; emit model_phase events when a
+    # stage crosses the threshold (inter-turn hole observability).
     return wrap_chain_with_stage_timing(chain, sink=event_sink, role=role)

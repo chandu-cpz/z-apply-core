@@ -1,4 +1,4 @@
-"""DEC-019: submission truth events, classifier widening, reconciliation.
+"""submission truth events, classifier widening, reconciliation.
 
 P1: every submit attempt emits submission.failed/completed at the EXECUTOR
 layer (recovery turns bypass the turn pipeline); precondition failures NEVER

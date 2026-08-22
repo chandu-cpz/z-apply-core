@@ -16,7 +16,7 @@ NATIVE_SUBMIT_XPATH = (
     "(self::input and (@type='submit' or @type='image'))][1]"
 )
 
-#: Submit-intent accessible-name vocabulary (DEC-019/P3). Shared semantics with
+#: Submit-intent accessible-name vocabulary (). Shared semantics with
 #: rule 6's navigation ladder but restricted to final-submit intent words;
 #: extend per observed boards — never per board.
 SUBMIT_NAME_VOCABULARY = ("submit", "send", "apply", "confirm", "proceed", "done")
@@ -66,7 +66,7 @@ async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Loc
     if tag == "button" and control_type not in {"", "submit"} and not is_proxy:
         return "not_submit", None
     if tag == "button" and not control_type and form is None:
-        # DEC-019/P3 (FAIL-009): SPAs render final submits as bare typeless
+        # (): SPAs render final submits as bare typeless
         # buttons with no <form> ancestor, handled entirely in JS. Two
         # independent signals (position + vocabulary) must agree.
         fallback = await _js_submit_fallback(page, target)
@@ -87,7 +87,7 @@ async def classify_submit_control(page: Page, target: Locator) -> tuple[str, Loc
 async def _js_submit_fallback(page: Page, target: Locator) -> Locator | None:
     """Classify a form-less typeless JS-handled button as the submit control.
 
-    DEC-019/P3 (FAIL-009): SPAs commonly render the final action as a bare
+    (): SPAs commonly render the final action as a bare
     `<button>` with no native `<form>` ancestor and no `type` attribute —
     invisible to both SUBMIT_SELECTOR and the native classification path.
     Two independent signals must agree before trusting it:

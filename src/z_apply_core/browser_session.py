@@ -165,7 +165,7 @@ class BrowserSession:
         self._last_auth_submit_snapshot = ""
         self._pending_atomic_upload_target = ""
         self._pending_file_chooser: Any | None = None
-        # PROP-005 S2: provenance entries collected during a batch run, then
+        # S2: provenance entries collected during a batch run, then
         # attached to the batch receipt. Declared for type checkers; the batch
         # path assigns a fresh list per run before any step executes.
         self._pending_batch_written: list[ProvenanceEntry] = []
@@ -239,7 +239,7 @@ class BrowserSession:
         self.evidence_store = evidence_store
 
     def bind_event_sink(self, event_sink: Any) -> None:
-        """Attach the run's event sink (DEC-019/P1 submission truth events).
+        """Attach the run's event sink (submission truth events).
 
         Emission happens at THIS layer, not the agent turn pipeline: recovery
         turns bypass turn-pipeline events, so executor-layer emission is the
@@ -271,7 +271,7 @@ class BrowserSession:
             ) from exc
 
     def _guard_evaluate(self, arguments: dict[str, Any]) -> None:
-        """Reject evaluate bodies that write form-control values (PROP-005 S2).
+        """Reject evaluate bodies that write form-control values (S2).
 
         Reads stay free; only assignment-shaped writes to live control state
         are blocked. Values reach form controls through typed fill tools that
@@ -980,7 +980,7 @@ class BrowserSession:
     async def inspect_capabilities(self) -> BrowserCapabilities:
         """Return compositional structural facts about the current browser page.
 
-        Batch-first (OPT-DEC-010 H2): one evaluate pass collects every
+        Batch-first (OPT-H2): one evaluate pass collects every
         selector set's raw facts; on batch failure this degrades to the
         legacy per-control scan instead of failing the turn.
         """
@@ -1169,7 +1169,7 @@ class BrowserSession:
         return match.group(1)
 
     async def _reconcile_js_submit_target(self, page: Any) -> str | None:
-        """Reconcile a zero-candidate resolver against fresh DOM (DEC-019/P4).
+        """Reconcile a zero-candidate resolver against fresh DOM ().
 
         Fires ONLY when no native candidate classified AND exactly ONE enabled
         button with a submit-intent name exists in fresh evidence. The ref is
@@ -1230,7 +1230,7 @@ class BrowserSession:
         (Submission Reviewer) reads the returned fresh evidence to judge the
         outcome.
 
-        DEC-019/P1: every attempt emits submission.failed / submission.completed
+        every attempt emits submission.failed / submission.completed
         at THIS executor layer — recovery turns bypass turn-pipeline events, so
         executor emission is the only always-visible path. Precondition
         failures never consume the armed approval.

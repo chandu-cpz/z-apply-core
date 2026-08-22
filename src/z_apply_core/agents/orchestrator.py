@@ -131,7 +131,7 @@ def build_escalation_stack(
     empty specialist outputs, and once failures reach ``ladder_threshold`` the
     orchestrator's guard — the agent that actually calls ``ask_human`` — opens
     ``missing_candidate_fact``. Wiring the ladder into only the delegate-side
-    guard recreates the FAIL-003 deadlock (deny survives proven delegation
+    guard recreates the deadlock (deny survives proven delegation
     failure), so this factory is the single construction path and the wiring
     test asserts through it.
     """
@@ -243,7 +243,7 @@ async def run_orchestrator(
         artifact_publisher.browser if artifact_publisher is not None else None
     )
     event_sink = SequencedEventSink(sink, run_id=run_id)
-    # FAIL-006: deepagents' summarizer makes full-history LLM calls OUTSIDE our
+    # deepagents' summarizer makes full-history LLM calls OUTSIDE our
     # middleware chain; without this seam those minutes of wall clock emit zero
     # events. Install once, then route its model-call telemetry into the run's
     # own sequenced sink for the duration of the graph execution.
@@ -354,9 +354,9 @@ async def run_orchestrator(
             publish_review_artifact,
             request_submission_approval,
             submit_approved_application,
-            # PROP-005 S3 backstop: the reviewer verifies every material value
+            # S3 backstop: the reviewer verifies every material value
             # against candidate reality through read-only lookups, so fabricated
-            # values (FAIL-007) are rejected before the human is involved.
+            # values () are rejected before the human is involved.
             *(make_candidate_memory_tools(candidate_memory) if candidate_memory else ()),
         ]
 
@@ -431,7 +431,7 @@ async def run_orchestrator(
     # guard (the agent that calls ask_human), the AnswerWriter's guard, and
     # the delegation-result middleware (records failures). Attaching it only
     # to the delegate side would leave the orchestrator's own deny branch
-    # firing forever — the exact FAIL-003 deadlock this ladder exists to break.
+    # firing forever — the exact deadlock this ladder exists to break.
     orchestrator_human_guard, answer_writer_human_guard, delegation_result_middleware = (
         build_escalation_stack()
     )
