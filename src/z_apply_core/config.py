@@ -10,7 +10,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from z_apply_core.agents.providers.base import OPENCODEGO_DEFAULT_MODEL
 
 # Re-exported: scripts and tests import CORE_ROOT from config.
-from z_apply_core.paths import CORE_ROOT, resume_path  # noqa: F401
+from z_apply_core.paths import CORE_ROOT, REPO_ROOT, resume_path  # noqa: F401
 
 DEFAULT_SIMPLIFY_ADDON_PATH = Path.home() / "Downloads" / "simplify_jobs-3.0.8"
 DEFAULT_CAMOUFOX_BROWSER = ""
@@ -75,7 +75,7 @@ class Settings(BaseSettings):
     browser_batch_tools: bool = Field(default=True, alias="BROWSER_BATCH_TOOLS")
 
     model_config = SettingsConfigDict(
-        env_file=CORE_ROOT / ".env",
+        env_file=REPO_ROOT / ".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
