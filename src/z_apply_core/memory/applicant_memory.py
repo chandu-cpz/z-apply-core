@@ -122,15 +122,26 @@ class EmbeddingClient(Protocol):
 
 
 def _default_embeddings() -> EmbeddingClient:
-    """Resolve the default OpenAI-compatible embedding client."""
+    """Resolve the default OpenAI-compatible embedding client.
+
+    Env contract (DEC-015): EMBEDDINGS_API_KEY/EMBEDDINGS_BASE_URL select the
+    provider endpoint; EMBEDDINGS_MODEL selects the embedding model (e.g.
+    nvidia/nemotron-3-embed-1b against NVIDIA's OpenAI-compatible build API).
+    OPENAI_* variables remain as fallbacks for existing local setups. Without a
+    real endpoint the client 401s on first use — memory stays empty and every
+    lookup reports unavailable rather than fabricating matches.
+    """
     from langchain_openai import OpenAIEmbeddings
     from pydantic import SecretStr
 
     api_key = os.environ.get("OPENAI_API_KEY") or os.environ.get("EMBEDDINGS_API_KEY") or "local"
     base_url = os.environ.get("OPENAI_BASE_URL") or os.environ.get("EMBEDDINGS_BASE_URL")
+    model = os.environ.get("EMBEDDINGS_MODEL")
     kwargs: dict[str, Any] = {"api_key": SecretStr(api_key)}
     if base_url:
         kwargs["base_url"] = base_url
+    if model:
+        kwargs["model"] = model
     return cast(EmbeddingClient, OpenAIEmbeddings(**kwargs))
 
 
