@@ -67,6 +67,8 @@ def build_agent_middleware(
             job_url=job_url,
             run_context=run_context,
             evidence_store=evidence_store,
+            event_sink=event_sink,
+            role=role,
         )
     )
     # Now measure what the model will actually receive
