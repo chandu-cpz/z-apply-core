@@ -12,6 +12,27 @@ from pathlib import Path
 
 CORE_ROOT = Path(__file__).resolve().parents[2]
 
+
+def _workspace_root(start: Path) -> Path:
+    """Nearest ancestor containing both package checkouts as siblings.
+
+    Worktrees can nest inside their own repo, so counting levels is not
+    enough; the sibling-pair marker is layout-proof.
+    """
+    for candidate in (start, *start.parents):
+        if (candidate / "z-apply-core" / "pyproject.toml").is_file() and (
+            candidate / "z-apply-backend" / "pyproject.toml"
+        ).is_file():
+            return candidate
+    raise RuntimeError(
+        "z-apply workspace root not found above the running source tree"
+    )
+
+
+# The z-apply workspace root holding the single .env consumed by every
+# package (core, backend).
+REPO_ROOT = _workspace_root(CORE_ROOT)
+
 # ---------------------------------------------------------------------------
 # Root helpers
 # ---------------------------------------------------------------------------

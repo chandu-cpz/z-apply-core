@@ -11,8 +11,23 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from z_apply_core.config import Settings
 from z_apply_core.memory.applicant_memory import CandidateMemory, _default_embeddings
 from z_apply_core.stream_events import FrameworkTraceEvent
+
+
+def _isolate_loader_from_env_file(monkeypatch: Any) -> None:
+    """Pin Settings to an empty env file for this test.
+
+    The loader reads the workspace-root .env, which legitimately carries
+    EMBEDDINGS_* in real deployments; a fallback test must control the file
+    half too, not just process env vars.
+    """
+    monkeypatch.setattr(
+        Settings,
+        "model_config",
+        {**Settings.model_config, "env_file": "/nonexistent/isolated.env"},
+    )
 
 
 def test_embeddings_settings_plumb_through(monkeypatch: Any) -> None:
@@ -36,6 +51,7 @@ def test_openai_fallbacks_still_apply(monkeypatch: Any) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     monkeypatch.delenv("EMBEDDINGS_MODEL", raising=False)
+    _isolate_loader_from_env_file(monkeypatch)
 
     client = _default_embeddings()
 
