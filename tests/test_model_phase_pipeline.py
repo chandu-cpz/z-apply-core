@@ -168,12 +168,12 @@ def test_service_adapter_maps_model_phase_instead_of_dropping() -> None:
 
 
 def test_service_adapter_maps_summarization_calls_instead_of_dropping() -> None:
-    """Micro-DEC (summarization tuning telemetry): DEC-007-B's seam emits
-    summarization_model_call_* trace events, but the adapter map had no entry
-    for them, so they fell through to graph.event and were dropped before
-    persistence — the third instance of the silent-drop class (model_phase,
-    capability_probe/memory_stored, summarization names). Pin BOTH names on
-    the persisted path."""
+    """The summarizer's observed-model seam emits summarization_model_call_*
+    trace events, but the adapter map had no entry for them, so they fell
+    through to graph.event and were dropped before persistence — the third
+    instance of the silent-drop class (model_phase, capability_probe and
+    memory_stored, summarization names). Pin BOTH names on the persisted
+    path."""
     from types import SimpleNamespace
 
     service = _RecordingService()
